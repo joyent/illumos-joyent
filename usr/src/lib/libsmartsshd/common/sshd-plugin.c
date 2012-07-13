@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2011 Joyent, Inc.  All rights reserved.
+ * Copyright 2011-2012 Joyent, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -38,6 +38,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <syslog.h>
+
 #include <openssl/rsa.h>
 
 #ifdef __cplusplus
@@ -54,7 +56,7 @@ static const int MAX_ATTEMPTS = 2;
 static const int SLEEP_PERIOD = 1;
 
 static int
-sshd_allowed_in_capi(struct passwd *pw, const char *fp)
+sshd_allowed_in_capi(struct passwd *pw, const char *fp, char *key_type)
 {
 	int allowed = 0;
 	int fd = -1;
@@ -96,6 +98,9 @@ sshd_allowed_in_capi(struct passwd *pw, const char *fp)
 		} else {
 			allowed = atoi(door_args.rbuf);
 			munmap(door_args.rbuf, door_args.rsize);
+			if (allowed == 1) {
+				verbose("Found matching %s key: %s", key_type, fp);
+			}
 			return (allowed);
 		}
 		if (++attempts < MAX_ATTEMPTS)
@@ -108,13 +113,13 @@ sshd_allowed_in_capi(struct passwd *pw, const char *fp)
 int
 sshd_user_rsa_key_allowed(struct passwd *pw, RSA *key, const char *fp)
 {
-	return sshd_allowed_in_capi(pw, fp);
+	return sshd_allowed_in_capi(pw, fp, "RSA");
 }
 
 int
 sshd_user_dsa_key_allowed(struct passwd *pw, DSA *key, const char *fp)
 {
-	return sshd_allowed_in_capi(pw, fp);
+	return sshd_allowed_in_capi(pw, fp, "DSA");
 }
 
 
