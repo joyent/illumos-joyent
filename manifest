@@ -11561,6 +11561,7 @@ f usr/share/man/man1/krb5-config.1 0444 root bin
 s usr/share/man/man1/ksh.1=ksh93.1
 f usr/share/man/man1/ksh93.1 0444 root bin
 f usr/share/man/man1/ktutil.1 0444 root bin
+f usr/share/man/man1/kvmstat.1 0444 root bin
 f usr/share/man/man1/last.1 0444 root bin
 f usr/share/man/man1/lastcomm.1 0444 root bin
 f usr/share/man/man1/ld.1 0444 root bin
