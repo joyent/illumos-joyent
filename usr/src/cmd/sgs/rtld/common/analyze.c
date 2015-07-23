@@ -845,6 +845,10 @@ static int
 is_load_toxic(Lm_list *lml, Rt_map *nlmp)
 {
 	const char	*fpath = PATHNAME(nlmp);
+	if (fpath == NULL) {
+		return (0);
+	}
+
 	size_t		flen = strlen(fpath);
 	Pdesc 		*pdp;
 	Aliste 		idx;
