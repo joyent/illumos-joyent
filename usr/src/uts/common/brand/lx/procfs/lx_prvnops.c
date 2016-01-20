@@ -217,6 +217,7 @@ static void lxpr_read_sys_kernel_ngroups_max(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_osrel(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_pid_max(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_kernel_shmall(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_shmmax(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_threads_max(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_net_core_somaxc(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -462,6 +463,7 @@ static lxpr_dirent_t sys_kerneldir[] = {
 	{ LXPR_SYS_KERNEL_OSREL,	"osrelease" },
 	{ LXPR_SYS_KERNEL_PID_MAX,	"pid_max" },
 	{ LXPR_SYS_KERNEL_RANDDIR,	"random" },
+	{ LXPR_SYS_KERNEL_SHMALL,       "shmall" },
 	{ LXPR_SYS_KERNEL_SHMMAX,	"shmmax" },
 	{ LXPR_SYS_KERNEL_THREADS_MAX,	"threads-max" },
 };
@@ -700,6 +702,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_sys_kernel_pid_max,	/* /proc/sys/kernel/pid_max */
 	lxpr_read_invalid,		/* /proc/sys/kernel/random */
 	lxpr_read_sys_kernel_rand_bootid, /* /proc/sys/kernel/random/boot_id */
+	lxpr_read_sys_kernel_shmall,	/* /proc/sys/kernel/shmall */
 	lxpr_read_sys_kernel_shmmax,	/* /proc/sys/kernel/shmmax */
 	lxpr_read_sys_kernel_threads_max, /* /proc/sys/kernel/threads-max */
 	lxpr_read_invalid,		/* /proc/sys/net	*/
@@ -818,6 +821,7 @@ static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/pid_max */
 	lxpr_lookup_sys_kdir_randdir,	/* /proc/sys/kernel/random */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/random/boot_id */
+	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/shmall */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/shmmax */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/threads-max */
 	lxpr_lookup_sys_netdir,		/* /proc/sys/net */
@@ -4109,6 +4113,24 @@ lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	}
 
 	lxpr_uiobuf_printf(uiobuf, "%s\n", br_data->lxzd_bootid);
+}
+
+static void
+lxpr_read_sys_kernel_shmall(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	rctl_qty_t val;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_KERNEL_SHMALL);
+
+	mutex_enter(&curproc->p_lock);
+	val = rctl_enforced_value(rc_zone_shmmax,
+	    curproc->p_zone->zone_rctls, curproc);
+	mutex_exit(&curproc->p_lock);
+
+	if (val > FOURGB)
+		val = FOURGB;
+
+	lxpr_uiobuf_printf(uiobuf, "%u\n", (uint_t)(val / PAGESIZE));
 }
 
 static void
