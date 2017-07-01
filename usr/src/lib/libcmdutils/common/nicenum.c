@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2017 Jason king
+ * Copyright (c) 2017, Joyent, Inc.
  */
 
 #include <stdio.h>
@@ -90,7 +91,11 @@ nicenum_scale(uint64_t n, size_t units, char *buf, size_t buflen,
 		 * If this is an even multiple of the base, always display
 		 * without any decimal precision.
 		 */
-		rc = snprintf(buf, buflen, "%llu%c", n / divisor, u);
+		if ((flags & NN_UNIT_SPACE) != 0) {
+			rc = snprintf(buf, buflen, "%llu %c", n / divisor, u);
+		} else {
+			rc = snprintf(buf, buflen, "%llu%c", n / divisor, u);
+		}
 	} else {
 		/*
 		 * We want to choose a precision that reflects the best choice
@@ -104,9 +109,15 @@ nicenum_scale(uint64_t n, size_t units, char *buf, size_t buflen,
 		 */
 		int i;
 		for (i = 2; i >= 0; i--) {
-			if ((rc = snprintf(buf, buflen, "%.*f%c", i,
-			    (double)n / divisor, u)) <= 5)
-				break;
+			if ((flags & NN_UNIT_SPACE) != 0) {
+				if ((rc = snprintf(buf, buflen, "%.*f %c", i,
+				    (double)n / divisor, u)) <= 5)
+					break;
+			} else {
+				if ((rc = snprintf(buf, buflen, "%.*f%c", i,
+				    (double)n / divisor, u)) <= 5)
+					break;
+			}
 		}
 	}
 

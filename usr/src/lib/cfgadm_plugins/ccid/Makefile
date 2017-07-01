@@ -19,40 +19,49 @@
 # CDDL HEADER END
 #
 #
-# Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
+# Use is subject to license terms.
 #
-# lib/cfgadm_plugins/Makefile
 #
 
-include $(SRC)/Makefile.master
+include		../../Makefile.lib
 
-COMMON_SUBDIRS= scsi pci usb ib fp shp sbd ccid
-sparc_SUBDIRS=	ac sysctrl
+$(INTEL_BLD)SUBDIRS =	$(MACH) $(BUILD64) $(MACH64)
 
-i386_SUBDIRS= sata
+all :=		TARGET= all
+clean :=	TARGET= clean
+clobber :=	TARGET= clobber
+delete :=	TARGET= delete
+install :=	TARGET= install
+lint := 	TARGET= lint
+_msg :=		TARGET= _msg
+package := 	TARGET= package
 
-SUBDIRS= $(COMMON_SUBDIRS) $($(MACH)_SUBDIRS)
-
-ALL_SUBDIRS= $(COMMON_SUBDIRS) $(sparc_SUBDIRS) $(i386_SUBDIRS)
-
-MSGSUBDIRS= $(ALL_SUBDIRS)
-
-all:= 		TARGET= all
-install:=	TARGET= install
-clean:=		TARGET= clean
-clobber:=	TARGET= clobber
-lint:=		TARGET= lint
-_msg:=		TARGET= _msg
+SED=	sed
+GREP=	grep
 
 .KEEP_STATE:
 
-all clean lint: $(SUBDIRS)
+all clean delete install lint package: $(SUBDIRS)
+clobber: $(SUBDIRS)
+	$(RM) $(POFILE) $(POFILES)
 
-install: all $(SUBDIRS)
-
-_msg clobber: $(MSGSUBDIRS)
-
-$(ALL_SUBDIRS): FRC
+$(SUBDIRS):	FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)
+
+#
+# We don't build any gettext libraries here
+#
+_msg:
+
+$(POFILE):	$(POFILES)
+	$(RM) $@
+	$(CAT) $(POFILES) > $@
+
+$(POFILES):
+	$(RM) messages.po
+	$(XGETTEXT) $(XGETFLAGS) `$(GREP) -l gettext */*.[ch]`
+	$(SED) -e '/^# msg/d' -e '/^domain/d' messages.po > $@
+	$(RM) messages.po
 
 FRC:

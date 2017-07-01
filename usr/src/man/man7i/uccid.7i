@@ -1,0 +1,470 @@
+.\"
+.\" This file and its contents are supplied under the terms of the
+.\" Common Development and Distribution License ("CDDL"), version 1.0.
+.\" You may only use this file in accordance with the terms of version
+.\" 1.0 of the CDDL.
+.\"
+.\" A full copy of the text of the CDDL should have accompanied this
+.\" source.  A copy of the CDDL is also available via the Internet at
+.\" http://www.illumos.org/license/CDDL.
+.\"
+.\"
+.\" Copyright 2016 Joyent, Inc.
+.\"
+.Dd September 16, 2017
+.Dt UCCID 7I
+.Os
+.Sh NAME
+.Nm uccid
+.Nd user CCID command interface
+.Sh SYNOPSIS
+.In sys/usb/clients/ccid/uccid.h
+.Pa /dev/ccid/
+.Sh DESCRIPTION
+The
+.Nm
+command allows for a userland daemon to open and perform operations on a CCID class device.
+.Pp
+This interface allows for userland programs to be send APDU (application protocol data unit) to a given smart card and receive information back from the controller.
+This also abstracts out some of the finer grained differences between different classes of controllers and allows for exclusive access to devices.
+.Pp
+The
+.Nm
+commands operate on device nodes through a combination of the standard
+.Xr open 2 ,
+.Xr read 2 ,
+.Xr write 2 ,
+and
+.Xr poll 2
+system calls and provides several commands that may be issued through
+the
+.Xr ioctl 2
+system call.
+.Ss Device Nodes
+A given CCID class device provides a number of slots.
+Inside of each slot a card may or may not be present.
+A character device is created to represent each
+.Em slot
+of a CCID class device.
+This means that as long as a given CCID class device is present, then there will be a minor node for the slot, regardless of whether a card or not is present.
+.Pp
+A character device will be created under
+.Pa /dev
+for each slot of a CCID class device.
+Slots will be enumerated at
+.Pa /dev/ccid/ccid%d/slot%d .
+For example, all the slots under CCID instance 5 will be found in the
+directory
+.Pa /dev/ccid/ccid5/ .
+Slot two on the first enumerated CCID instance 0 will be found at
+.Pa /dev/ccid/ccid0/slot2 .
+While the enumeration of slots within a device should always be
+consistent (subject to the device), the instance number of a device may
+change.
+Additional symlinks to device directories may be present based on
+properties such as a USB serial number.
+.Ss Opening Devices, Exclusive Access, and Transactions
+A given slot may be opened through its path under
+.Pa /dev .
+To open a device, the user must be in the global zone and must have the
+.Sy PRIV_SYS_DEVICES
+privilege.
+To access the device node, the driver should call
+.Xr open 2
+or
+.Xr openat 2 .
+The device node must be opened for both read and write
+.Pq Dv O_RDWR .
+If only one of read or write is specified, the open will fail.
+.Pp
+To send commands to and from the device, a user must have exclusive
+access.
+Exclusive access can be obtained in one of two ways.
+The first is to use the
+.Dv O_EXCL
+flag during a call to
+.Xr open 2 .
+The second is to perform the
+.Dv UCCID_CMD_TXN_BEGIN
+command through
+.Xr ioctl 2 .
+.Pp
+Exclusive access is obtained on a slot level.
+Once granted, exclusive access is maintained regardless if cards are
+inserted or removed.
+To drop exclusive access, the driver may perform the
+.Dv UCCID_CMD_TXN_END
+command or close the file descriptor.
+If a process holding exclusive access exits or crashes, the system will
+behave as though it called
+.Xr close 2
+on the file descriptor.
+.Pp
+If something else already has exclusive access, then callers will block
+until exclusive access is relinquished.
+If there are multiple callers seeking exclusive access blocked, the order
+at which they will be granted that access is undefined.
+If the caller does not wish to block while obtaining exclusive access,
+it may use the
+.Dv O_NDELAY
+or
+.Dv UCCID_TXN_F_DONT_BLOCK
+flag as needed.
+See the later discussions of
+.Xr open 2
+and the
+.Dv UCCID_CMD_TXN_BEGIN
+command for more information.
+.Pp
+Once exclusive access is obtained, a client may send any number of APDUs
+or issue any number of commands that it desires.
+.Pp
+A well behaved client will ensure that it does not have any outstanding
+I/O when it drops exclusive access.
+If any threads are blocked in the read or write family of routines, they
+will error out.
+Any outstanding commands that have not been read, will be dropped.
+.Pp
+It is important that a given caller only attempt to have exclusive
+access to a single slot at any given time.
+Otherwise, if the caller is holding onto exclusive access on one device
+while attempting to obtain exclusive access to another, there is a
+chance of deadlock with another caller that is attempting to obtain
+exclusive access to multiple slots in a different order.
+.Ss Device Status and ATR
+Once the device is open, any caller may issue commands to get the status
+of the slot and to obtain the ATR (answer to reset) data of a card, if
+it is present in the slot.
+.Pp
+A caller may issues these commands if they do not have exclusive access;
+however, there is no guarantee that it will not have changed by the time
+the caller obtains exclusive access.
+As such, it is not recommended to ask for the ATR data while exclusive
+access is not present.
+.Pp
+The status of the slot is used to indicate if a card is present in the
+slot and if so, whether or not the card has been activated and is thus
+ready for use.
+To obtain this information, issue the
+.Dv UCCID_CMD_STATUS
+command.
+See the
+.Sx COMMANDS
+section for details of the structure.
+.Pp
+To obtain the ATR data, callers may issue the
+.Dv UCCID_CMD_GETATR
+command.
+This command can be used to both fetch the actual data and to get the
+size of the ATR payload, which may vary from card to card.
+.Ss Performing I/O
+Once exclusive access is obtained, the caller may use the
+.Xr read 2
+and
+.Xr write 2
+family of system calls to send and receive APDUs to the device.
+I/O to a CCID class device functions must always send and receive an
+entire APDU.
+This is similar to the behavior of reading and writing data to a
+datagram class socket.
+.Pp
+To send a command, the caller should issue a system call from the
+.Xr write 2
+family.
+That command will be sent to the driver by the host.
+Only once the command has been fully sent to the device, will the write
+system call return.
+Once the write is finished, the caller should use the
+.Xr read 2
+family of system calls to obtain the result.
+If the caller would rather use non-blocking I/O, it may poll on the
+device and wait for a
+.Dv POLLIN
+event.
+.Pp
+The caller does not need to worry about the framing of APDU data to and from
+a CCID class device.
+This will be handled by a combination of hardware and the CCID driver
+framework.
+.Pp
+If no card is present or the caller does not have exclusive access, then
+reads and writes will always fail.
+If a card is removed, outstanding I/O operations will all fail, even if
+another card is inserted before all of the commands can be failed.
+.Pp
+CCID class devices may only have one outstanding command on a given
+slot.
+While callers may issue multiple commands to the driver only a single
+command will be issued to a given slot at any given time.
+Other commands will be blocked and processed in turn.
+It is recommended that callers do not issue multiple commands as the
+ordering of said commands is not guaranteed.
+.Ss Card Insertion and Removal Notifications
+XXX
+.Sh SYSTEM CALLS
+.Ss open family
+The
+.Xr open 2
+and
+.Xr openat 2
+system calls are used to open a device.
+For more details, see the
+.Sx Opening Devices, Exclusive Access, and Transactions
+section.
+.Pp
+The following flags that may be passed to open have special
+significance:
+.Bl -tag -width Dv
+.It Dv O_EXCL
+Request exclusive access to the device.
+This will block until access is available unless
+.Dv O_NDELAY
+is also specified.
+.It Dv O_NDELAY
+Indicates that if exclusive access it not available, fail immediately.
+This flag may not be specified without
+.Dv O_EXCL .
+.It Dv O_NONBLOCK
+Indicates that non-blocking
+.Xr read 2
+and
+.Xr write 2
+system calls should be performed.
+This may be changed at any time through the
+.Dv F_SETFL
+command to
+.Xr fcntl 2 .
+.El
+.Ss read family
+The
+.Xr read 2 ,
+.Xr readv 2 ,
+.Xr pread 2 ,
+and
+.Xr preadv 2
+systems calls reads an entire APDU response into one or more buffers.
+Each read of the device will consume an entire CCID APDU response,
+similar to operating on a datagram device.
+If the
+.Dv O_NONBLOCK
+flag has been specified and no data is available, the system call will
+return immediately.
+File offsets are ignored and in the case of
+.Xr read 2
+and
+.Xr readv 2 ,
+explicitly reset.
+.Pp
+If no card is present in the slot or the caller does not have exclusive
+access, a read will always fail.
+.Ss write
+The
+.Xr write 2 ,
+.Xr writev 2 ,
+.Xr pwrite 2 ,
+and
+.Xr pwritev 2
+system calls transmit an entire APDU to a device.
+Once the command has been fully transfered, the write will return.
+If there are multiple outstanding commands in flight, the write will
+block and the order of commands is not guaranteed.
+The
+.Dv O_NONBLOCK
+flag is ignored when writing.
+File offsets are ignored and in the case of
+.Xr write 2
+and
+.Xr writev 2 ,
+explicitly reset.
+.Pp
+If no card is present in the slot or a caller does not have exclusive
+access, a write will always fail.
+.Ss poll
+The slot device can be polled for
+.Dv POLLIN
+which is used to indicate that a command is readable or it may be polled
+for
+.Dv POLLHUP
+which is used to indicate that a card has been removed from a slot.
+No other poll flags will be issued by the device.
+.Pp
+If no card is present in the slot or a caller does not have exclusive
+access, all attempts to poll will fail.
+.Ss ioctl
+The
+.Xr ioctl 2
+system call behaves normally.
+Valid commands are listed in the
+.Sx COMMANDS
+section.
+.Ss close
+The
+.Xr close 2
+system call behaves normally.
+When the final
+.Xr close 2
+is performed from a given handle, any exclusive access will be
+discarded.
+If a file descriptor has been duplicated through the means of the
+.Xr dup 2
+family of system calls, then the final close refers to the time when all
+such duplicated file descriptors have been closed.
+.Sh COMMANDS
+For each of the commands listed below, a specific structure accompanies
+it.
+The first member of each of these structures is a version field which
+represents the current form of the structure.
+Callers should always set this member to
+.Dv UCCID_CURRENT_VERSION .
+.Ss UCCID_CMD_TXN_BEGIN
+The
+.Dv UCCID_CMD_TXN_BEGIN
+command is used to begin a transaction.
+The command will block until exclusive access is available to the
+caller.
+If the caller does not wish to block, it should set the
+.Dv UCCID_TXN_F_DONT_BLOCK
+flag.
+.Pp
+The command uses the following structure:
+.Bd -literal -offset indent
+typedef struct	uccid_cmd_txn_begin {
+	uint_t	uct_version;
+	uint_t	uct_flags;
+} uccid_cmd_txn_begin_t;
+.Ed
+.Pp
+The fields of the
+.Vt uccid_cmd_txn_begin_t
+have the following meanings:
+.Bl -tag -width Fa
+.It Fa uct_version
+Indicates the current version of the structure.
+Should be set to
+.Dv UCCID_CURRENT_VERSION .
+.It Fa uct_flags
+Flags that impact the behavior of the command.
+The following flags are
+defined:
+.Bl -tag -width Dv
+.It Dv UCCID_TXN_F_DONT_BLOCK
+The command should not block for exclusive access.
+If exclusive access is not available, then the command will fail
+immediately.
+.El
+.Pp
+If an unknown flag is specified, an error will be generated.
+.El
+.Ss UCCID_CMD_TXN_END
+The
+.Dv UCCID_CMD_TXN_END
+command is used to end a transaction whether it was started through the
+.Dv UCCID_CMD_TXN_BEGIN
+command or by passing
+.Dv O_EXCL
+to the
+.Xr open 2
+system call.
+.Pp
+The command uses the following structure:
+.Bd -literal -offset indent
+typedef struct	uccid_cmd_txn_end {
+	uint_t	uct_version;
+} uccid_cmd_txn_end_t;
+.Ed
+.Pp
+The fields of the
+.Vt uccid_cmd_txn_end_t
+have the following meanings:
+.Bl -tag -width Fa
+.It Fa uct_version
+Indicates the current version of the structure.
+Should be set to
+.Dv UCCID_CURRENT_VERSION .
+.El
+.Ss UCCID_CMD_STATUS
+This command is used to obtain the status of the slot.
+It may be used regardless of whether or not the caller has exclusive
+access.
+.Pp
+The command uses the following structure:
+.Bd -literal -offset indent
+typedef struct	uccid_cmd_status {
+	uint_t	ucs_version;
+	uint_t	ucs_status;
+} uccid_cmd_status_t;
+.Ed
+.Pp
+The fields of the
+.Vt uccid_cmd_status_t
+have the following meanings:
+.Bl -tag -width Fa
+.It Fa ucs_version
+Indicates the current version of the structure.
+Should be set to
+.Dv UCCID_CURRENT_VERSION .
+.It Fa ucs_status
+This value is ignored when issuing the command.
+On return, it will be filled in with various flags that describe the
+current status of the slot.
+The following flags are defined:
+.Bl -tag -width Dv
+.It Dv UCCID_STATUS_F_CARD_PRESENT
+A card has been inserted into the slot of the CCID class device.
+.It Dv UCCID_STATUS_F_CARD_ACTIVE
+The inserted card has been successfully activated.
+.El
+.Pp
+The
+.Dv UCCID_STATUS_F_CARD_ACTIVE
+flag will only be set if the
+.Dv UCCID_STATUS_F_CARD_PRESENT
+flag is set.
+.El
+.Ss UCCID_CMD_GETATR
+The
+.Dv UCCID_CMD_GETATR
+command is used to obtain the ATR (answer to reset) data from a card
+that is present in the slot.
+This command does not require exclusive access; however, there is
+nothing that guarantees the ATR data will not have changed by the time
+exclusive access is granted.
+To obtain the size of the ATR data, the caller should set the buffer
+length to zero.
+It will be filled in to indicate the required size of the buffer
+otherwise.
+.Pp
+The command uses the following structure:
+.Bd -literal -offset indent
+typedef struct uccid_cmd_getatr {
+	uint_t	ucg_version;
+	uint_t	ucg_buflen;
+	/* XXX should this just be a static buffer with a likely maximum size? */
+	void	*ucg_buffer;
+} uccid_cmd_getattr_t;
+.Ed
+.Pp
+The fields of the
+.Vt uccid_cmd_getatr_t
+have the following meanings:
+.Bl -tag -width Fa
+.It Fa ucg_version
+Indicates the current version of the structure.
+Should be set to
+.Dv UCCID_CURRENT_VERSION .
+.It Fa ucg_buflen
+Indicates the size in bytes of the buffer
+.Fa ucg_buffer .
+.It Fa ucg_buffer
+A pointer to a buffer to place the ATR data.
+.El
+.Pp
+When this command is issued, the system will check the size of
+.Fa ucg_buflen .
+If it is sufficient to hold the ATR data, then the ATR data will be
+copied out into
+.Fa ucb_buffer
+and the number of bytes written will be placed into
+.Fa ucb_buflen .
+If the buffer length is insufficient or zero, then no copying will
+occur; however, the buffer length will be updated.

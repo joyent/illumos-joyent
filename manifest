@@ -5281,6 +5281,7 @@ s usr/lib/amd64/libpam.so=../../../lib/amd64/libpam.so.1
 f usr/lib/amd64/libpanel.so.1 0755 root bin
 s usr/lib/amd64/libpanel.so=libpanel.so.1
 f usr/lib/amd64/libpcidb.so.1 0755 root bin
+f usr/lib/amd64/libpcsc.so.1 0755 root bin
 f usr/lib/amd64/libpctx.so.1 0755 root bin
 s usr/lib/amd64/libpctx.so=libpctx.so.1
 f usr/lib/amd64/libpicl.so.1 0755 root bin
@@ -5549,8 +5550,12 @@ f usr/lib/brand/shared/common.ksh 0444 root bin
 f usr/lib/brand/shared/query 0755 root bin
 f usr/lib/brand/shared/uninstall.ksh 0444 root bin
 f usr/lib/bridged 0555 root bin
+d usr/lib/ccid 0755 root bin
+f usr/lib/ccid/ccidadm 0555 root bin
 d usr/lib/cfgadm 0755 root bin
 d usr/lib/cfgadm/amd64 0755 root bin
+f usr/lib/cfgadm/amd64/ccid.so.1 0755 root bin
+s usr/lib/cfgadm/amd64/ccid.so=ccid.so.1
 f usr/lib/cfgadm/amd64/fp.so.1 0755 root bin
 s usr/lib/cfgadm/amd64/fp.so=fp.so.1
 f usr/lib/cfgadm/amd64/ib.so.1 0755 root bin
@@ -5565,6 +5570,8 @@ f usr/lib/cfgadm/amd64/shp.so.1 0755 root bin
 s usr/lib/cfgadm/amd64/shp.so=shp.so.1
 f usr/lib/cfgadm/amd64/usb.so.1 0755 root bin
 s usr/lib/cfgadm/amd64/usb.so=usb.so.1
+f usr/lib/cfgadm/ccid.so.1 0755 root bin
+s usr/lib/cfgadm/ccid.so=ccid.so.1
 f usr/lib/cfgadm/fp.so.1 0755 root bin
 s usr/lib/cfgadm/fp.so=fp.so.1
 f usr/lib/cfgadm/ib.so.1 0755 root bin
@@ -6785,6 +6792,7 @@ s usr/lib/libpam.so=../../lib/libpam.so.1
 f usr/lib/libpanel.so.1 0755 root bin
 s usr/lib/libpanel.so=libpanel.so.1
 f usr/lib/libpcidb.so.1 0755 root bin
+f usr/lib/libpcsc.so.1 0755 root bin
 f usr/lib/libpctx.so.1 0755 root bin
 s usr/lib/libpctx.so=libpctx.so.1
 f usr/lib/libpicl.so.1 0755 root bin

@@ -1,0 +1,517 @@
+.\"
+.\" This file and its contents are supplied under the terms of the
+.\" Common Development and Distribution License ("CDDL"), version 1.0.
+.\" You may only use this file in accordance with the terms of version
+.\" 1.0 of the CDDL.
+.\"
+.\" A full copy of the text of the CDDL should have accompanied this
+.\" source.  A copy of the CDDL is also available via the Internet at
+.\" http://www.illumos.org/license/CDDL.
+.\"
+.\"
+.\" Copyright 2019 Joyent, Inc.
+.\"
+.Dd February 14, 2019
+.Dt CCID 7D
+.Os
+.Sh NAME
+.Nm ccid
+.Nd chip card interface device USB client class driver
+.Sh SYNOPSIS
+.Pa /dev/ccid/
+.In sys/usb/clients/ccid/uccid.h
+.Sh INTERFACE LEVEL
+.Sy Volatile
+The interfaces provided by this driver are private at this time and
+subject to change.
+It should not be relied upon.
+.Sh DESCRIPTION
+The
+.Nm
+driver is a USB CCID (chip card interface device) class device driver.
+.Pp
+The driver exposes interfaces that allow consumers to send and receive
+APDUs (application protocol data unit) to a given smart card that is
+plugged into a reader.
+The driver also provides interfaces to obtain status information, the
+ATR (answer to reset), and obtain exclusive access to the device.
+In addition, the system exposes control of CCID devices through
+.Xr cfgadm 1M
+and allows programs to watch for changes through event ports.
+This is accomplished through a combination of the standard
+.Xr open 2 ,
+.Xr ioctl 2 ,
+.Xr read 2 ,
+and
+.Xr write 2
+system calls as well as through
+.Xr port_associate 3C
+and
+.Xr port_get 3C .
+.Ss Supported Devices
+The CCID specification allows for readers to come in different flavors.
+These different flavors supprot different communciation protocols and
+have different levels of automation for determining the protocol and
+transfers that are requierd.
+At this time, the following protcols are supported:
+.Bl -bullet -offset indent
+.It
+APDU
+.It
+TPDU T=1
+.El
+.Pp
+At this time, TPDU T=0 and character level readers are not supported by
+the driver.
+Readers in this category will still attach and generate events; however,
+I/O cannot be performed to them.
+.Pp
+In addition, at this time the driver does not support devices which
+require manually setting the clock and data rates to support an ICC.
+.Ss Device Model
+Each CCID class device provides a number of slots.
+Each slot may have an independent ICC (integrated circuit card or Smart
+Card) inserted into it.
+Each device, or reader, has its own directory under
+.Pa /dev/ccid
+based on its device number.
+Inside of each directory is a character device for each slot.
+A slot exists regardless of whether or not an ICC is inserted into it.
+As long as a CCID device is present in the system, its device nodes will
+be present.
+.Pp
+Slots are enumerated using the pattern:
+.Pa /dev/ccid/ccid%instance/slot%slot .
+For example, all the slots that belong to CCID instance 5 will be
+enumerated under the directory
+.Pa /dev/ccid/ccid5 .
+Slots are numbered starting at zero for each reader and increment from
+there.
+For example, the second physical slot would be numbered as slot one.
+If this were on CCID instance zero, then we would find a character
+device at:
+.Pa /dev/ccid/ccid0/slot1 .
+.Pp
+To enumerate all of the ccid devices present on the system, one could
+read all of the directories under
+.Pa /dev/ccid .
+To enumerate all of the slots on a device, one could read all of the
+direcotires under a particular CCID device, such as:
+.Pa /dev/ccid/ccid0 .
+The number of slots is also obtainable through various ioctls that will
+be discussed later on.
+It's important to note that while slot numbering will always be
+consistent for a given device, the CCID numbering is based on the driver
+instance.
+Therefore, it is possible for a device to change device numbers.
+To deal with this, symlinks based on other properties will be provided
+(for example, the USB serial number).
+.Pp
+All of the CCID devices in the system can also be listed by using the
+.Xr ccidadm 1M
+command.
+.Ss I/O Model
+To send and receive responses to commands, a program must open up the
+corresponding slot's device node.
+In many of the commands that use an ICC, there is a logical notion of
+state associated with the ICC that is mutated by performing commands on
+it.
+For example, a command might be issued that uses a PIN to unlock a slot
+or that selects a particular PIV applet for use.
+Because of this, all I/O to a given device must be performed inside the
+context of a transaction.
+When a program begins a transaction, it is guaranteed that no one else
+may send commands to the ICC.
+When a program is finished, it must explicitly end the transaction,
+which may have the side effect of resetting the ICC.
+If a program with an open transaction crashes or closes the file
+descriptor without taking other actions, then the transaction will be
+automatically closed.
+Without a transaction open, it will still be possible to issue ioctls
+that obtain the status of the slot and the reader.
+.Pp
+While in an active transaction, a program may send commands to a card.
+Sending a command and reading a response are done through the
+traditional
+.Xr read 2
+and
+.Xr write 2
+family of system calls.
+To submit a command, the program would issue a
+.Xr write 2
+family system call that contained the payload to send to the ICC.
+Once submitted, the call would return and the program would be able to
+issue a
+.Xr read 2
+system call to obtain the results.
+Once a command has been submitted, it is illegal to submit another one.
+The next command cannot be submitted until the response has been fully
+consumed.
+Similarly, if a command has not been submitted, one cannot issue a
+.Xr read 2
+system call to obtain results.
+Only a single thread may be blocked waiting to submit a command or
+.Pp
+To facilitate non-blocking operation, the underlying file descriptor may
+be opened with
+.Dv O_NONBLOCK .
+To determine whether or not certain events have occurred, event ports
+may be used.
+The exact event ports and the semantics of events are detailed in a
+later section.
+.Pp
+One important note is that readers with multiple slots often still only
+allow I/O a single command to be outstanding across all of the slots in
+the system.
+Because transactions are on a per-slot basis, it is still possible for a
+command submission to block even though one has a transaction open.
+.Pp
+While a transaction is open, various events can occur that cause a fatal
+error on the transaction.
+These include:
+.Bl -bullet -offset indent
+.It
+USB CCID reader removed
+.It
+ICC removed
+.It
+A fatal error while communicating to the device
+.It
+An administrator issued an ioctl to power off or reset the ICC
+.El
+.Pp
+Once such a fatal error has occurred, all new I/O will fail though it
+will still be possible to read any successfully completed commands.
+To clear the error state the program will need to end the transaction
+and begin a new one or close the file descriptor if the device has been
+removed.
+It is possible to obtain more detailed information about the error
+through the
+.Dv UCCID_CMD_ERROR_INFO
+command.
+.Ss Opening Devices, Exclusive Access, and Performing I/O
+To perform I/O to a particular card, one must first open the slot of
+interest.
+Opening the slot requires that the process be in the global zone and
+that it have the privilege
+.Sy PRIV_SYS_DEVICES .
+The device node can be opened through the
+.Xr open 2
+or
+.Xr openat 2
+system calls.
+Programs must request that the device be opened both for reading and
+writing
+.Po Dv O_RDWR Pc .
+.Pp
+Once the device has been opened, the program may issue ioctls or use
+event ports to get status information and watch for events on the
+system.
+.Pp
+To perform general I/O to the card, a program must be in the context of
+a transaction as discussed in the
+.Sx I/O model
+section.
+To open a transaction, a program must issue the
+.Dv UCCID_CMD_TXN_BEGIN
+command through the
+.Xr ioctl 2
+system call.
+.Pp
+When a program is done, it must issue the
+.Dv UCCID_CMD_TXN_END
+command to release the transaction.
+As part of issuing the command, the program must determine a disposition
+of what it would like done with the card when it has completed.
+These options include leaving the ICC alone and resetting the ICC.
+For many use cases, such as those where a pin is entered or the ICC's
+state is mutated, a reset is the recommended option.
+If the program crashes or closes the file descriptor without issuing a
+transaction end, then the ICC will be reset.
+.Pp
+Please see the ioctl listing in the
+.Sx IOCTLS
+section for more information on the command structure.
+.Ss Device Status and ATR
+Once a slot has been opened, any caller may issue commands to get the
+status of the slot.
+This can also be used to obtain the ATR (answer to reset) of an ICC that
+is present on the slot, if it is known.
+.Pp
+While exclusive access is not required to issue these commands, there is
+no guarantee that they will not have changed between the time that the
+program issued the command and it obtains a transaction.
+.Pp
+To obtain information about the reader, slot, and the ATR, one should
+issue the
+.Dv UCCID_CMD_STATUS
+command.
+Please see the ioctl listing in the
+.Sx IOCTLS
+section for more information.
+.Ss Event Model
+There are a number of different classes of events that can be watched
+for.
+Watching for events is performed on a per-slot basis and uses event
+ports to allow for a richer set of events than the traditional usage of
+.Xr poll 2.
+The following events can be watched for:
+.Bl -tag -offset indent -width "Ready to retrieve command results"
+.It ICC insertion
+This event fires when the ICC is inserted into a slot.
+For readers that have a non-removable ICC, this event will fire a single
+time.
+This is an edge triggered event.
+.It ICC removal
+This event fires when the ICC is removed from a slot.
+This event will never fire if an ICC cannot physically be removed from a
+device.
+This is an edge triggered event.
+.It ICC powered on
+This event fires whenever the ICC is powered on.
+This is an edge triggered event.
+.It ICC powered off
+This event fires whenever the ICC is powered off.
+This is an edge triggered event.
+.It Ready for transaction
+This event fires whenever a transaction can be initiated on the slot.
+This is a level triggered event, it will remain asserted while it is
+possible to obtain a transaction.
+It is possible that there are multiple programs that are waiting for a
+transaction to occur.
+In such a case, there is no guarantee that a program that obtains this
+event will be the one to obtain the next transaction.
+.It Ready for command submission
+This event fires whenever it is possible for a command to be submitted.
+It should not fire if the user does not have a transaction.
+This is a level triggered event that will remain valid until a command
+is submitted or a transaction error occurs.
+.It Ready to retrieve command results
+This event fires whenever a command has completed.
+This is a level triggered event that will remain valid until a command
+has been consumed.
+.It Transaction Error
+This event fires whenever something occurs that would invalidate a
+transaction.
+The generation of this event cannot be masked though it will only fire
+if a program is in a transaction.
+This event is level triggered and will persist until the transaction
+ends.
+.It Device Removed
+This event fires whenever the reader itself is removed.
+The generation of this event cannot be masked.
+This event is level triggered and will persist until the file descriptor
+is closed.
+.El
+.Pp
+To ensure that level triggered events are not missed, a generation
+number is associated with each event.
+For more information on the detailed event ports structures, please see
+the section
+.Sx IOCTLS .
+.Sh IOCTLS
+This section lists the different commands that may be issued to a CCID
+device through the
+.Xr ioctl 2
+system call.
+.Sh SYSTEM CALLS
+This section lists the different system calls that may be issued to a
+CCID device.
+.Ss open
+.Ss close
+.Ss write
+.Ss read
+.Ss close
+.Sh EVENTS
+This section describes the event payload format that is used with event
+ports.
+An event port is created with the
+.Xr port_create 3C
+function and then events are associated with it through the
+.Xr port_associate 3C
+function.
+Events are retrieved through the
+.Xr port_get 3C
+or
+.Xr port_getn 3C
+functions.
+.Pp
+The
+.Nm
+driver defines its own event source using the
+.Dv PORT_SOURCE_DEVICE
+object type.
+For more background on the types of events and their classes, see the
+section
+.Sx Event Model .
+The following macros represent different events that are used:
+.Bl -hang -offset indent -width UCCID_EVENT_COMMAND_SUBMISSION_READY
+.It Dv UCCID_EVENT_ICC_INSERTED
+Indicates interest in events when the ICC is inserted.
+.It Dv UCCID_EVENT_ICC_REMOVED
+Indicates interest in events when the ICC is removed.
+.It Dv UCCID_EVENT_ICC_POWERED_ON
+Indicates interest in events when the ICC is powered on.
+.It Dv UCCID_EVENT_ICC_POWERED_OFF
+Indicates interest in events when the ICC is powered off.
+.It Dv UCCID_EVENT_TRANSACTION_READY
+Indicates interest in events when a transaction can be initiated.
+.It Dv UCCID_EVENT_COMMAND_SUBMISSION_READY
+Indicates interest in events when a command can be submitted.
+.It Dv UCCID_EVENT_COMMAND_COMPLETED
+Indicates interest in events when a command is completed.
+.It Dv UCCID_EVENT_TRANSACTION_ERROR
+Indicates that a fatal error to the transaction occurred.
+.It Dv UCCID_EVENT_READER_GONE
+Indicates that the CCID reader has been removed from the system.
+.El
+.Pp
+The above values are used to select events to listen for and are used to
+indicate what events have fired.
+As discussed in the
+.Sx Event Model
+section, the ICC related events are normally edge triggered.
+To facilitate the detection of such events, there is a 64-bit generation
+associated with each one.
+Every time an event occurs, the generation for that event is increased.
+If the generation of an event does not match the current generation,
+then the event will immediately trigger.
+The current generation is available in the
+.Dv UCCID_CMD_STATUS
+command discussed in the
+.Sx IOCTLS
+section.
+.Pp
+To associate a CCID event with an event port, the program must use the
+following structure and issue a call to
+.Xr port_associate 3C
+with the type
+.Dv PORT_SOURCE_DEVICE .
+The CCID specific structure for this is:
+.Bd -literal -offset indent
+typedef struct uccid_event {
+	int32_t		ce_fd;
+	uint32_t	ce_version;
+	uint64_t	ce_size;
+	uint64_t	ce_desired;
+	uint64_t	ce_fired;
+	uint64_t	ce_icc_insert_gen;
+	uint64_t	ce_icc_remove_gen;
+	uint64_t	ce_icc_on_gen;
+	uint64_t	ce_icc_off_gen;
+} uccid_event_t;
+.Ed
+.Pp
+The
+.Fa ce_fd
+member should be filled in with the value of the file descriptor of the
+slot which you are asking about.
+.Pp
+The
+.Fa ce_version
+member should be set to the value
+.Dv UCCID_VERSION_ONE .
+.Pp
+The
+.Fa ce_size
+member should be set to the size of the
+.Ft uccid_event_t
+structure.
+.Pp
+The
+.Fa ce_desired
+member should be set to the bitwise-inclusive-OR of all of the events
+which are desired.
+There is no need to set either
+.Dv UCCID_EVENT_TRANSACTION_ERROR
+or
+.Dv UCCID_EVENT_READER_GONE
+as these will always be generated.
+.Pp
+The
+.Fa ce_actual
+event should be set to zero.
+This will be filled in with the actual set of events that caused this to
+fire.
+.Pp
+The
+.Fa ce_icc_insert_gen
+should be set to the current generation of the ICC insertion event that
+has occurred.
+This should be set to the value from the most recent
+.Dv UCCID_CMD_STATUS
+information that was read or set to zero.
+This will be filled in with the new generation of the event when it
+fires.
+If the
+.Dv UCCID_EVENT_ICC_INSERTED
+event is not in
+.Fa ce_desired
+then this field should be set to zero.
+.Pp
+The
+.Fa ce_icc_remove_gen
+should be set to the current generation of the ICC removal event that
+has occurred.
+This should be set to the value from the most recent
+.Dv UCCID_CMD_STATUS
+information that was read or set to zero.
+This will be filled in with the new generation of the event when it
+fires.
+If the
+.Dv UCCID_EVENT_ICC_REMOVED
+event is not in
+.Fa ce_desired
+then this field should be set to zero.
+.Pp
+The
+.Fa ce_icc_on_gen
+should be set to the current generation of the ICC power on event that
+has occurred.
+This should be set to the value from the most recent
+.Dv UCCID_CMD_STATUS
+information that was read or set to zero.
+This will be filled in with the new generation of the event when it
+fires.
+If the
+.Dv UCCID_EVENT_ICC_POWERED_ON
+event is not in
+.Fa ce_desired
+then this field should be set to zero.
+.Pp
+The
+.Fa ce_icc_off_gen
+should be set to the current generation of the ICC removal event that
+has occurred.
+This should be set to the value from the most recent
+.Dv UCCID_CMD_STATUS
+information that was read or set to zero.
+This will be filled in with the new generation of the event when it
+fires.
+If the
+.Dv UCCID_EVENT_ICC_POWERED_OFF
+event is not in
+.Fa ce_desired
+then this field should be set to zero.
+.Sh SEE ALSO
+.Xr ccidadm 1M ,
+.Xr cfgadm 1M ,
+.Xr close 2 ,
+.Xr ioctl 2 ,
+.Xr open 2 ,
+.Xr read 2 ,
+.Xr write 2 ,
+.Xr port_associate 3C ,
+.Xr port_get 3C
+.Rs
+.%T Universal Serial Bus Device Class: Smart Card CCID
+.%O Revision 1.1
+.%D April 22, 2005
+.Re
+.Rs
+.%Q ISO/IEC
+.%B Identification Cards - Integrated Circuits
+.%N Part 3: Cards with contacts — Electrical interface and transmission protocols
+.%O ISO/IEC 7616-3:2006
+.%D 2006
+.Re

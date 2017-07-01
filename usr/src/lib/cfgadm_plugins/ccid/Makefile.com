@@ -19,40 +19,52 @@
 # CDDL HEADER END
 #
 #
-# Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+# Use is subject to license terms.
 #
-# lib/cfgadm_plugins/Makefile
-#
 
-include $(SRC)/Makefile.master
+LIBRARY= ccid.a
+VERS= .1
 
-COMMON_SUBDIRS= scsi pci usb ib fp shp sbd ccid
-sparc_SUBDIRS=	ac sysctrl
+OBJECTS= cfga_ccid.o
 
-i386_SUBDIRS= sata
+# include library definitions
+include ../../../Makefile.lib
 
-SUBDIRS= $(COMMON_SUBDIRS) $($(MACH)_SUBDIRS)
+SRCDIR =	../common
+ROOTLIBDIR=	$(ROOT)/usr/lib/cfgadm
+ROOTLIBDIR64=	$(ROOTLIBDIR)/$(MACH64)
 
-ALL_SUBDIRS= $(COMMON_SUBDIRS) $(sparc_SUBDIRS) $(i386_SUBDIRS)
+LIBS=	$(DYNLIB)
 
-MSGSUBDIRS= $(ALL_SUBDIRS)
+LINTFLAGS +=	-DDEBUG
+LINTFLAGS64 +=	-DDEBUG
 
-all:= 		TARGET= all
-install:=	TARGET= install
-clean:=		TARGET= clean
-clobber:=	TARGET= clobber
-lint:=		TARGET= lint
-_msg:=		TARGET= _msg
+CFLAGS +=	$(CCVERBOSE)
+CFLAGS64 +=	$(CCVERBOSE)
+
+LDLIBS +=	-lc
 
 .KEEP_STATE:
 
-all clean lint: $(SUBDIRS)
+all:	$(LIBS)
 
-install: all $(SUBDIRS)
+lint:	lintcheck
 
-_msg clobber: $(MSGSUBDIRS)
+# Install rules
 
-$(ALL_SUBDIRS): FRC
-	@cd $@; pwd; $(MAKE) $(TARGET)
+$(ROOTLIBDIR)/%: % $(ROOTLIBDIR)
+	$(INS.file)
 
-FRC:
+$(ROOTLIBDIR64)/%: % $(ROOTLIBDIR64)
+	$(INS.file)
+
+$(ROOTLIBDIR) $(ROOTLIBDIR64):
+	$(INS.dir)
+
+# include library targets
+include ../../../Makefile.targ
+
+objs/%.o pics/%.o: ../common/%.c
+	$(COMPILE.c) -o $@ $<
+	$(POST_PROCESS_O)
