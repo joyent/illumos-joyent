@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2017 Joyent, Inc.
  */
 
 /*
@@ -30,6 +30,7 @@
  * - Starting ipmgmtd
  * - Configuring network interfaces
  * - Adding a default route
+ * - Mounting NFS volumes
  */
 
 #include <ctype.h>
@@ -74,6 +75,7 @@ static void lxi_err(char *msg, ...);
 
 #define	IPMGMTD_PATH	"/lib/inet/ipmgmtd"
 #define	IN_NDPD_PATH	"/usr/lib/inet/in.ndpd"
+#define	NFS_MOUNT_PATH	"/usr/lib/fs/nfs/mount"
 
 #define	PREFIX_LOG_WARN	"lx_init warn: "
 #define	PREFIX_LOG_ERR	"lx_init err: "
@@ -812,6 +814,229 @@ lxi_net_static_routes(void)
 }
 
 static void
+lxi_mount_one_volume(const char *nfsvolume, const char *mountpoint,
+    const char *mode)
+{
+	pid_t pid;
+	pid_t wpid;
+	int status;
+	int ret;
+
+	/* ensure the directory exists */
+	ret = mkdir(mountpoint, 0755);
+	if (ret == -1 && errno != EEXIST) {
+	lxi_err("failed to mkdir(%s): (%d) %s\n", mountpoint,
+		errno, strerror(errno));
+	}
+
+	/* do the mount */
+	pid = fork();
+	if (pid == -1) {
+		lxi_err("fork() failed: %s", strerror(errno));
+	}
+
+	if (pid == 0) {
+		/* child */
+		char cmd[MAXPATHLEN];
+		char *const argv[] = {
+			"mount",
+			"-o",
+			(strcmp(mode, "ro") == 0) ?
+			 "vers=3,sec=sys,ro" : "vers=3,sec=sys",
+			(char *)nfsvolume,
+			(char *)mountpoint,
+			NULL
+		};
+		const char *zroot = zone_get_nroot();
+
+		(void) snprintf(cmd, sizeof (cmd), "%s%s",
+		    zroot != NULL ? zroot : "", NFS_MOUNT_PATH);
+
+		execv(cmd, argv);
+
+		lxi_err("execv(%s) failed: %s", cmd, strerror(errno));
+		/* NOTREACHED */
+	}
+
+	/* parent */
+
+	while ((wpid = waitpid(pid, &status, 0)) != pid) {
+		if (wpid == -1 && errno != EINTR) {
+			lxi_err("waitpid (mount[%d]) failed, errno=%d",
+			    (int)pid, errno);
+		}
+	}
+
+	if (WIFEXITED(status)) {
+		if (WEXITSTATUS(status) != 0) {
+			lxi_err("mount[%d] exited: %d",
+			    (int)pid, WEXITSTATUS(status));
+			}
+	} else if (WIFSIGNALED(status)) {
+			lxi_err("mount[%d] died on signal: %d",
+			    (int)pid, WTERMSIG(status));
+	} else {
+			lxi_err("mount[%d] failed in unknown way",
+			    (int)pid);
+	}
+}
+
+static void
+lxi_mount_volume(const char *line)
+{
+	/*
+	 * Each volume line is a string of the form:
+	 *
+	 *	"tritonnfs|192.168.128.234:/exports/data|/data|datavol|rw"
+	 *
+	 * i.e.:
+	 *
+	 *  - volume type
+	 *  - host:path of export
+	 *  - local target path
+	 *  - the name of the NFS volume
+	 *  - the mode of the mount ("rw" or "ro")
+	 *
+	 */
+	custr_t *cu = NULL;
+	char *type = NULL;
+	char *nfsvolume = NULL;
+	char *mountpoint = NULL;
+	char *name = NULL;
+	char *mode = NULL;
+	int i;
+
+	if (custr_alloc(&cu) != 0) {
+		lxi_err("custr_alloc failure");
+	}
+
+	for (i = 0; line[i] != '\0'; i++) {
+		if (type == NULL) {
+			if (line[i] == '|') {
+				type = strdup(custr_cstr(cu));
+				if (type == NULL) {
+					lxi_err("strdup failure");
+				}
+				custr_reset(cu);
+				continue;
+			}
+		} else if (nfsvolume == NULL) {
+			if (line[i] == '|') {
+				nfsvolume = strdup(custr_cstr(cu));
+				if (nfsvolume == NULL) {
+					lxi_err("strdup failure");
+				}
+				custr_reset(cu);
+				continue;
+			}
+		} else if (mountpoint == NULL) {
+			if (line[i] == '|') {
+				mountpoint = strdup(custr_cstr(cu));
+				if (mountpoint == NULL) {
+					lxi_err("strdup failure");
+				}
+				custr_reset(cu);
+				continue;
+			}
+		} else if (name == NULL) {
+			if (line[i] == '|') {
+				name = strdup(custr_cstr(cu));
+				if (name == NULL) {
+					lxi_err("strdup failure");
+				}
+				custr_reset(cu);
+				continue;
+			}
+		} else if (mode == NULL) {
+			if (line[i] == '|') {
+				mode = strdup(custr_cstr(cu));
+				if (mode == NULL) {
+					lxi_err("strdup failure");
+				}
+				custr_reset(cu);
+				continue;
+			}
+		}
+
+		/*
+		 * If all the above conditions failed, we want to consume the
+		 * characters anyway so that additional fields might be added
+		 * to the end of the lines of volumesinfo in the future without
+		 * breaking us.
+		 */
+
+		if (custr_appendc(cu, line[i]) != 0) {
+			lxi_err("custr_appendc failure");
+		}
+	}
+
+	/*
+	 * If we got to the end of the line without a final '|', the last field is
+	 * 'mode'.
+	 */
+	if (mode == NULL && custr_len(cu) > 0) {
+		mode = strdup(custr_cstr(cu));
+		if (mode == NULL) {
+			lxi_err("strdup failure");
+		}
+		custr_reset(cu);
+	}
+
+	/* verify we have all of the required parameters */
+
+	if (nfsvolume == NULL) {
+		lxi_err("unable to determine nfsvolume path");
+	}
+
+	if (mountpoint == NULL) {
+		lxi_err("unable to determine volume mountpoint");
+	}
+
+	if (mode == NULL) {
+		lxi_err("unable to determine volume mode");
+	}
+
+	lxi_mount_one_volume(nfsvolume, mountpoint, mode);
+
+	custr_free(cu);
+	free(type);
+	free(nfsvolume);
+	free(mountpoint);
+	free(name);
+	free(mode);
+}
+
+static void
+lxi_mount_volumes(void)
+{
+	const char *cmd = "/native/usr/lib/brand/lx/volumeinfo";
+	char *const argv[] = { "volumeinfo", NULL };
+	char *const envp[] = { NULL };
+	int code;
+	struct stat st;
+	char errbuf[512];
+
+	if (stat(cmd, &st) != 0 || !S_ISREG(st.st_mode)) {
+		/*
+		 * This binary is (potentially) shipped from another
+		 * consolidation.  If it does not exist, then the platform does
+		 * not currently support volumes for LX-branded zones.
+		 */
+		return;
+	}
+
+	/*
+	 * Run the command, firing the callback for each line that it
+	 * outputs.  When this function returns, volumes processing
+	 * is complete.
+	 */
+	if (run_command(cmd, argv, envp, errbuf, sizeof (errbuf),
+		lxi_mount_volume, &code) != 0 || code != 0) {
+		lxi_err("failed to run \"%s\": %s", cmd, errbuf);
+	}
+}
+
+static void
 lxi_config_close(zone_dochandle_t handle)
 {
 	zonecfg_fini_handle(handle);
@@ -862,6 +1087,8 @@ main(int argc, char *argv[])
 	lxi_net_static_routes();
 
 	lxi_net_ipadm_close();
+
+	lxi_mount_volumes();
 
 	lxi_log_close();
 
