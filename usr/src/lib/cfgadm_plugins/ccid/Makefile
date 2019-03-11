@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019, Joyent, Inc.
 #
 
 include		../../Makefile.lib
@@ -33,9 +34,9 @@ clean :=	TARGET= clean
 clobber :=	TARGET= clobber
 delete :=	TARGET= delete
 install :=	TARGET= install
-lint := 	TARGET= lint
+lint :=	TARGET= lint
 _msg :=		TARGET= _msg
-package := 	TARGET= package
+package :=	TARGET= package
 
 SED=	sed
 GREP=	grep

@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #ifndef _ATR_H
@@ -59,8 +59,8 @@ typedef enum atr_protocol {
 } atr_protocol_t;
 
 typedef enum atr_convention {
-	ATR_CONVENTION_DIRECT 	= 0x00,
-	ATR_CONVENTION_INVERSE 	= 0x01
+	ATR_CONVENTION_DIRECT	= 0x00,
+	ATR_CONVENTION_INVERSE	= 0x01
 } atr_convention_t;
 
 typedef enum atr_clock_stop {

@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2019 Joyent, Inc.
 #
 # lib/cfgadm_plugins/Makefile
 #
@@ -37,7 +38,7 @@ ALL_SUBDIRS= $(COMMON_SUBDIRS) $(sparc_SUBDIRS) $(i386_SUBDIRS)
 
 MSGSUBDIRS= $(ALL_SUBDIRS)
 
-all:= 		TARGET= all
+all:=		TARGET= all
 install:=	TARGET= install
 clean:=		TARGET= clean
 clobber:=	TARGET= clobber

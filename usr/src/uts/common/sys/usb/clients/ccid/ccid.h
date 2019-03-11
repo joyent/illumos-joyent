@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #ifndef _SYS_USB_CCID_H
@@ -214,7 +214,7 @@ typedef enum ccid_request_code {
 	CCID_REQUEST_SECURE		= 0x69,	/* PC_to_RDR_Secure */
 	CCID_REQUEST_MECHANICAL		= 0x71,	/* PC_to_RDR_Mechanica */
 	CCID_REQEUST_ABORT		= 0x72,	/* PC_to_RDR_Abort */
-	CCID_REQUEST_DATA_CLOCK		= 0x73 	/* PC_to_RDR_SetDataRateAnd */
+	CCID_REQUEST_DATA_CLOCK		= 0x73	/* PC_to_RDR_SetDataRateAnd */
 						/* ClockFrequency */
 } ccid_request_code_t;
 

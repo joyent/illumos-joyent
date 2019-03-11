@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #ifndef _SYS_USB_UCCID_H
@@ -44,13 +44,6 @@ extern "C" {
 #define	UCCID_VERSION_ONE	1
 #define	UCCID_CURRENT_VERSION	UCCID_VERSION_ONE
 
-#define	UCCID_TXN_DONT_BLOCK	0x01
-
-typedef struct uccid_cmd_txn_begin {
-	uint32_t	uct_version;
-	uint32_t	uct_flags;
-} uccid_cmd_txn_begin_t;
-
 /*
  * Attempt to obtain exclusive access. If the UCN_TXN_DONT_BLOCK flag is
  * specified, the ioctl will return immediately if exclusive access cannot be
@@ -58,14 +51,15 @@ typedef struct uccid_cmd_txn_begin {
  * a uccid_cmd_txn_begin_t.
  */
 #define	UCCID_CMD_TXN_BEGIN	(UCCID_IOCTL | 0x01)
+#define	UCCID_TXN_DONT_BLOCK	0x01
 
-typedef struct uccid_cmd_txn_end {
+typedef struct uccid_cmd_txn_begin {
 	uint32_t	uct_version;
 	uint32_t	uct_flags;
-} uccid_cmd_txn_end_t;
+} __packed uccid_cmd_txn_begin_t;
 
 /*
- * Reliquish exclusive access. Takes a uccid_cmd_txn_end_t. The callers should
+ * Relinquish exclusive access. Takes a uccid_cmd_txn_end_t. The callers should
  * specify one of UCCID_TXN_END_RESET or UCCID_TXN_END_RELEASE. These indicate
  * what behavior should be taken when we release the transaction. It is
  * considered an error if neither is specified. If the caller exits without
@@ -74,6 +68,16 @@ typedef struct uccid_cmd_txn_end {
 #define	UCCID_CMD_TXN_END	(UCCID_IOCTL | 0x02)
 #define	UCCID_TXN_END_RESET	0x01
 #define	UCCID_TXN_END_RELEASE	0x02
+
+typedef struct uccid_cmd_txn_end {
+	uint32_t	uct_version;
+	uint32_t	uct_flags;
+} __packed uccid_cmd_txn_end_t;
+
+/*
+ * Obtain the status of the slot. Fills in ucs_flags.
+ */
+#define	UCCID_CMD_STATUS	(UCCID_IOCTL | 0x3)
 
 /*
  * Protocol definitions. This should match common/ccid/atr.h.
@@ -105,12 +109,12 @@ typedef struct uccid_cmd_status {
 	ccid_class_descr_t	ucs_class;
 	uccid_prot_t	ucs_prot;
 	ccid_params_t	ucs_params;
-} uccid_cmd_status_t;
+} __packed uccid_cmd_status_t;
 
 /*
- * Obtain the status of the slot. Fills in ucs_flags.
+ * Modify the state of the ICC, if present.
  */
-#define	UCCID_CMD_STATUS	(UCCID_IOCTL | 0x3)
+#define	UCCID_CMD_ICC_MODIFY	(UCCID_IOCTL | 0x04)
 
 #define	UCCID_ICC_POWER_ON	0x01
 #define	UCCID_ICC_POWER_OFF	0x02
@@ -119,12 +123,7 @@ typedef struct uccid_cmd_status {
 typedef struct uccid_cmd_icc_modify {
 	uint32_t uci_version;
 	uint32_t uci_action;
-} uccid_cmd_icc_modify_t;
-
-/*
- * Modify the state of the ICC, if present.
- */
-#define	UCCID_CMD_ICC_MODIFY	(UCCID_IOCTL | 0x04)
+} __packed uccid_cmd_icc_modify_t;
 
 #ifdef __cplusplus
 }

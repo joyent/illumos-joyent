@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #ifndef _T1_H
@@ -87,7 +87,7 @@ typedef struct t1_hdr {
 #define	T1_RBLOCK_STATUS_MASK	0x03
 
 typedef enum t1_rblock_status {
-	T1_RBLOCK_STATUS_OK 	= 0x00,
+	T1_RBLOCK_STATUS_OK	= 0x00,
 	T1_RBLOCK_STATUS_PARITY	= 0x01,
 	T1_RBLOCK_STATUS_ERROR	= 0x02
 } t1_rblock_status_t;
@@ -152,8 +152,8 @@ typedef enum {
 
 typedef enum t1_state_flags {
 	T1_F_ICC_INIT		= 1 << 0,
-	T1_F_CMD_SENDING 	= 1 << 1,
-	T1_F_CMD_RECEIVING 	= 1 << 2,
+	T1_F_CMD_SENDING	= 1 << 1,
+	T1_F_CMD_RECEIVING	= 1 << 2,
 	T1_F_CMD_ERROR		= 1 << 3,
 	T1_F_CMD_DONE		= 1 << 4,
 	T1_F_CMD_SRESP		= 1 << 5,
@@ -259,7 +259,7 @@ typedef enum {
 
 /*
  * These three functions are used to advance the T=1 state machine. The
- * t1_reply() functino should be used when we receive a reply from the ICC.
+ * t1_reply() function should be used when we receive a reply from the ICC.
  *
  * The t1_step() function is used to basically figure out what to do next. This
  * may mean preparing another command or realizing that we're done with

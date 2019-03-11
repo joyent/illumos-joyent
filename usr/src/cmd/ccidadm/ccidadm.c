@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc. 
+ * Copyright 2019, Joyent, Inc.
  */
 
 /*
@@ -59,7 +59,7 @@ typedef struct ccid_list_ofmt_arg {
 } ccid_list_ofmt_arg_t;
 
 /*
- * Attempt to open a CCID slot specified by a user. In general, we exepect that
+ * Attempt to open a CCID slot specified by a user. In general, we expect that
  * users will use a path like "ccid0/slot0". However, they may also specify a
  * full path. If the card boolean is set to true, that means that they may have
  * just specified "ccid0", so we need to try to open up the default slot.
@@ -100,7 +100,8 @@ ccidadm_open(const char *base, boolean_t card)
 		}
 	}
 
-	if (snprintf(buf, sizeof (buf), "%s/%s", CCID_ROOT, base) >= sizeof (buf)) {
+	if (snprintf(buf, sizeof (buf), "%s/%s", CCID_ROOT, base) >=
+	    sizeof (buf)) {
 		errno = ENAMETOOLONG;
 		return (-1);
 	}
@@ -137,8 +138,8 @@ ccidadm_iter(boolean_t readeronly, boolean_t newline,
 		}
 
 		if (ent->fts_info == FTS_ERR || ent->fts_info == FTS_NS) {
-			warn("skipping %s, failed to get information: %s", ent->fts_name,
-			    strerror(ent->fts_errno));
+			warn("skipping %s, failed to get information: %s",
+			    ent->fts_name, strerror(ent->fts_errno));
 			continue;
 		}
 
@@ -175,7 +176,8 @@ ccidadm_list_slot_status_str(uccid_cmd_status_t *ucs, char *buf, uint_t buflen)
 }
 
 static boolean_t
-ccidadm_list_slot_transport_str(uccid_cmd_status_t *ucs, char *buf, uint_t buflen)
+ccidadm_list_slot_transport_str(uccid_cmd_status_t *ucs, char *buf,
+    uint_t buflen)
 {
 	const char *prot;
 	const char *tran;
@@ -229,8 +231,8 @@ ccidadm_list_ofmt_cb(ofmt_arg_t *ofmt, char *buf, uint_t buflen)
 		}
 		break;
 	case CCIDADM_LIST_PRODUCT:
-		if (snprintf(buf, buflen, "%s", cloa->cloa_status->ucs_product) >=
-		    buflen) {
+		if (snprintf(buf, buflen, "%s",
+		    cloa->cloa_status->ucs_product) >= buflen) {
 			return (B_FALSE);
 		}
 		break;
@@ -274,8 +276,8 @@ ccidadm_list_slot(int slotfd, const char *name, void *arg)
 
 static ofmt_field_t ccidadm_list_fields[] = {
 	{ "PRODUCT",	24,	CCIDADM_LIST_PRODUCT,	ccidadm_list_ofmt_cb },
-	{ "DEVICE",	16,	CCIDADM_LIST_DEVICE, 	ccidadm_list_ofmt_cb },
-	{ "CARD STATE",	12,	CCIDADM_LIST_STATE, 	ccidadm_list_ofmt_cb },
+	{ "DEVICE",	16,	CCIDADM_LIST_DEVICE,	ccidadm_list_ofmt_cb },
+	{ "CARD STATE",	12,	CCIDADM_LIST_STATE,	ccidadm_list_ofmt_cb },
 	{ "TRANSPORT",  10,	CCIDADM_LIST_TRANSPORT,	ccidadm_list_ofmt_cb },
 	{ NULL,		0,	0,			NULL	}
 };
@@ -398,13 +400,15 @@ ccidadm_atr_props(uccid_cmd_status_t *ucs)
 		    "default %s parameters\n", atr_protocol_to_string(defprot));
 	} else {
 		(void) printf("Card protocol is not negotiable; starts with "
-		    "specific %s parameters\n", atr_protocol_to_string(defprot));
+		    "specific %s parameters\n",
+		    atr_protocol_to_string(defprot));
 	}
 
 	/*
-	 * For each supported protocol, figure out parameters we would negotiate.
-	 * We only need to warn about auto-negotiation if this is TPDU and
-	 * specific bits are missing. XXX Mask for TDPU and maybe character?
+	 * For each supported protocol, figure out parameters we would
+	 * negotiate. We only need to warn about auto-negotiation if this
+	 * is TPDU and specific bits are missing. XXX Mask for TDPU and
+	 * maybe character?
 	 */
 	if ((ucs->ucs_class.ccd_dwFeatures & (CCID_CLASS_F_AUTO_PARAM_NEG |
 	    CCID_CLASS_F_AUTO_PPS)) == 0) {
@@ -476,8 +480,8 @@ ccidadm_atr_props(uccid_cmd_status_t *ucs)
 		    atr_fmax_index_to_string(fi));
 		(void) printf("  + Di Index: %u (Di %s)\n", di,
 		    atr_di_index_to_string(di));
-		(void) printf("  + Checksum: %s\n", cksum == ATR_T1_CHECKSUM_CRC ?
-		    "CRC" : "LRC");
+		(void) printf("  + Checksum: %s\n",
+		    cksum == ATR_T1_CHECKSUM_CRC ? "CRC" : "LRC");
 		(void) printf("  + Extra Guardtime: %u\n",
 		    atr_extra_guardtime(data));
 		(void) printf("  + BWI: %u\n", atr_t1_bwi(data));
@@ -573,7 +577,8 @@ ccidadm_do_atr(int argc, char *argv[])
 			caa.caa_hex = B_TRUE;
 			break;
 		case ':':
-			errx(EXIT_USAGE, "Option -%c requires an argument\n", optopt);
+			errx(EXIT_USAGE, "Option -%c requires an argument\n",
+			    optopt);
 			break;
 		case '?':
 			errx(EXIT_USAGE, "Unknown option: -%c\n", optopt);
@@ -632,7 +637,7 @@ static ccidadm_pair_t ccidadm_p_protocols[] = {
 };
 
 static ccidadm_pair_t ccidadm_p_voltages[] = {
-	{ CCID_CLASS_VOLT_5_0,	"5.0 V" },
+	{ CCID_CLASS_VOLT_5_0, "5.0 V" },
 	{ CCID_CLASS_VOLT_3_0, "3.0 V" },
 	{ CCID_CLASS_VOLT_1_8, "1.8 V" },
 	{ 0x0, NULL }
@@ -654,12 +659,16 @@ static ccidadm_pair_t ccidadm_p_mechanical[] = {
 };
 
 static ccidadm_pair_t ccidadm_p_features[] = {
-	{ CCID_CLASS_F_AUTO_PARAM_ATR, "Automatic parameter configuration based on ATR data" },
-	{ CCID_CLASS_F_AUTO_ICC_ACTIVATE, "Automatic activation on ICC insertion" },
+	{ CCID_CLASS_F_AUTO_PARAM_ATR,
+	    "Automatic parameter configuration based on ATR data" },
+	{ CCID_CLASS_F_AUTO_ICC_ACTIVATE,
+	    "Automatic activation on ICC insertion" },
 	{ CCID_CLASS_F_AUTO_ICC_VOLTAGE, "Automatic ICC voltage selection" },
-	{ CCID_CLASS_F_AUTO_ICC_CLOCK, "Automatic ICC clock frequency change" },
+	{ CCID_CLASS_F_AUTO_ICC_CLOCK,
+	    "Automatic ICC clock frequency change" },
 	{ CCID_CLASS_F_AUTO_BAUD, "Automatic baud rate change" },
-	{ CCID_CLASS_F_AUTO_PARAM_NEG, "Automatic parameter negotiation by CCID" },
+	{ CCID_CLASS_F_AUTO_PARAM_NEG,
+	    "Automatic parameter negotiation by CCID" },
 	{ CCID_CLASS_F_AUTO_PPS, "Automatic PPS made by CCID" },
 	{ CCID_CLASS_F_ICC_CLOCK_STOP, "CCID can set ICC in clock stop mode" },
 	{ CCID_CLASS_F_ALTNAD_SUP, "NAD value other than zero accepted" },
@@ -735,7 +744,8 @@ ccidadm_reader_print(int fd, const char *name, void *unused)
 	(void) printf("  Maximum IFSD (T=1 only): %u\n", cd->ccd_dwMaxIFSD);
 	if (cd->ccd_dwSyncProtocols != 0) {
 		(void) printf("  Synchronous Protocols Supported:\n");
-		ccidadm_print_pairs(cd->ccd_dwSyncProtocols, ccidadm_p_syncprots);
+		ccidadm_print_pairs(cd->ccd_dwSyncProtocols,
+		    ccidadm_p_syncprots);
 	}
 	if (cd->ccd_dwMechanical != 0) {
 		(void) printf("  Mechanical Features:\n");
@@ -763,7 +773,7 @@ ccidadm_reader_print(int fd, const char *name, void *unused)
 	}
 	if (cd->ccd_wLcdLayout != 0) {
 		(void) printf("  %2ux%2u LCD present\n",
-		    cd->ccd_wLcdLayout >> 16, cd->ccd_wLcdLayout & 0xff);
+		    cd->ccd_wLcdLayout >> 8, cd->ccd_wLcdLayout & 0xff);
 	}
 
 	if (cd->ccd_bPinSupport) {
@@ -832,7 +842,8 @@ ccidadm_usage(const char *format, ...)
 		va_end(ap);
 	}
 
-	(void) fprintf(stderr, "usage:  %s <subcommand> <args> ...\n\n", ccidadm_pname);
+	(void) fprintf(stderr, "usage:  %s <subcommand> <args> ...\n\n",
+	    ccidadm_pname);
 	(void) fprintf(stderr, "Subcommands:\n");
 	for (tab = ccidadm_cmds; tab->cc_name != NULL; tab++) {
 		tab->cc_usage(stderr);

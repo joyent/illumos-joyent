@@ -10,7 +10,7 @@
 #
 
 #
-# Copyright (c) 2017 Joyent, Inc.
+# Copyright 2019 Joyent, Inc.
 #
 
 include		../Makefile.lib
@@ -30,9 +30,9 @@ lint :=		TARGET = lint
 
 all clean clobber lint: $(SUBDIRS)
 
-install: 	$(SUBDIRS) install_h
+install:	$(SUBDIRS) install_h
 
-install_h: 	$(ROOTHDRS)
+install_h:	$(ROOTHDRS)
 
 check:		$(CHECKHDRS)
 

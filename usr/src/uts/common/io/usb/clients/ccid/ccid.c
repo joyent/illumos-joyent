@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc. 
+ * Copyright 2019, Joyent, Inc.
  */
 
 /*
@@ -74,7 +74,7 @@
  * generated as a series of one or more messages on a Bulk-IN pipe. To correlate
  * these commands a sequence number is used. This sequence number is one byte
  * and can be in the range [ CCID_SEQ_MIN, CCID_SEQ_MAX ]. To keep track of the
- * allocatd IDs we leverage an ID space.
+ * allocated IDs we leverage an ID space.
  *
  * A CCID reader contains a number of slots. Each slot can be addressed
  * separately as each slot represents a separate place that a card may be
@@ -144,13 +144,14 @@
  * negotiating this information. If the hardware does not support negotiation,
  * then it likely does not support a PPS and in which case we need to program
  * the hardware with the parameters indicated by the ATR through a
- * CCID_REQUEST_SET_PARAMS command and do not need to negotiation a PPS.
- * 
+ * CCID_REQUEST_SET_PARAMS command and do not need to negotiate a PPS.
+ *
  * Many ICC devices support negotiation. When an ICC supporting negotiation is
  * first turned on then it enters into a default mode and uses the default
  * values while in that mode. The PPS may be used to change the protocol as well
  * as several parameters. Once the PPS has been agreed upon, this driver just
- * send a CCID_REQUEST_SET_PARAMS command to inform the reader what is going on.
+ * sends a CCID_REQUEST_SET_PARAMS command to inform the reader what is going
+ * on.
  *
  * If the CCID reader supports neither of the hardware related mechanisms for a
  * PPS exchange, then we must do both of these. If hardware supports automatic
@@ -158,7 +159,7 @@
  * CCID_REQUEST_SET_PARAMS command.
  *
  * The ATR offers us what the hardware's maximum value of Di and Fi are. If the
- * reader supports higher speeds, then we will 
+ * reader supports higher speeds, then we will XXX
  *
  * XXX At the moment we're not adjusting any of the Di or Fi values beyond their
  * default.
@@ -168,7 +169,7 @@
  *
  *  - If the reader supports APDU transfers, then we are done.
  *     XXX Depending on level of automation we may need to still do things.
- *  - If the reader supports 
+ *  - If the reader supports XXX
  *
  * User I/O Basics
  * ---------------
@@ -261,8 +262,8 @@
  *   While the user I/O thread is a somewhat straightforward, the kernel
  *   protocol level is a bit more complicated. The core problem is that when a
  *   user issues a logical I/O through an APDU, that may result in a series of
- *   one or protocol level, physical commands. The core crux of the issue with
- *   cleaning up this state is twofold:
+ *   one or more protocol level physical commands. The core crux of the issue
+ *   with cleaning up this state is twofold:
  *
  *     1. We don't want to block a user thread while I/O is outstanding
  *     2. We need to take one of several steps to clean up the aforementioned
@@ -370,7 +371,7 @@
  *       o XXX This one is tricky, because we might want to reset our T=1 state
  *         on insertion of a new ICC before this is read. Ugh. Maybe we should
  *         pull out the mblk_t chain when the I/O is completed so we can
- *         disassociate this state. 
+ *         disassociate this state.
  *       o Still need to signal POLLHUP, but POLLIN should already have been
  *         done
  *   + Unread, but completed I/O when the reader is removed
@@ -463,7 +464,7 @@
  * class descriptor's dwMaxCCIDMessageLength member. We got to 64 bytes based on
  * the required size of a bulk transfer packet size. Especially as many CCID
  * devices are these class of speeds. The specification does require that the
- * minimu size of the dwMaxCCIDMessageLength member is at least the size of its
+ * minimum size of the dwMaxCCIDMessageLength member is at least the size of its
  * bulk endpoint packet size.
  */
 #define	CCID_MIN_MESSAGE_LENGTH	64
@@ -498,7 +499,7 @@ typedef enum ccid_minor_flags {
 } ccid_minor_flags_t;
 
 typedef struct ccid_minor {
-	ccid_minor_idx_t	cm_idx;		/* WO */
+	ccid_minor_idx_t	cm_idx;		/* WO */ /* XXX: Whats 'WO'? */
 	cred_t			*cm_opener;	/* WO */
 	struct ccid_slot	*cm_slot;	/* WO */
 	list_node_t		cm_minor_list;
@@ -524,7 +525,8 @@ typedef enum ccid_slot_flags {
     CCID_SLOT_F_INTR_ADD)
 #define	CCID_SLOT_F_WORK_MASK	(CCID_SLOT_F_INTR_MASK | \
     CCID_SLOT_F_NEED_TXN_RESET)
-#define	CCID_SLOT_F_NOEXCL_MASK	(CCID_SLOT_F_NEED_TXN_RESET | CCID_SLOT_F_NEED_IO_TEARDOWN)
+#define	CCID_SLOT_F_NOEXCL_MASK	(CCID_SLOT_F_NEED_TXN_RESET | \
+    CCID_SLOT_F_NEED_IO_TEARDOWN)
 
 typedef void (*icc_init_func_t)(struct ccid *, struct ccid_slot *);
 typedef int (*icc_transmit_func_t)(struct ccid *, struct ccid_slot *);
@@ -576,10 +578,10 @@ typedef enum ccid_io_flags {
 	/*
 	 * This flag is used to indicate that a given I/O has been abandoned by
 	 * the user and that we need to clean things up before the ICC is usable
-	 * again. 
+	 * again.
 	 *
 	 * XXX Should this really be set? I'm now starting to wonder if this
-	 * would make more sent to have like we have the resetting flag.
+	 * would make more sense to have like we have the resetting flag.
 	 * Especially if for T=1 we issue an abort.
 	 */
 	CCID_IO_F_ABANDONED	= 1 << 3
@@ -587,7 +589,7 @@ typedef enum ccid_io_flags {
 
 /*
  * If any of the flags in the POLLOUT group are set, then the device is not
- * writeable. The same distinction isn't true for POLLIN. We are only readable 
+ * writeable. The same distinction isn't true for POLLIN. We are only readable
  * if CCID_IO_F_DONE is set. However, you are allowed to call read as soon as
  * CCID_IO_F_IN_PROGRESS is set.
  */
@@ -869,6 +871,17 @@ ccid_minor_find_user(minor_t m)
 	return (idx);
 }
 
+static void
+ccid_clear_io(ccid_io_t *io)
+{
+	freemsg(io->ci_data);
+	io->ci_data = NULL;
+	io->ci_errno = 0;
+	io->ci_flags &= ~CCID_IO_F_DONE;
+	io->ci_ilen = 0;
+	bzero(io->ci_ibuf, sizeof (io->ci_ibuf));
+}
+
 /*
  * Check if the conditions are met to signal the next exclusive holder. For this
  * to be true, there should be no one holding it. In addition, there must be
@@ -948,14 +961,8 @@ ccid_slot_excl_rele(ccid_slot_t *slot)
 	 * one blocked in read, then we need to clean that up. The ICC teardown
 	 * function is only designed to take care of in-flight I/Os.
 	 */
-	if ((slot->cs_io.ci_flags & CCID_IO_F_DONE) != 0) {
-		freemsg(slot->cs_io.ci_data);
-		slot->cs_io.ci_data = NULL;
-		slot->cs_io.ci_errno = 0;
-		slot->cs_io.ci_flags &= ~CCID_IO_F_DONE;
-		slot->cs_io.ci_ilen = 0;
-		bzero(slot->cs_io.ci_ibuf, sizeof (slot->cs_io.ci_ibuf));
-	}
+	if ((slot->cs_io.ci_flags & CCID_IO_F_DONE) != 0)
+		ccid_clear_io(&slot->cs_io);
 
 	/*
 	 * Regardless of when we're polling, we need to go through and error
@@ -971,6 +978,7 @@ ccid_slot_excl_rele(ccid_slot_t *slot)
 	if (cmp->cm_flags & CCID_MINOR_F_TXN_RESET) {
 		slot->cs_flags |= CCID_SLOT_F_NEED_TXN_RESET;
 		ccid_worker_request(ccid);
+		cmp->cm_flags &= ~CCID_MINOR_F_TXN_RESET;
 	} else {
 		ccid_slot_excl_maybe_signal(slot);
 	}
@@ -1012,11 +1020,11 @@ ccid_slot_excl_req(ccid_slot_t *slot, ccid_minor_t *cmp, boolean_t nosleep)
 	list_insert_tail(&slot->cs_excl_waiters, cmp);
 	while (slot->cs_excl_minor != NULL ||
 	    (slot->cs_flags & CCID_SLOT_F_NOEXCL_MASK) != 0) {
-		if (cv_wait_sig(&cmp->cm_excl_cv, &slot->cs_ccid->ccid_mutex) ==
-		    0) {
+		if (cv_wait_sig(&cmp->cm_excl_cv, &slot->cs_ccid->ccid_mutex)
+		    == 0) {
 			/*
 			 * Remove ourselves from the list, but only signal the
-			 * next thread if 
+			 * next thread if XXX
 			 */
 			list_remove(&slot->cs_excl_waiters, cmp);
 			cmp->cm_flags &= ~CCID_MINOR_F_WAITING;
@@ -1034,11 +1042,12 @@ ccid_slot_excl_req(ccid_slot_t *slot, ccid_minor_t *cmp, boolean_t nosleep)
 			return (ENODEV);
 		}
 
-		/* XXX Waiting on a lock, need to reassert usability of device /
-		 * going awayness */
+		/*
+		 * XXX Waiting on a lock, need to reassert usability of device /
+		 * going awayness
+		 */
 	}
 
-	VERIFY3P(cmp, ==, list_head(&slot->cs_excl_waiters));
 	VERIFY0(slot->cs_flags & CCID_SLOT_F_NOEXCL_MASK);
 	list_remove(&slot->cs_excl_waiters, cmp);
 
@@ -1064,6 +1073,8 @@ ccid_slot_pollin_signal(ccid_slot_t *slot)
 	ccid_minor_t *cmp;
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
+
+	/* XXX */
 }
 
 /*
@@ -1071,7 +1082,7 @@ ccid_slot_pollin_signal(ccid_slot_t *slot)
  * able to signal a POLLOUT (meaning that we can write) the following must be
  * true:
  *
- *   o There is a minor which has an exclusive hold on the device 
+ *   o There is a minor which has an exclusive hold on the device
  *   o There is no outstanding I/O activity going on, meaning that there is no
  *     operation in progress and any write data has been consumed.
  *   o There is an ICC present
@@ -1085,6 +1096,8 @@ ccid_slot_pollout_signal(ccid_slot_t *slot)
 	ccid_minor_t *cmp;
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
+
+	/* XXX */
 }
 
 static void
@@ -1139,7 +1152,7 @@ ccid_command_resp_param2(ccid_command_t *cc)
 
 /*
  * Complete a single command. The way that a command completes depends on the
- * kind of command that occurs. If this is commad is flagged as a user command,
+ * kind of command that occurs. If this command is flagged as a user command,
  * that implies that it must be handled in a different way from administrative
  * commands. User commands are placed into the minor to consume via a read(9E).
  * Non-user commands are placed into a completion queue and must be picked up
@@ -1204,8 +1217,9 @@ ccid_command_transport_error(ccid_command_t *cc, int usb_status, usb_cr_t cr)
 }
 
 static void
-ccid_command_status_decode(ccid_command_t *cc, ccid_reply_command_status_t *comp,
-    ccid_reply_icc_status_t *iccp, ccid_command_err_t *errp)
+ccid_command_status_decode(ccid_command_t *cc,
+    ccid_reply_command_status_t *comp, ccid_reply_icc_status_t *iccp,
+    ccid_command_err_t *errp)
 {
 	ccid_header_t cch;
 	size_t mblen;
@@ -1220,7 +1234,7 @@ ccid_command_status_decode(ccid_command_t *cc, ccid_reply_command_status_t *comp
 		*comp = CCID_REPLY_STATUS(cch.ch_param0);
 	}
 
-	if (iccp != NULL) { 
+	if (iccp != NULL) {
 		*iccp = CCID_REPLY_ICC(cch.ch_param0);
 	}
 
@@ -1303,7 +1317,7 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 	/*
 	 * If the sequence number doesn't match the head of the list then we
 	 * should be very suspect of the hardware at this point. At a minimum we
-	 * should fail this command, 
+	 * should fail this command, XXX
 	 */
 	if (cch.ch_seq != cc->cc_seq) {
 		/*
@@ -1317,7 +1331,7 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 
 	/*
 	 * Check that we have all the bytes that we were told we'd have. If we
-	 * dno't, simulate this as an aborted command. XXX is this the right
+	 * don't, simulate this as an aborted command. XXX is this the right
 	 * thing to do?
 	 */
 	if (LE_32(cch.ch_length) + sizeof (ccid_header_t) > mlen) {
@@ -1347,7 +1361,7 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 
 		ret = ccid_bulkin_schedule(ccid);
 		if (ret != USB_SUCCESS) {
-			ccid_command_transport_error(cc, ret, USB_CR_OK); 
+			ccid_command_transport_error(cc, ret, USB_CR_OK);
 		}
 		mutex_exit(&ccid->ccid_mutex);
 		usb_free_bulk_req(ubrp);
@@ -1411,8 +1425,8 @@ ccid_bulkin_cache_refresh(ccid_t *ccid)
 	while (ccid->ccid_bulkin_alloced < CCID_BULK_NALLOCED) {
 		usb_bulk_req_t *ubrp;
 
-		ubrp = usb_alloc_bulk_req(ccid->ccid_dip, ccid->ccid_bufsize, 0);
-		if (ubrp == NULL)
+		if ((ubrp = usb_alloc_bulk_req(ccid->ccid_dip,
+		    ccid->ccid_bufsize, 0)) == NULL)
 			return;
 
 		ubrp->bulk_len = ccid->ccid_bufsize;
@@ -1469,7 +1483,8 @@ ccid_bulkin_schedule(ccid_t *ccid)
 
 		if ((ret = usb_pipe_bulk_xfer(ccid->ccid_bulkin_pipe, ubrp,
 		    0)) != USB_SUCCESS) {
-			ccid_error(ccid, "failed to schedule Bulk-In response: %d", ret);
+			ccid_error(ccid,
+			    "failed to schedule Bulk-In response: %d", ret);
 			usb_free_bulk_req(ubrp);
 			return (ret);
 		}
@@ -1512,7 +1527,7 @@ ccid_command_dispatch(ccid_t *ccid)
 		cc->cc_dispatch_time = gethrtime();
 
 		/*
-		 * Drop the global lock while we schedule the USB I/O. 
+		 * Drop the global lock while we schedule the USB I/O.
 		 */
 		mutex_exit(&ccid->ccid_mutex);
 
@@ -1525,7 +1540,8 @@ ccid_command_dispatch(ccid_t *ccid)
 			 * will be taken care of when the command itself is
 			 * freed.
 			 */
-			ccid_error(ccid, "Bulk pipe dispatch failed: %d\n", ret);
+			ccid_error(ccid, "Bulk pipe dispatch failed: %d\n",
+			    ret);
 			ccid_command_transport_error(cc, ret, USB_CR_OK);
 		}
 	}
@@ -1583,7 +1599,7 @@ ccid_dispatch_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 	 */
 	ret = ccid_bulkin_schedule(ccid);
 	if (ret != USB_SUCCESS) {
-		ccid_command_transport_error(cc, ret, USB_CR_OK); 
+		ccid_command_transport_error(cc, ret, USB_CR_OK);
 	}
 	mutex_exit(&ccid->ccid_mutex);
 }
@@ -1704,7 +1720,8 @@ ccid_command_alloc(ccid_t *ccid, ccid_slot_t *slot, boolean_t block,
 
 	allocsz = datasz + sizeof (ccid_header_t);
 	if (datamp == NULL) {
-		cc->cc_ubrp = usb_alloc_bulk_req(ccid->ccid_dip, allocsz, usbflag);
+		cc->cc_ubrp = usb_alloc_bulk_req(ccid->ccid_dip, allocsz,
+		    usbflag);
 	} else {
 		cc->cc_ubrp = usb_alloc_bulk_req(ccid->ccid_dip, 0, usbflag);
 	}
@@ -1944,7 +1961,7 @@ ccid_command_get_parameters(ccid_t *ccid, ccid_slot_t *slot,
 	const void *cpbuf;
 
 	if ((ret = ccid_command_alloc(ccid, slot, B_TRUE, NULL, 0,
-	   CCID_REQUEST_GET_PARAMS, 0, 0, 0, &cc)) != 0) {
+	    CCID_REQUEST_GET_PARAMS, 0, 0, 0, &cc)) != 0) {
 		return (ret);
 	}
 
@@ -2006,7 +2023,8 @@ done:
 }
 
 static int
-ccid_command_set_parameters(ccid_t *ccid, ccid_slot_t *slot, atr_protocol_t protocol, void *params)
+ccid_command_set_parameters(ccid_t *ccid, ccid_slot_t *slot,
+    atr_protocol_t protocol, void *params)
 {
 	int ret;
 	ccid_command_t *cc;
@@ -2030,7 +2048,7 @@ ccid_command_set_parameters(ccid_t *ccid, ccid_slot_t *slot, atr_protocol_t prot
 	}
 
 	if ((ret = ccid_command_alloc(ccid, slot, B_TRUE, NULL, len,
-	   CCID_REQUEST_SET_PARAMS, prot, 0, 0, &cc)) != 0) {
+	    CCID_REQUEST_SET_PARAMS, prot, 0, 0, &cc)) != 0) {
 		return (ret);
 	}
 	ccid_command_bcopy(cc, params, len);
@@ -2085,7 +2103,7 @@ ccid_command_transfer(ccid_t *ccid, ccid_slot_t *slot, const void *buf,
 
 	*outp = NULL;
 	if ((ret = ccid_command_alloc(ccid, slot, B_TRUE, NULL, len,
-	   CCID_REQUEST_TRANSFER_BLOCK, 0, 0, 0, &cc)) != 0) {
+	    CCID_REQUEST_TRANSFER_BLOCK, 0, 0, 0, &cc)) != 0) {
 		return (ret);
 	}
 
@@ -2453,14 +2471,19 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
 {
 	uint_t bits = CCID_CLASS_F_TPDU_XCHG | CCID_CLASS_F_SHORT_APDU_XCHG |
 	    CCID_CLASS_F_EXT_APDU_XCHG;
+
+	slot->cs_icc.icc_init = NULL;
+	slot->cs_icc.icc_tx = NULL;
+	slot->cs_icc.icc_complete = NULL;
+	slot->cs_icc.icc_teardown = NULL;
+	slot->cs_icc.icc_fini = NULL;
+
 	switch (ccid->ccid_class.ccd_dwFeatures & bits) {
 	case CCID_CLASS_F_SHORT_APDU_XCHG:
 	case CCID_CLASS_F_EXT_APDU_XCHG:
-		slot->cs_icc.icc_init = NULL;
 		slot->cs_icc.icc_tx = ccid_write_apdu;
 		slot->cs_icc.icc_complete = ccid_complete_apdu;
 		slot->cs_icc.icc_teardown = ccid_teardown_apdu;
-		slot->cs_icc.icc_fini = NULL;
 		break;
 	case CCID_CLASS_F_TPDU_XCHG:
 		switch (slot->cs_icc.icc_cur_protocol) {
@@ -2476,12 +2499,9 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
 			 */
 			if (atr_t1_checksum(slot->cs_icc.icc_atr_data) ==
 			    ATR_T1_CHECKSUM_CRC) {
-				ccid_error(ccid, "!ICC uses unsupported T=1 CRC "
-				    "checksum. Please report this so support "
+				ccid_error(ccid, "!ICC uses unsupported T=1 CRC"
+				    " checksum. Please report this so support "
 				    "can be added");
-				slot->cs_icc.icc_tx = NULL;
-				slot->cs_icc.icc_complete = NULL;
-				slot->cs_icc.icc_teardown = NULL;
 				break;
 			}
 
@@ -2493,16 +2513,11 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
 			break;
 		case ATR_P_T0:
 		default:
-			slot->cs_icc.icc_tx = NULL;
-			slot->cs_icc.icc_complete = NULL;
-			slot->cs_icc.icc_teardown = NULL;
 			break;
 		}
 		break;
 	default:
-		slot->cs_icc.icc_tx = NULL;
-		slot->cs_icc.icc_complete = NULL;
-		slot->cs_icc.icc_teardown = NULL;
+		break;
 	}
 
 	/*
@@ -2524,7 +2539,7 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
  * - Negotiate and send the PPS (CCID_F_NEEDS_PPS)
  * - Set the CCID reader's parameters (CCID_F_NEEDS_PARAMS)
  * - Set the CCID reader's clock and data rate (CCID_F_NEEDS_DATAFREQ)
- * - Snapshot the current paramters being used for userland
+ * - Snapshot the current parameters being used for userland
  * - Set the IFSD for T=1 (CCID_F_NEEDS_IFSD)
  */
 static boolean_t
@@ -2631,8 +2646,8 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 			 * This case covers the times when CCID_F_NEEDS_DATAFREQ
 			 * is set and we'd need to gather those.
 			 */
-			ccid_error(ccid, "!ccid driver does not support "
-			    "manual data rate setting for ICC, cannot activate");
+			ccid_error(ccid, "!ccid driver does not support manual "
+			    "data rate setting for ICC, cannot activate");
 			return (B_FALSE);
 		default:
 			ccid_error(ccid, "!unsupported data rate choice: %u",
@@ -2681,7 +2696,12 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 			} else {
 				fip = dip = NULL;
 			}
-			ccid_slot_send_pps(ccid, slot, data, fip, dip, prot);
+			if (!ccid_slot_send_pps(ccid, slot, data, fip, dip,
+			    prot)) {
+				ccid_error(ccid,
+				    "!failed to send PPS to device");
+				return (B_FALSE);
+			}
 		}
 
 		/*
@@ -2695,12 +2715,14 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 				    fi, di)) {
 					ccid_error(ccid, "!failed to send T=0 "
 					    "paramters to device");
+					return (B_FALSE);
 				}
 			} else if (prot == ATR_P_T1) {
 				if (!ccid_slot_params_t1_init(ccid, slot, data,
 				    fi, di)) {
 					ccid_error(ccid, "!failed to send T=1 "
 					    "paramters to device");
+					return (B_FALSE);
 				}
 			}
 		}
@@ -2870,7 +2892,7 @@ ccid_slot_reset(ccid_t *ccid, ccid_slot_t *slot)
 	int ret;
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
-	VERIFY(ccid->ccid_flags & CCID_SLOT_F_NEED_TXN_RESET);
+	VERIFY(slot->cs_flags & CCID_SLOT_F_NEED_TXN_RESET);
 	VERIFY(ccid->ccid_flags & CCID_F_WORKER_RUNNING);
 
 	/*
@@ -2909,10 +2931,9 @@ ccid_slot_reset(ccid_t *ccid, ccid_slot_t *slot)
 		return (B_FALSE);
 	}
 
-	ccid->ccid_flags &= ~CCID_SLOT_F_ACTIVE;
+	slot->cs_flags &= ~CCID_SLOT_F_ACTIVE;
 
 	ccid_slot_teardown(ccid, slot, B_TRUE);
-	mutex_exit(&ccid->ccid_mutex);
 
 	/*
 	 * Mimic a slot insertion to power this back on. Don't worry about
@@ -2920,7 +2941,6 @@ ccid_slot_reset(ccid_t *ccid, ccid_slot_t *slot)
 	 * done our duty once we've powered it off successfully.
 	 */
 	(void) ccid_slot_inserted(ccid, slot);
-	mutex_enter(&ccid->ccid_mutex);
 
 	return (B_TRUE);
 }
@@ -2986,7 +3006,7 @@ ccid_worker(void *arg)
 			 * an attempt to reset it. If this fails, trigger
 			 * another worker that needs to operate.
 			 */
-			if (flags & CCID_SLOT_F_PRESENT) {
+			if (slot->cs_flags & CCID_SLOT_F_PRESENT) {
 				if (!ccid_slot_reset(ccid, slot)) {
 					ccid_worker_request(ccid);
 					continue;
@@ -3036,7 +3056,7 @@ ccid_worker_request(ccid_t *ccid)
 		return;
 	}
 
-	run = (ccid->ccid_flags & CCID_F_WORKER_MASK) == 0; 
+	run = (ccid->ccid_flags & CCID_F_WORKER_MASK) == 0;
 	ccid->ccid_flags |= CCID_F_WORKER_REQUESTED;
 	if (run) {
 		mutex_exit(&ccid->ccid_mutex);
@@ -3064,7 +3084,7 @@ ccid_intr_restart_timeout(void *arg)
 /*
  * Search for the current class descriptor from the configuration cloud and
  * parse it for our use. We do this by first finding the current interface
- * descriptor and expecting it to be one of the next descriptors 
+ * descriptor and expecting it to be one of the next descriptors XXX
  */
 static boolean_t
 ccid_parse_class_desc(ccid_t *ccid)
@@ -3120,8 +3140,8 @@ ccid_supported(ccid_t *ccid)
 
 	if (CCID_VERSION_MAJOR(ver) != CCID_VERSION_ONE) {
 		ccid_error(ccid, "refusing to attach to CCID with unsupported "
-		   "version %x.%2x", CCID_VERSION_MAJOR(ver),
-		   CCID_VERSION_MINOR(ver));
+		    "version %x.%2x", CCID_VERSION_MAJOR(ver),
+		    CCID_VERSION_MINOR(ver));
 		return (B_FALSE);
 	}
 
@@ -3149,7 +3169,7 @@ ccid_supported(ccid_t *ccid)
 	/*
 	 * Try and determine the appropriate buffer size. This can be a little
 	 * tricky. The class descriptor tells us the maximum size that the
-	 * reader excepts. While it may be tempting to try and use a larger
+	 * reader accepts. While it may be tempting to try and use a larger
 	 * value such as the maximum size, the readers really don't like
 	 * receiving bulk transfers that large. However, there are also reports
 	 * of readers that will overwrite to a fixed minimum size. XXX which
@@ -3158,9 +3178,9 @@ ccid_supported(ccid_t *ccid)
 	 */
 	ccid->ccid_bufsize = ccid->ccid_class.ccd_dwMaxCCIDMessageLength;
 	if (ccid->ccid_bufsize < CCID_MIN_MESSAGE_LENGTH) {
-		ccid_error(ccid, "CCID reader maximum CCID message length (%u) is "
-		    "less than minimum packet length (%u)", ccid->ccid_bufsize,
-		    CCID_MIN_MESSAGE_LENGTH);
+		ccid_error(ccid, "CCID reader maximum CCID message length (%u) "
+		    "is less than minimum packet length (%u)",
+		    ccid->ccid_bufsize, CCID_MIN_MESSAGE_LENGTH);
 		return (B_FALSE);
 	}
 
@@ -3178,8 +3198,8 @@ ccid_supported(ccid_t *ccid)
 	 */
 	if (ccid->ccid_class.ccd_bNumDataRatesSupported != 0 &&
 	    (feat & CCID_CLASS_F_AUTO_BAUD) == 0) {
-		ccid_error(ccid, "!CCID reader only supports fixed clock rates, "
-		    "data will be limited to default values");
+		ccid_error(ccid, "!CCID reader only supports fixed clock rates,"
+		    " data will be limited to default values");
 	}
 
 	/*
@@ -3226,7 +3246,7 @@ ccid_supported(ccid_t *ccid)
 		 */
 		if (ccid->ccid_class.ccd_dwMaxIFSD < T1_IFSD_DEFAULT) {
 			ccid_error(ccid, "CCID reader max IFSD (%d) is less "
-			    "T=1 default", ccid->ccid_class.ccd_dwMaxIFSD,
+			    "than T=1 default", ccid->ccid_class.ccd_dwMaxIFSD,
 			    T1_IFSD_DEFAULT);
 			return (B_FALSE);
 		}
@@ -3298,19 +3318,21 @@ ccid_open_pipes(ccid_t *ccid)
 
 	/*
 	 * First determine the maximum number of asynchronous requests. This
-	 * determines the maximum 
+	 * determines the maximum XXX: of what?
 	 */
 	bzero(&policy, sizeof (policy));
 	policy.pp_max_async_reqs = CCID_NUM_ASYNC_REQS;
 
 	if ((ret = usb_pipe_xopen(ccid->ccid_dip, &ccid->ccid_bulkin_xdesc,
-	    &policy, USB_FLAGS_SLEEP, &ccid->ccid_bulkin_pipe)) != USB_SUCCESS) {
+	    &policy, USB_FLAGS_SLEEP, &ccid->ccid_bulkin_pipe)) !=
+	    USB_SUCCESS) {
 		ccid_error(ccid, "failed to open Bulk-IN pipe: %d\n", ret);
 		return (B_FALSE);
 	}
 
 	if ((ret = usb_pipe_xopen(ccid->ccid_dip, &ccid->ccid_bulkout_xdesc,
-	    &policy, USB_FLAGS_SLEEP, &ccid->ccid_bulkout_pipe)) != USB_SUCCESS) {
+	    &policy, USB_FLAGS_SLEEP, &ccid->ccid_bulkout_pipe)) !=
+	    USB_SUCCESS) {
 		ccid_error(ccid, "failed to open Bulk-OUT pipe: %d\n", ret);
 		usb_pipe_close(ccid->ccid_dip, ccid->ccid_bulkin_pipe,
 		    USB_FLAGS_SLEEP, NULL, NULL);
@@ -3378,24 +3400,25 @@ ccid_slots_init(ccid_t *ccid)
 	ccid->ccid_slots = kmem_zalloc(sizeof (ccid_slot_t) * ccid->ccid_nslots,
 	    KM_SLEEP);
 	for (i = 0; i < ccid->ccid_nslots; i++) {
+		ccid_slot_t *slot = &ccid->ccid_slots[i];
+
 		/*
 		 * We initialize every possible slot as having changed to make
 		 * sure that we have a chance to discover it. See the slot
 		 * detection section in the big theory statement for more info.
 		 */
-		ccid->ccid_slots[i].cs_flags |= CCID_SLOT_F_CHANGED;
-		ccid->ccid_slots[i].cs_slotno = i;
-		ccid->ccid_slots[i].cs_ccid = ccid;
-		ccid->ccid_slots[i].cs_icc.icc_atr_data = atr_data_alloc();
-		ccid->ccid_slots[i].cs_idx.cmi_minor = CCID_MINOR_INVALID;
-		ccid->ccid_slots[i].cs_idx.cmi_isslot = B_TRUE;
-		ccid->ccid_slots[i].cs_idx.cmi_data.cmi_slot =
-		    &ccid->ccid_slots[i];
-		cv_init(&ccid->ccid_slots[i].cs_io.ci_cv, NULL, CV_DRIVER, NULL);
-		list_create(&ccid->ccid_slots[i].cs_minors, sizeof (ccid_minor_t),
-		   offsetof(ccid_minor_t, cm_minor_list)); 
-		list_create(&ccid->ccid_slots[i].cs_excl_waiters, sizeof (ccid_minor_t),
-		   offsetof(ccid_minor_t, cm_excl_list)); 
+		slot->cs_flags |= CCID_SLOT_F_CHANGED;
+		slot->cs_slotno = i;
+		slot->cs_ccid = ccid;
+		slot->cs_icc.icc_atr_data = atr_data_alloc();
+		slot->cs_idx.cmi_minor = CCID_MINOR_INVALID;
+		slot->cs_idx.cmi_isslot = B_TRUE;
+		slot->cs_idx.cmi_data.cmi_slot = slot;
+		cv_init(&slot->cs_io.ci_cv, NULL, CV_DRIVER, NULL);
+		list_create(&slot->cs_minors, sizeof (ccid_minor_t),
+		    offsetof(ccid_minor_t, cm_minor_list));
+		list_create(&slot->cs_excl_waiters, sizeof (ccid_minor_t),
+		    offsetof(ccid_minor_t, cm_excl_list));
 	}
 
 	return (B_TRUE);
@@ -3422,7 +3445,8 @@ ccid_minors_init(ccid_t *ccid)
 	for (i = 0; i < ccid->ccid_nslots; i++) {
 		char buf[32];
 
-		(void) ccid_minor_idx_alloc(&ccid->ccid_slots[i].cs_idx, B_TRUE);
+		(void) ccid_minor_idx_alloc(&ccid->ccid_slots[i].cs_idx,
+		    B_TRUE);
 
 		(void) snprintf(buf, sizeof (buf), "slot%d", i);
 		if (ddi_create_minor_node(ccid->ccid_dip, buf, S_IFCHR,
@@ -3534,9 +3558,9 @@ ccid_disconnect_cb(dev_info_t *dip)
 	ccid->ccid_flags |= CCID_F_DISCONNECTED;
 
 	/*
-	 * First, go through any threads that are blocked on a minor for
-	 * exclusive access. They should be woken up and they'll fail due to the
-	 * fact that we've set the disconnected flag above.
+	 * Now, go through any threads that are blocked on a minor for exclusive
+	 * access. They should be woken up and they'll fail due to the fact that
+	 * we've set the disconnected flag above.
 	 */
 	for (i = 0; i < ccid->ccid_nslots; i++) {
 		ccid_minor_t *cmp;
@@ -3549,7 +3573,7 @@ ccid_disconnect_cb(dev_info_t *dip)
 	}
 
 	/*
-	 * Now, we need to basically wake up anyone blocked in read and make
+	 * Finally, we need to basically wake up anyone blocked in read and make
 	 * sure that they don't wait there forever and make sure that anyone
 	 * polling gets a POLLHUP. We can't really distinguish between this and
 	 * an ICC being removed. It will be discovered when someone tries to do
@@ -3824,7 +3848,7 @@ ccid_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 cleanup:
 	ccid_cleanup(dip);
-	return (DDI_SUCCESS);
+	return (DDI_FAILURE);
 }
 
 static int
@@ -3908,7 +3932,7 @@ ccid_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 	if (drv_priv(credp) != 0)
 		return (EPERM);
 
-	if (otyp & OTYP_BLK || !(otyp & OTYP_CHR))
+	if (otyp != OTYP_CHR)
 		return (ENOTSUP);
 
 	/* XXX We should maybe reduce this for just getting the status */
@@ -4094,13 +4118,14 @@ ccid_complete_tpdu_t1(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 		/*
 		 * XXX Take out the system until we fix this.
 		 */
-		cmn_err(CE_PANIC, "implement cc->cc_state > CCID_COMMAND_COMPLETED case");
+		cmn_err(CE_PANIC,
+		    "implement cc->cc_state > CCID_COMMAND_COMPLETED case");
 	}
 
 	/*
 	 * Check the CCID command level case. If we were told the slot is going
 	 * away, mark that and notify the user that the command is done.
-	 * 
+	 *
 	 * XXX In terms of failure we should be looking at one of several
 	 * different things here. We should see if there was a bit error, etc.
 	 * and act accordingly per the spec.
@@ -4117,7 +4142,8 @@ ccid_complete_tpdu_t1(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 		return;
 	} else if (crs != CCID_REPLY_STATUS_COMPLETE) {
 		/* XXX */
-		cmn_err(CE_PANIC, "implement crs != CCID_REPLY_STATUS_COMPLETE case");
+		cmn_err(CE_PANIC,
+		    "implement crs != CCID_REPLY_STATUS_COMPLETE case");
 	}
 
 	/*
@@ -4135,7 +4161,8 @@ ccid_complete_tpdu_t1(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 	cc = NULL;
 
 	if ((t1err = t1_reply(t1, mp)) != T1_VALIDATE_OK) {
-		ccid_error(ccid, "!Received t1 error (%u): %s", t1err, t1_errmsg(t1));
+		ccid_error(ccid, "!Received t1 error (%u): %s", t1err,
+		    t1_errmsg(t1));
 	}
 
 	switch (t1_step(t1)) {
@@ -4152,7 +4179,8 @@ ccid_complete_tpdu_t1(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 		 * will be saved for the user.
 		 */
 		slot->cs_io.ci_errno = 0;
-		slot->cs_io.ci_data = t1_state_cmd_reply_take(&slot->cs_io.ci_t1);
+		slot->cs_io.ci_data =
+		    t1_state_cmd_reply_take(&slot->cs_io.ci_t1);
 		t1_state_cmd_fini(&slot->cs_io.ci_t1);
 		VERIFY3P(slot->cs_io.ci_data, !=, NULL);
 		ccid_user_io_done(ccid, slot);
@@ -4166,14 +4194,15 @@ ccid_complete_tpdu_t1(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 	t1_data(t1, &buf, &len);
 	/*
 	 * XXX Right now we're purposefully not dropping the lock across the
-	 * command allocation. I'm not sure if that's good or not. THe problem
+	 * command allocation. I'm not sure if that's good or not. The problem
 	 * is that if we drop it, we need to make sure that the ICC state is
 	 * still good. If not, then we would need to throw this out, but it
 	 * means that the system can advance in the face of memory pressure,
 	 * which is good.
 	 *
 	 * XXX We need to actually ask the T=1 state machine for the WTX for
-	 * this block. We also may need to adjust the timeout on the USB command.
+	 * this block. We also may need to adjust the timeout on the USB
+	 * command.
 	 */
 	if ((ret = ccid_command_alloc(ccid, slot, B_FALSE, NULL, len,
 	    CCID_REQUEST_TRANSFER_BLOCK, 0, 0, 0,
@@ -4196,7 +4225,8 @@ ccid_complete_tpdu_t1(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 
 	if ((ret = ccid_command_queue(ccid, cc)) != 0) {
 		mutex_enter(&ccid->ccid_mutex);
-		/* XXX Do we need to clean up the T=1 state here potentially? Or
+		/*
+		 * XXX Do we need to clean up the T=1 state here potentially? Or
 		 * can we leave it to be cleaned up by something else that next
 		 * uses it? Because we've dropped the lock, it's not clear what
 		 * we can or cannot do.
@@ -4272,7 +4302,8 @@ ccid_write_tpdu_t1(ccid_t *ccid, ccid_slot_t *slot)
 
 	if ((ret = ccid_command_queue(ccid, cc)) != 0) {
 		mutex_enter(&ccid->ccid_mutex);
-		/* XXX Do we need to clean up the T=1 state here potentially? Or
+		/*
+		 * XXX Do we need to clean up the T=1 state here potentially? Or
 		 * can we leave it to be cleaned up by something else that next
 		 * uses it? Becuse we've dropped the lock, it's not clear what
 		 * we can or cannot do.
@@ -4482,13 +4513,14 @@ ccid_read(dev_t dev, struct uio *uiop, cred_t *credp)
 	 * a lot of the surrounding logic and fits with the current consumer
 	 * model.
 	 */
-	if ((slot->cs_io.ci_flags & (CCID_IO_F_IN_PROGRESS | CCID_IO_F_DONE)) == 0) {
+	if ((slot->cs_io.ci_flags & (CCID_IO_F_IN_PROGRESS | CCID_IO_F_DONE))
+	    == 0) {
 		mutex_exit(&ccid->ccid_mutex);
 		return (ENODATA);
 	}
 
 	/*
-	 * If another thread is already blocked in read, then don't allow them
+	 * If another thread is already blocked in read, then don't allow us
 	 * in. We only want to allow one thread to attempt to consume a read,
 	 * just as we only allow one thread to initiate a write.
 	 */
@@ -4554,7 +4586,8 @@ ccid_read(dev_t dev, struct uio *uiop, cred_t *credp)
 		if (mlen > uiop->uio_resid) {
 			ret = EOVERFLOW;
 		} else {
-			if ((ret = ccid_read_copyout(uiop, slot->cs_io.ci_data)) == 0) {
+			if ((ret = ccid_read_copyout(uiop, slot->cs_io.ci_data))
+			    == 0) {
 				done = B_TRUE;
 			}
 		}
@@ -4564,16 +4597,7 @@ ccid_read(dev_t dev, struct uio *uiop, cred_t *credp)
 	}
 
 	if (done) {
-		/*
-		 * XXX Commonize this with the I/O cleanup in
-		 * ccid_slot_excl_rele().
-		 */
-		freemsg(slot->cs_io.ci_data);
-		slot->cs_io.ci_data = NULL;
-		slot->cs_io.ci_errno = 0;
-		slot->cs_io.ci_flags &= ~CCID_IO_F_DONE;
-		slot->cs_io.ci_ilen = 0;
-		bzero(slot->cs_io.ci_ibuf, sizeof (slot->cs_io.ci_ibuf));
+		ccid_clear_io(&slot->cs_io);
 		/* XXX Signal next write may be able to happen at this point */
 	}
 
@@ -4745,8 +4769,8 @@ ccid_ioctl_status(ccid_slot_t *slot, intptr_t arg, int mode)
 	bcopy(&ccid->ccid_class, &ucs.ucs_class, sizeof (ucs.ucs_class));
 
 	if (ccid->ccid_dev_data->dev_product != NULL) {
-		(void) strlcpy(ucs.ucs_product, ccid->ccid_dev_data->dev_product,
-		    sizeof (ucs.ucs_product));
+		(void) strlcpy(ucs.ucs_product,
+		    ccid->ccid_dev_data->dev_product, sizeof (ucs.ucs_product));
 		ucs.ucs_status |= UCCID_STATUS_F_PRODUCT_VALID;
 	} else {
 		ucs.ucs_product[0] = '\0';
@@ -4774,7 +4798,8 @@ ccid_ioctl_status(ccid_slot_t *slot, intptr_t arg, int mode)
 }
 
 static int
-ccid_ioctl_txn_begin(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
+ccid_ioctl_txn_begin(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
+    int mode)
 {
 	int ret;
 	uccid_cmd_txn_begin_t uct;
@@ -4822,7 +4847,7 @@ ccid_ioctl_txn_end(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
 	}
 
 	/*
-	 * Require at least one of these flags to be set.
+	 * Require exactly one of these flags to be set.
 	 */
 	if ((((uct.uct_flags & UCCID_TXN_END_RESET) != 0) ^
 	    ((uct.uct_flags & UCCID_TXN_END_RELEASE) != 0)) == 0) {
@@ -4835,10 +4860,9 @@ ccid_ioctl_txn_end(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
 		return (ENODEV);
 	}
 
-	/* XXX ENXIO may not be a good idea here */
 	if (slot->cs_excl_minor != cmp) {
 		mutex_exit(&slot->cs_ccid->ccid_mutex);
-		return (ENXIO);
+		return (EINVAL);
 	}
 	VERIFY3S(cmp->cm_flags & CCID_MINOR_F_HAS_EXCL, !=, 0);
 
@@ -4852,7 +4876,8 @@ ccid_ioctl_txn_end(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
 }
 
 static int
-ccid_ioctl_fionread(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
+ccid_ioctl_fionread(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
+    int mode)
 {
 	int data;
 
@@ -4886,7 +4911,8 @@ ccid_ioctl_fionread(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode
 		data = MIN(s, INT_MAX);
 	}
 
-	if (ddi_copyout(&data, (void *)arg, sizeof (data), mode & FKIOCTL) != 0) {
+	if (ddi_copyout(&data, (void *)arg, sizeof (data), mode & FKIOCTL)
+	    != 0) {
 		mutex_exit(&slot->cs_ccid->ccid_mutex);
 		return (EFAULT);
 	}
@@ -4927,17 +4953,17 @@ ccid_ioctl_icc_modify(ccid_slot_t *slot, intptr_t arg, int mode)
 	}
 
 	/*
-	 * XXX
+	 * XXX do something.
 	 */
 
 	mutex_exit(&ccid->ccid_mutex);
 
-	return (0);
+	return (ENOTSUP);
 }
 
 static int
-ccid_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp, int
-    *rvalp)
+ccid_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
+    int *rvalp)
 {
 	ccid_minor_idx_t *idx;
 	ccid_slot_t *slot;
@@ -5136,7 +5162,8 @@ _init(void)
 		return (ret);
 	}
 
-	if ((ccid_minors = id_space_create("ccid_minors", CCID_MINOR_MIN, INT_MAX)) == NULL) {
+	if ((ccid_minors = id_space_create("ccid_minors", CCID_MINOR_MIN,
+	    INT_MAX)) == NULL) {
 		ddi_soft_state_fini(&ccid_softstate);
 		return (ret);
 	}

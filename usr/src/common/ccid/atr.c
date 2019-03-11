@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 /*
@@ -49,7 +49,7 @@
 #define	ATR_TS_DIRECT	0x3B
 
 /*
- * After TS, each word is used t indicate a combination of protocol and the
+ * After TS, each word is used to indicate a combination of protocol and the
  * number of bits defined for that protocol. The lower nibble is treated as the
  * protocol. The upper nibble is treated to indicate which of four defined words
  * are present. These are usually referred to as TA, TB, TC, and TD. TD is
@@ -217,7 +217,7 @@ struct atr_data {
 	atr_ti_t	atr_ti[ATR_TI_MAX];
 	uint8_t		atr_nhistoric;
 	uint8_t		atr_historic[ATR_HISTORICAL_MAX];
-	uint8_t 	atr_cksum;
+	uint8_t		atr_cksum;
 	uint8_t		atr_raw[ATR_LEN_MAX];
 	uint8_t		atr_nraw;
 };
@@ -264,7 +264,8 @@ static const char *atr_fi_table[16] = {
 };
 
 /*
- * This table maps the bit values for Fi from 7816-3:2006 section 8.3 Table 7.
+ * This table maps the bit values for f(max) from 7816-3:2006 section 8.3
+ * Table 7.
  */
 static const char *atr_fmax_table[16] = {
 	"4",		/* 0000 */
@@ -286,7 +287,7 @@ static const char *atr_fmax_table[16] = {
 };
 
 /*
- * This table maps the bit values for Fi from 7816-3:2006 section 8.3 Table 8.
+ * This table maps the bit values for Di from 7816-3:2006 section 8.3 Table 8.
  */
 static uint_t atr_di_valtable[16] = {
 	0,		/* 0000 */
@@ -307,9 +308,6 @@ static uint_t atr_di_valtable[16] = {
 	0		/* 1111 */
 };
 
-/*
- * This table maps the bit values for Fi from 7816-3:2006 section 8.3 Table 8.
- */
 static const char *atr_di_table[16] = {
 	"RFU",		/* 0000 */
 	"1",		/* 0001 */
@@ -330,7 +328,8 @@ static const char *atr_di_table[16] = {
 };
 
 /*
- * This table maps the bit values for Fi from 7816-3:2006 section 8.3 Table 9.
+ * This table maps the bit values for the clock stop indicator from 7816-3:2006
+ * section 8.3 Table 9.
  */
 static const char *atr_clock_table[4] = {
 	"disallowed",		/* 00 */
@@ -468,7 +467,7 @@ atr_count_cbits(uint8_t x)
 }
 
 /*
- * Parse out ATR values. Focus on only parsing it and not interpretting it.
+ * Parse out ATR values. Focus on only parsing it and not interpreting it.
  * Interpretation should be done in other functions that can walk over the data
  * and be more protocol-aware.
  */
@@ -1067,10 +1066,9 @@ atr_data_rate(atr_data_t *data, ccid_class_descr_t *class, uint32_t *rates,
 	 * We're allowed any set of data rates between the default and the
 	 * maximum. Check if the maximum data rate will work for either the
 	 * default or maximum clock. If so, then we can use the cards rates.
-	 * Otherwise we should use thwe can use the ICC's rates. Otherwise we
-	 * should use the default rates. To account for the fact that we may
-	 * have had a fractional value, we require a strict greater than
-	 * comparison.
+	 *
+	 * To account for the fact that we may have had a fractional value,
+	 * we require a strict greater than comparison.
 	 */
 	if ((uint64_t)class->ccd_dwMaxDataRate > maxval ||
 	    (uint64_t)class->ccd_dwMaxDataRate > defval) {
@@ -1094,7 +1092,7 @@ atr_data_rate(atr_data_t *data, ccid_class_descr_t *class, uint32_t *rates,
 void
 atr_data_reset(atr_data_t *data)
 {
-	bzero(data, sizeof (&data));
+	bzero(data, sizeof (*data));
 }
 
 #ifdef	_KERNEL
@@ -1114,11 +1112,11 @@ atr_data_free(atr_data_t *data)
 }
 
 /*
- * Make sure that the response we got from the ICC is valid. For the ICC to
- * valid it must pass checksum and have the PPSS value set correctly. The
- * protocol must match what we requested; however, the PPS1-3 bits are a bit
- * different. They may only be set in the response if we set them in the
- * request. However, they do not have to be set in the response.
+ * Make sure that the response we got from the ICC is valid. It must pass
+ * checksum and have the PPSS value set correctly. The protocol must match
+ * what we requested; however, the PPS1-3 bits are a bit different. They may
+ * only be set in the response if we set them in the request. However, they
+ * do not have to be set in the response.
  */
 boolean_t
 atr_pps_valid(void *reqbuf, size_t reqlen, void *respbuf, size_t resplen)

@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 /*
@@ -48,7 +48,7 @@ cfga_ccid_error(cfga_err_t err, char **errp, const char *fmt, ...)
 	 * memory, if this fails, then we have no error.
 	 */
 	va_start(ap, fmt);
-	(void) vasprintf(errp, fmt, ap); 
+	(void) vasprintf(errp, fmt, ap);
 	va_end(ap);
 
 	return (err);
@@ -128,7 +128,7 @@ cfga_ccid_modify(uccid_cmd_icc_modify_t *modify, const char *ap,
 
 	if (ioctl(fd, UCCID_CMD_ICC_MODIFY, modify) != 0) {
 		int e = errno;
-		(void) close (fd);
+		(void) close(fd);
 		return (cfga_ccid_error(CFGA_ERROR, errp,
 		    "failed to modify state on ap %s: %s", ap,
 		    strerror(e)));
@@ -247,13 +247,13 @@ cfga_ccid_fill_info(const uccid_cmd_status_t *ucs, char *buf, size_t len)
 	uint_t bits = CCID_CLASS_F_TPDU_XCHG | CCID_CLASS_F_SHORT_APDU_XCHG |
 	    CCID_CLASS_F_EXT_APDU_XCHG;
 
-	if ((ucs->ucs_status & UCCID_STATUS_F_PRODUCT_VALID) != NULL) {
+	if ((ucs->ucs_status & UCCID_STATUS_F_PRODUCT_VALID) != 0) {
 		product = ucs->ucs_product;
 	} else {
 		product = "<unknown>";
 	}
 
-	if ((ucs->ucs_status & UCCID_STATUS_F_SERIAL_VALID) != NULL) {
+	if ((ucs->ucs_status & UCCID_STATUS_F_SERIAL_VALID) != 0) {
 		serial = ucs->ucs_serial;
 	} else {
 		serial = "<unknown>";
@@ -350,14 +350,15 @@ cfga_list_ext(const char *ap, struct cfga_list_data **ap_list, int *nlist,
 	if (snprintf(cld->ap_log_id, sizeof (cld->ap_log_id), "ccid%d/slot%u",
 	    ucs.ucs_instance, ucs.ucs_slot) >= sizeof (cld->ap_log_id)) {
 		free(cld);
-		return (cfga_ccid_error(CFGA_LIB_ERROR, errp, "ap %s logical id "
-		    "was too large", ap));
+		return (cfga_ccid_error(CFGA_LIB_ERROR, errp, "ap %s logical id"
+		    " was too large", ap));
 	}
 
 	if (strlcpy(cld->ap_phys_id, ap, sizeof (cld->ap_phys_id)) >=
 	    sizeof (cld->ap_phys_id)) {
 		free(cld);
-		return (cfga_ccid_error(CFGA_LIB_ERROR, errp, "ap %s physical id was too long", ap));
+		return (cfga_ccid_error(CFGA_LIB_ERROR, errp,
+		    "ap %s physical id was too long", ap));
 	}
 
 	cld->ap_class[0] = '\0';
@@ -384,7 +385,8 @@ cfga_list_ext(const char *ap, struct cfga_list_data **ap_list, int *nlist,
 	cld->ap_busy = 0;
 	cld->ap_status_time = (time_t)-1;
 	cfga_ccid_fill_info(&ucs, cld->ap_info, sizeof (cld->ap_info));
-	if (strlcpy(cld->ap_type, "icc", sizeof (cld->ap_type)) >= sizeof (cld->ap_type)) {
+	if (strlcpy(cld->ap_type, "icc", sizeof (cld->ap_type)) >=
+	    sizeof (cld->ap_type)) {
 		free(cld);
 		return (cfga_ccid_error(CFGA_LIB_ERROR, errp,
 		    "ap %s type overflowed ICC field", ap));
@@ -398,9 +400,11 @@ cfga_list_ext(const char *ap, struct cfga_list_data **ap_list, int *nlist,
 cfga_err_t
 cfga_help(struct cfga_msg *msgp, const char *opts, cfga_flags_t flags)
 {
-	(*msgp->message_routine)(msgp, "CCID specific commands:\n");
-	(*msgp->message_routine)(msgp, " cfgadm -c [configure|unconfigure] ap_id [ap_id...]\n");
-	(*msgp->message_routine)(msgp, " cfgadm -x warm_reset ap_id [ap_id...]\n");
+	(void) (*msgp->message_routine)(msgp, "CCID specific commands:\n");
+	(void) (*msgp->message_routine)(msgp,
+	    " cfgadm -c [configure|unconfigure] ap_id [ap_id...]\n");
+	(void) (*msgp->message_routine)(msgp,
+	    " cfgadm -x warm_reset ap_id [ap_id...]\n");
 
 	return (CFGA_OK);
 }

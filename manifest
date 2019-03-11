@@ -634,6 +634,7 @@ f kernel/drv/amd64/blkdev 0755 root sys
 f kernel/drv/amd64/bnx 0755 root sys
 f kernel/drv/amd64/bnxe 0755 root sys
 f kernel/drv/amd64/bridge 0755 root sys
+f kernel/drv/amd64/ccid 0755 root sys
 f kernel/drv/amd64/chxge 0755 root sys
 f kernel/drv/amd64/clone 0755 root sys
 f kernel/drv/amd64/cmdk 0755 root sys

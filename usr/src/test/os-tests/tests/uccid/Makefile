@@ -10,7 +10,7 @@
 #
 
 #
-# Copyright (c) 2017, Joyent, Inc.
+# Copyright 2019, Joyent, Inc.
 #
 
 include $(SRC)/Makefile.master
@@ -18,7 +18,7 @@ include $(SRC)/Makefile.master
 ROOTOPTPKG = $(ROOT)/opt/os-tests
 TESTDIR = $(ROOTOPTPKG)/tests/uccid
 
-PROGS = 		\
+PROGS =		\
 	atrparse	\
 	excl-basic	\
 	excl-badread	\

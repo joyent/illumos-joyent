@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017 Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -842,33 +842,33 @@ t1_reply_rblock(t1_state_t *t1, const t1_hdr_t *hdr)
  * types of S-Block commands:
  *
  *  o RESYNCH - This is used to reset the communication betwen the reader and
- *  		the ICC. In theory only the reader is allowed to issue this. If
- *  		we receive any kind of RESYNCH request, we note that as an error
- *  		and will issue a warm reset.
+ *		the ICC. In theory only the reader is allowed to issue this. If
+ *		we receive any kind of RESYNCH request, we note that as an error
+ *		and will issue a warm reset.
  *
  *  o IFS -	This is used to change the size of the data that can be
- *  		transmitted. This may be issued by the reader or the ICC. The
- *  		issuer is describing what size it is that they need to change.
- *  		When the ICC is first detected, we will issue an IFS request to
- *  		increase the reader's IFS. At any time, the ICC is allowed to
- *  		issue an IFS request. However, the initial value is determined
- *  		based on the ATR.
+ *		transmitted. This may be issued by the reader or the ICC. The
+ *		issuer is describing what size it is that they need to change.
+ *		When the ICC is first detected, we will issue an IFS request to
+ *		increase the reader's IFS. At any time, the ICC is allowed to
+ *		issue an IFS request. However, the initial value is determined
+ *		based on the ATR.
  *
  *  o ABORT -	This is used to cancel a chain or series of commands. At this
- *  		time, the framework does not issue aborts. If we receive one
- *  		from the card, then we will issue a warm reset and fail the
- *  		command.
+ *		time, the framework does not issue aborts. If we receive one
+ *		from the card, then we will issue a warm reset and fail the
+ *		command.
  *
- *  o WTX -	This is usd by the card to indicate that it is still processing;
- *  		however it requires additional time. When this is received, we
- *  		must acknowledge it. However, we must also increase the default
- *  		waiting time here and in the command.
+ *  o WTX -	This is used by the card to indicate that it is still
+ *		processing; however it requires additional time. When this
+ *		is received, we must acknowledge it. However, we must also
+ *		increase the default waiting time here and in the command.
  */
 t1_validate_t
 t1_reply_sblock(t1_state_t *t1, const t1_hdr_t *hdr)
 {
 	/*
-	 * XXX We need to impelemnt this. For the time being state that there's
+	 * XXX We need to implement this. For the time being state that there's
 	 * an error on this that says we need to reset the device.
 	 */
 	t1->t1_flags |= T1_F_CMD_ERROR;

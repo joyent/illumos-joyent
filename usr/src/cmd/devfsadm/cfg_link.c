@@ -20,6 +20,7 @@
  */
 
 /*
+ * Copyright 2019, Joyent, Inc.
  * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -1268,8 +1269,8 @@ ccid_cfg_creat_cb(di_minor_t minor, di_node_t node)
 		return (DEVFSADM_CONTINUE);
 	}
 
-	(void) snprintf(cfg_path, sizeof (cfg_path), "%s/ccid%d/%s", CFG_DIRNAME,
-	    di_instance(node),  minor_nm);
+	(void) snprintf(cfg_path, sizeof (cfg_path), "%s/ccid%d/%s",
+	    CFG_DIRNAME, di_instance(node),  minor_nm);
 
 	(void) devfsadm_mklink(cfg_path, node, minor, 0);
 	return (DEVFSADM_CONTINUE);

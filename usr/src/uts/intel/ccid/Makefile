@@ -10,7 +10,7 @@
 #
 
 #
-# Copyright (c) 2017, Joyent, Inc.
+# Copyright 2019, Joyent, Inc.
 #
 
 UTSBASE = ../..
@@ -25,7 +25,7 @@ include $(UTSBASE)/intel/Makefile.intel
 ALL_TARGET	= $(BINARY)
 LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
-CPPFLAGS 	+= -I$(SRC)/common/ccid
+CPPFLAGS	+= -I$(SRC)/common/ccid
 
 #
 # XXX For dev

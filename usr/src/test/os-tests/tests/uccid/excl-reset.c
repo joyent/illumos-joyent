@@ -10,12 +10,12 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 /*
  * Verify that we can grab a basic exclusive lock through an ioctl on the slot.
- * Then that we can release it afterwards.
+ * Then that we can release it afterwards and reset the ICC.
  */
 
 #include <err.h>

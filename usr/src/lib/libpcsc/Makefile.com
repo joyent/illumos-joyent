@@ -10,7 +10,7 @@
 #
 
 #
-# Copyright (c) 2017 Joyent, Inc.  All rights reserved.
+# Copyright 2019, Joyent, Inc.
 #
 
 LIBRARY =	libpcsc.a

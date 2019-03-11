@@ -10,12 +10,11 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 /*
- * Verify that we can grab a basic exclusive lock through an ioctl on the slot.
- * Then that we can release it afterwards.
+ * Verify that we can parse various forms of ATR data and detect invalid data.
  */
 
 #include <err.h>
@@ -69,7 +68,8 @@ atr_test_t atr_tests[] = {
 	{ "Bad TS (2)", 2, { 0xff, 0x00 }, ATR_CODE_INVALID_TS },
 	{ "T0 w/ T=15 and bad cksum", 6, { 0x3b, 0x80, 0x80, 0x1f, 0x00, 0x00 },
 	    ATR_CODE_CHECKSUM_ERROR },
-	{ "T0 w/ T=15 and bad cksum (make sure no TS)", 6, { 0x3b, 0x80, 0x80, 0x1f, 0x00, 0x24 },
+	{ "T0 w/ T=15 and bad cksum (make sure no TS)", 6,
+	    { 0x3b, 0x80, 0x80, 0x1f, 0x00, 0x24 },
 	    ATR_CODE_CHECKSUM_ERROR },
 	{ "T=15 in TD1", 4, { 0x3b, 0x80, 0x0f, 0x8f }, ATR_CODE_INVALID_TD1 },
 	{
@@ -583,7 +583,7 @@ atr_parse_one(atr_data_t *data, atr_test_t *test)
 	atr_convention_t conv;
 	atr_clock_stop_t stop;
 
-	ret = atr_parse(test->ar_buf, test->ar_len, data); 
+	ret = atr_parse(test->ar_buf, test->ar_len, data);
 	if (ret != test->ar_retval) {
 		atr_parse_failed(test, "found unexpected return "
 		    "value: %u (%s), expected: %u", ret, atr_strerror(ret),
@@ -618,8 +618,8 @@ atr_parse_one(atr_data_t *data, atr_test_t *test)
 
 	if (neg != test->ar_neg) {
 		atr_parse_failed(test, "Found mismatched negotiable bit: "
-		   "%u, expected %u", neg, test->ar_neg);
-	       err++;	
+		    "%u, expected %u", neg, test->ar_neg);
+		err++;
 	}
 
 	if (fi != test->ar_fi) {

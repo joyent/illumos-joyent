@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017 Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef _WINSCARD_H
@@ -35,7 +35,7 @@ extern "C" {
 
 /*
  * This is a departure from the PCSC system which treats this as a LONG. We
- * don't, because we'd like a single value that makes sense across j
+ * don't, because we'd like a single value that makes sense across j XXX?
  */
 typedef void *SCARDCONTEXT;
 typedef void **PSCARDCONTEXT;
@@ -45,7 +45,7 @@ typedef void **PSCARDHANDLE;
 typedef void **LPSCARDHANDLE;
 
 /*
- * Convenentionally this is suppsoed to be packed.
+ * Conventionally this is supposed to be packed.
  */
 #pragma pack(1)
 typedef struct {
@@ -85,13 +85,13 @@ extern SCARD_IO_REQUEST g_rgSCardT0Pci, g_rgSCardT1Pci, g_rgSCardRawPci;
 #define	SCARD_E_NO_READERS_AVAILABLE	((LONG)0x8010002E)
 #define	SCARD_W_UNSUPPORTED_CARD	((LONG)0x80100065)
 #define	SCARD_W_UNPOWERED_CARD		((LONG)0x80100067)
-#define	SCARD_W_RESET_CARD   		((LONG)0x80100068)
+#define	SCARD_W_RESET_CARD		((LONG)0x80100068)
 #define	SCARD_W_REMOVED_CARD		((LONG)0x80100069)
 
 #define	SCARD_SCOPE_USER		0x0000
 #define	SCARD_SCOPE_TERMINAL		0x0001
-#define	SCARD_SCOPE_GLOBAL		0x0002
-#define	SCARD_SCOPE_SYSTEM		0x0003
+#define	SCARD_SCOPE_SYSTEM		0x0002
+#define	SCARD_SCOPE_GLOBAL		0x0003
 
 #define	SCARD_SHARE_EXCLUSIVE	0x0001
 #define	SCARD_SHARE_SHARED	0x0002

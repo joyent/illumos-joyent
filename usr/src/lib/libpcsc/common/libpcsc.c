@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #include <stdlib.h>
@@ -421,7 +421,7 @@ SCardBeginTransaction(SCARDHANDLE arg)
 	}
 
 	/*
-	 * The semantics of pcsc are taht this operation does not block, but
+	 * The semantics of pcsc are that this operation does not block, but
 	 * instead fails if we cannot grab it immediately.
 	 */
 	bzero(&txn, sizeof (uccid_cmd_txn_begin_t));
@@ -436,7 +436,7 @@ SCardBeginTransaction(SCARDHANDLE arg)
 		case EEXIST:
 			/*
 			 * This is an odd case. It's used to tell us that we
-			 * already ahve it. For now, just treat it as success.
+			 * already have it. For now, just treat it as success.
 			 */
 			return (SCARD_S_SUCCESS);
 		case EBUSY:
