@@ -230,7 +230,6 @@ driver_name_table_entry_t driver_name_table[] = {
 	{ "hubd",	DRIVER_HUBD },
 	{ "ohci",	DRIVER_OHCI },
 	{ "ehci",	DRIVER_EHCI },
-	{ "xhci",	DRIVER_XHCI },
 	{ "uhci",	DRIVER_UHCI },
 	{ "xhci",	DRIVER_XHCI },
 	{ "usb_ac",	DRIVER_USB_AC },

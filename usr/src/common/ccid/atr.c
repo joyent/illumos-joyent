@@ -104,7 +104,7 @@
 
 /*
  * T=2 and T=3 are reserved for future full-duplex operation.
- * T=4 is reserved for enhacned half-duplex character transmission.
+ * T=4 is reserved for enhanced half-duplex character transmission.
  * T=5-13 are reserved for future use by ISO/IEC JTC 1/SC 17.
  * T=14 is for protocols not standardized by ISO/IEC JTC 1/SC 17.
  */
@@ -745,7 +745,7 @@ atr_default_protocol(atr_data_t *data)
 	}
 
 	/*
-	 * If TA2 is present, then it encodes the default protocol. Ohterwise,
+	 * If TA2 is present, then it encodes the default protocol. Otherwise,
 	 * we have to grab the protocol value from TD1, which is called the
 	 * 'first offered protocol'.
 	 */
@@ -1005,7 +1005,6 @@ atr_t1_ifsc(atr_data_t *data)
  * the kernel (and this is shared). Importantly that means only integers are
  * allowed here.
  */
-/* ARGSUSED */
 atr_data_rate_choice_t
 atr_data_rate(atr_data_t *data, ccid_class_descr_t *class, uint32_t *rates,
     uint_t nrates, uint32_t *dataratep)
@@ -1278,7 +1277,7 @@ atr_pps_fidi_accepted(void *respbuf, size_t len)
 atr_data_t *
 atr_data_alloc(void)
 {
-	return (calloc(sizeof (atr_data_t), 1));
+	return (calloc(1, sizeof (atr_data_t)));
 }
 
 void

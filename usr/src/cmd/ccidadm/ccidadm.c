@@ -282,7 +282,6 @@ static ofmt_field_t ccidadm_list_fields[] = {
 	{ NULL,		0,	0,			NULL	}
 };
 
-/* ARGSUSED */
 static void
 ccidadm_do_list(int argc, char *argv[])
 {
@@ -686,7 +685,6 @@ static ccidadm_pair_t ccidadm_p_pin[] = {
 	{ 0x0, NULL }
 };
 
-/* ARGSUSED */
 static void
 ccidadm_reader_print(int fd, const char *name, void *unused)
 {

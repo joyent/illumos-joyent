@@ -26,7 +26,7 @@
  * Copyright (c) 2013 RackTop Systems.
  */
 /*
- * Copyright 2019, Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*

@@ -41,8 +41,6 @@ COMMON_OBJS = \
 
 atrparse := EXTRA_OBJS = $(COMMON_OBJS)
 
-LNPROGS = $(PROGS:%=%.ln)
-
 include $(SRC)/cmd/Makefile.cmd
 include $(SRC)/test/Makefile.com
 
@@ -55,8 +53,6 @@ CPPFLAGS += -D_REENTRANT -I$(SRC)/common/ccid/
 all: $(PROGS)
 
 install: all $(CMDS) $(ROOTDATA)
-
-lint: $(LNPROGS)
 
 clobber: clean
 	-$(RM) $(PROGS)
@@ -85,6 +81,3 @@ $(TESTDIR)/%: %
 %: %.o
 	$(LINK.c) -o $@ $< $(EXTRA_OBJS)
 	$(POST_PROCESS)
-
-%.ln: %
-	$(LINT.c) $<.c $(LDLIBS)

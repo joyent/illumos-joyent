@@ -499,9 +499,9 @@ typedef enum ccid_minor_flags {
 } ccid_minor_flags_t;
 
 typedef struct ccid_minor {
-	ccid_minor_idx_t	cm_idx;		/* WO */ /* XXX: Whats 'WO'? */
-	cred_t			*cm_opener;	/* WO */
-	struct ccid_slot	*cm_slot;	/* WO */
+	ccid_minor_idx_t	cm_idx;		/* write-once */
+	cred_t			*cm_opener;	/* write-once */
+	struct ccid_slot	*cm_slot;	/* write-once */
 	list_node_t		cm_minor_list;
 	list_node_t		cm_excl_list;
 	kcondvar_t		cm_read_cv;
@@ -975,7 +975,7 @@ ccid_slot_excl_rele(ccid_slot_t *slot)
 	 * schedule that. Otherwise, allow the next entry in the queue to get
 	 * woken up and given access to the device.
 	 */
-	if (cmp->cm_flags & CCID_MINOR_F_TXN_RESET) {
+	if ((cmp->cm_flags & CCID_MINOR_F_TXN_RESET) != 0) {
 		slot->cs_flags |= CCID_SLOT_F_NEED_TXN_RESET;
 		ccid_worker_request(ccid);
 		cmp->cm_flags &= ~CCID_MINOR_F_TXN_RESET;
@@ -992,11 +992,11 @@ ccid_slot_excl_req(ccid_slot_t *slot, ccid_minor_t *cmp, boolean_t nosleep)
 	VERIFY(MUTEX_HELD(&slot->cs_ccid->ccid_mutex));
 
 	if (slot->cs_excl_minor == cmp) {
-		VERIFY(cmp->cm_flags & CCID_MINOR_F_HAS_EXCL);
+		VERIFY((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) != 0);
 		return (EEXIST);
 	}
 
-	if (cmp->cm_flags & CCID_MINOR_F_WAITING) {
+	if ((cmp->cm_flags & CCID_MINOR_F_WAITING) != 0) {
 		return (EINPROGRESS);
 	}
 
@@ -1139,15 +1139,14 @@ ccid_command_resp_length(ccid_command_t *cc)
 static uint8_t
 ccid_command_resp_param2(ccid_command_t *cc)
 {
-	uint8_t val;
 	const ccid_header_t *cch;
 
 	VERIFY3P(cc, !=, NULL);
 	VERIFY3P(cc->cc_response, !=, NULL);
 
 	cch = (ccid_header_t *)cc->cc_response->b_rptr;
-	bcopy(&cch->ch_param2, &val, sizeof (val));
-	return (val);
+
+	return (cch->ch_param2);
 }
 
 /*
@@ -1370,7 +1369,7 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 
 	/*
 	 * Take the message block from the Bulk-IN request and store it on the
-	 * command. We wnat this regardless if it succeeded, failed, or we have
+	 * command. We want this regardless if it succeeded, failed, or we have
 	 * some unexpected status value.
 	 */
 	cc->cc_response = ubrp->bulk_data;
@@ -1484,7 +1483,7 @@ ccid_bulkin_schedule(ccid_t *ccid)
 		if ((ret = usb_pipe_bulk_xfer(ccid->ccid_bulkin_pipe, ubrp,
 		    0)) != USB_SUCCESS) {
 			ccid_error(ccid,
-			    "failed to schedule Bulk-In response: %d", ret);
+			    "!failed to schedule Bulk-In response: %d", ret);
 			usb_free_bulk_req(ubrp);
 			return (ret);
 		}
@@ -1508,7 +1507,7 @@ ccid_command_dispatch(ccid_t *ccid)
 	while ((cc = list_head(&ccid->ccid_command_queue)) != NULL) {
 		int ret;
 
-		if (ccid->ccid_flags & CCID_F_DETACHING)
+		if ((ccid->ccid_flags & CCID_F_DETACHING) != 0)
 			return;
 
 		/*
@@ -1540,7 +1539,7 @@ ccid_command_dispatch(ccid_t *ccid)
 			 * will be taken care of when the command itself is
 			 * freed.
 			 */
-			ccid_error(ccid, "Bulk pipe dispatch failed: %d\n",
+			ccid_error(ccid, "!Bulk pipe dispatch failed: %d\n",
 			    ret);
 			ccid_command_transport_error(cc, ret, USB_CR_OK);
 		}
@@ -1965,10 +1964,8 @@ ccid_command_get_parameters(ccid_t *ccid, ccid_slot_t *slot,
 		return (ret);
 	}
 
-	if ((ret = ccid_command_queue(ccid, cc)) != 0) {
-		ccid_command_free(cc);
-		return (ret);
-	}
+	if ((ret = ccid_command_queue(ccid, cc)) != 0)
+		goto done;
 
 	ccid_command_poll(ccid, cc);
 
@@ -2052,10 +2049,8 @@ ccid_command_set_parameters(ccid_t *ccid, ccid_slot_t *slot,
 		return (ret);
 	}
 	ccid_command_bcopy(cc, params, len);
-	if ((ret = ccid_command_queue(ccid, cc)) != 0) {
-		ccid_command_free(cc);
-		return (ret);
-	}
+	if ((ret = ccid_command_queue(ccid, cc)) != 0)
+		goto done;
 
 	ccid_command_poll(ccid, cc);
 
@@ -2069,8 +2064,8 @@ ccid_command_set_parameters(ccid_t *ccid, ccid_slot_t *slot,
 		if (cis == CCID_REPLY_ICC_MISSING) {
 			ret = ENXIO;
 		} else {
-			ccid_error(ccid, "failed to set parameters on slot %u: "
-			    "%u\n", slot->cs_slotno, cce);
+			ccid_error(ccid, "!failed to set parameters on slot %u:"
+			    " %u\n", slot->cs_slotno, cce);
 			ret = EIO;
 		}
 	} else {
@@ -2109,10 +2104,8 @@ ccid_command_transfer(ccid_t *ccid, ccid_slot_t *slot, const void *buf,
 
 	ccid_command_bcopy(cc, buf, len);
 
-	if ((ret = ccid_command_queue(ccid, cc)) != 0) {
-		ccid_command_free(cc);
-		return (ret);
-	}
+	if ((ret = ccid_command_queue(ccid, cc)) != 0)
+		goto done;
 
 	ccid_command_poll(ccid, cc);
 
@@ -2384,7 +2377,7 @@ ccid_slot_params_t0_init(ccid_t *ccid, ccid_slot_t *slot, atr_data_t *data,
 
 	if ((ret = ccid_command_set_parameters(ccid, slot, ATR_P_T0,
 	    &p)) != 0) {
-		ccid_error(ccid, "failed to set T=0 params on slot %u: %d",
+		ccid_error(ccid, "!failed to set T=0 params on slot %u: %d",
 		    slot->cs_slotno, ret);
 		return (B_FALSE);
 	}
@@ -2431,7 +2424,7 @@ ccid_slot_params_t1_init(ccid_t *ccid, ccid_slot_t *slot, atr_data_t *data,
 
 	if ((ret = ccid_command_set_parameters(ccid, slot, ATR_P_T1,
 	    &p)) != 0) {
-		ccid_error(ccid, "failed to set T=1 params on slot %u: %d",
+		ccid_error(ccid, "!failed to set T=1 params on slot %u: %d",
 		    slot->cs_slotno, ret);
 		return (B_FALSE);
 	}
@@ -2458,7 +2451,7 @@ ccid_slot_t1_ifsd(ccid_t *ccid, ccid_slot_t *slot)
 	t1v = t1_ifsd_resp(&slot->cs_io.ci_t1, mp->b_rptr, MBLKL(mp));
 	freemsg(mp);
 	if (t1v != T1_VALIDATE_OK) {
-		ccid_error(ccid, "received invalid t1 response (%u): %s", t1v,
+		ccid_error(ccid, "!received invalid t1 response (%u): %s", t1v,
 		    t1_errmsg(&slot->cs_io.ci_t1));
 		return (B_FALSE);
 	}
@@ -2526,7 +2519,7 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
 	 * and determine information about the ICC and reader.
 	 */
 	if (slot->cs_icc.icc_tx == NULL) {
-		ccid_error(ccid, "CCID does not support I/O transfers to ICC");
+		ccid_error(ccid, "!CCID does not support I/O transfers to ICC");
 	}
 }
 
@@ -2730,7 +2723,7 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 
 	if ((ret = ccid_command_get_parameters(ccid, slot, &prot,
 	    &slot->cs_icc.icc_params)) != 0) {
-		ccid_error(ccid, "failed to get parameters for slot %u: %d",
+		ccid_error(ccid, "!failed to get parameters for slot %u: %d",
 		    slot->cs_slotno, ret);
 		return (B_FALSE);
 	}
@@ -2768,7 +2761,7 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 		 */
 		if ((ccid->ccid_flags & CCID_F_NEEDS_IFSD) != 0) {
 			if (!ccid_slot_t1_ifsd(ccid, slot)) {
-				ccid_error(ccid, "failed to initialize IFSD");
+				ccid_error(ccid, "!failed to initialize IFSD");
 				return (B_FALSE);
 			}
 		}
@@ -2926,7 +2919,7 @@ ccid_slot_reset(ccid_t *ccid, ccid_slot_t *slot)
 	}
 
 	if (ret != 0) {
-		ccid_error(ccid, "failed to reset slot %d for next txn: %d; "
+		ccid_error(ccid, "!failed to reset slot %d for next txn: %d; "
 		    "taking another lap", ret);
 		return (B_FALSE);
 	}
@@ -2960,7 +2953,7 @@ ccid_worker(void *arg)
 	mutex_enter(&ccid->ccid_mutex);
 	ccid->ccid_stats.cst_ndiscover++;
 	ccid->ccid_stats.cst_lastdiscover = gethrtime();
-	if (ccid->ccid_flags & CCID_F_DETACHING) {
+	if ((ccid->ccid_flags & CCID_F_DETACHING) != 0) {
 		ccid->ccid_flags &= ~CCID_F_WORKER_MASK;
 		mutex_exit(&ccid->ccid_mutex);
 		return;
@@ -2987,26 +2980,27 @@ ccid_worker(void *arg)
 		flags = slot->cs_flags & CCID_SLOT_F_WORK_MASK;
 		slot->cs_flags &= ~CCID_SLOT_F_INTR_MASK;
 
-		if (flags & CCID_SLOT_F_CHANGED) {
+		if ((flags & CCID_SLOT_F_CHANGED) != 0) {
 			if (flags & CCID_SLOT_F_INTR_GONE) {
 				ccid_slot_removed(ccid, slot, B_TRUE);
 			} else {
 				ccid_slot_inserted(ccid, slot);
-				if (slot->cs_flags & CCID_SLOT_F_ACTIVE) {
+				if ((slot->cs_flags & CCID_SLOT_F_ACTIVE)
+				    != 0) {
 					ccid_slot_excl_maybe_signal(slot);
 				}
 			}
 			VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
 		}
 
-		if (flags & CCID_SLOT_F_NEED_TXN_RESET) {
+		if ((flags & CCID_SLOT_F_NEED_TXN_RESET) != 0) {
 			/*
 			 * If the CCID_SLOT_F_PRESENT flag is set, then we
 			 * should attempt to power off and power on the ICC in
 			 * an attempt to reset it. If this fails, trigger
 			 * another worker that needs to operate.
 			 */
-			if (slot->cs_flags & CCID_SLOT_F_PRESENT) {
+			if ((slot->cs_flags & CCID_SLOT_F_PRESENT) != 0) {
 				if (!ccid_slot_reset(ccid, slot)) {
 					ccid_worker_request(ccid);
 					continue;
@@ -3027,14 +3021,14 @@ ccid_worker(void *arg)
 	 * If we have a request to operate again, delay before we consider this,
 	 * to make sure we don't do too much work ourselves.
 	 */
-	if (ccid->ccid_flags & CCID_F_WORKER_REQUESTED) {
+	if ((ccid->ccid_flags & CCID_F_WORKER_REQUESTED) != 0) {
 		mutex_exit(&ccid->ccid_mutex);
 		delay(drv_usectohz(1000) * 10);
 		mutex_enter(&ccid->ccid_mutex);
 	}
 
 	ccid->ccid_flags &= ~CCID_F_WORKER_RUNNING;
-	if (ccid->ccid_flags & CCID_F_DETACHING) {
+	if ((ccid->ccid_flags & CCID_F_DETACHING) != 0) {
 		mutex_exit(&ccid->ccid_mutex);
 		return;
 	}
@@ -3052,7 +3046,7 @@ ccid_worker_request(ccid_t *ccid)
 	boolean_t run;
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
-	if (ccid->ccid_flags & CCID_F_DETACHING) {
+	if ((ccid->ccid_flags & CCID_F_DETACHING) != 0) {
 		return;
 	}
 
@@ -3072,7 +3066,7 @@ ccid_intr_restart_timeout(void *arg)
 	ccid_t *ccid = arg;
 
 	mutex_enter(&ccid->ccid_mutex);
-	if (ccid->ccid_flags & CCID_F_DETACHING) {
+	if ((ccid->ccid_flags & CCID_F_DETACHING) != 0) {
 		ccid->ccid_poll_timeout = NULL;
 		mutex_exit(&ccid->ccid_mutex);
 	}
@@ -3118,11 +3112,11 @@ ccid_parse_class_desc(ccid_t *ccid)
 		    sizeof (ccid->ccid_class))) >= tlen) {
 			return (B_TRUE);
 		}
-		ccid_error(ccid, "faild to parse CCID class descriptor from "
+		ccid_error(ccid, "!failed to parse CCID class descriptor from "
 		    "cvs %u, expected %lu bytes, received %lu", i, tlen, len);
 	}
 
-	ccid_error(ccid, "failed to find matching CCID class descriptor");
+	ccid_error(ccid, "!failed to find matching CCID class descriptor");
 	return (B_FALSE);
 }
 
@@ -3139,7 +3133,7 @@ ccid_supported(ccid_t *ccid)
 	uint16_t ver = ccid->ccid_class.ccd_bcdCCID;
 
 	if (CCID_VERSION_MAJOR(ver) != CCID_VERSION_ONE) {
-		ccid_error(ccid, "refusing to attach to CCID with unsupported "
+		ccid_error(ccid, "!refusing to attach to CCID with unsupported "
 		    "version %x.%2x", CCID_VERSION_MAJOR(ver),
 		    CCID_VERSION_MINOR(ver));
 		return (B_FALSE);
@@ -3161,7 +3155,7 @@ ccid_supported(ccid_t *ccid)
 		ccid->ccid_flags |= CCID_F_HAS_INTR;
 		break;
 	default:
-		ccid_error(ccid, "refusing to attach to CCID with unsupported "
+		ccid_error(ccid, "!refusing to attach to CCID with unsupported "
 		    "number of endpoints: %d", alt->altif_descr.bNumEndpoints);
 		return (B_FALSE);
 	}
@@ -3178,8 +3172,8 @@ ccid_supported(ccid_t *ccid)
 	 */
 	ccid->ccid_bufsize = ccid->ccid_class.ccd_dwMaxCCIDMessageLength;
 	if (ccid->ccid_bufsize < CCID_MIN_MESSAGE_LENGTH) {
-		ccid_error(ccid, "CCID reader maximum CCID message length (%u) "
-		    "is less than minimum packet length (%u)",
+		ccid_error(ccid, "!CCID reader maximum CCID message length (%u)"
+		    " is less than minimum packet length (%u)",
 		    ccid->ccid_bufsize, CCID_MIN_MESSAGE_LENGTH);
 		return (B_FALSE);
 	}
@@ -3245,7 +3239,7 @@ ccid_supported(ccid_t *ccid)
 		 * least 20 bytes.
 		 */
 		if (ccid->ccid_class.ccd_dwMaxIFSD < T1_IFSD_DEFAULT) {
-			ccid_error(ccid, "CCID reader max IFSD (%d) is less "
+			ccid_error(ccid, "!CCID reader max IFSD (%d) is less "
 			    "than T=1 default", ccid->ccid_class.ccd_dwMaxIFSD,
 			    T1_IFSD_DEFAULT);
 			return (B_FALSE);
@@ -3271,26 +3265,26 @@ ccid_open_pipes(ccid_t *ccid)
 	ep = usb_lookup_ep_data(ccid->ccid_dip, data, data->dev_curr_if, 0, 0,
 	    USB_EP_ATTR_BULK, USB_EP_DIR_IN);
 	if (ep == NULL) {
-		ccid_error(ccid, "failed to find CCID Bulk-IN endpoint");
+		ccid_error(ccid, "!failed to find CCID Bulk-IN endpoint");
 		return (B_FALSE);
 	}
 
 	if ((ret = usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION,
 	    ccid->ccid_dip, ep, &ccid->ccid_bulkin_xdesc)) != USB_SUCCESS) {
-		ccid_error(ccid, "failed to fill Bulk-IN xdescr: %d", ret);
+		ccid_error(ccid, "!failed to fill Bulk-IN xdescr: %d", ret);
 		return (B_FALSE);
 	}
 
 	ep = usb_lookup_ep_data(ccid->ccid_dip, data, data->dev_curr_if, 0, 0,
 	    USB_EP_ATTR_BULK, USB_EP_DIR_OUT);
 	if (ep == NULL) {
-		ccid_error(ccid, "failed to find CCID Bulk-OUT endpoint");
+		ccid_error(ccid, "!failed to find CCID Bulk-OUT endpoint");
 		return (B_FALSE);
 	}
 
 	if ((ret = usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION,
 	    ccid->ccid_dip, ep, &ccid->ccid_bulkout_xdesc)) != USB_SUCCESS) {
-		ccid_error(ccid, "failed to fill Bulk-OUT xdescr: %d", ret);
+		ccid_error(ccid, "!failed to fill Bulk-OUT xdescr: %d", ret);
 		return (B_FALSE);
 	}
 
@@ -3298,7 +3292,7 @@ ccid_open_pipes(ccid_t *ccid)
 		ep = usb_lookup_ep_data(ccid->ccid_dip, data, data->dev_curr_if,
 		    0, 0, USB_EP_ATTR_INTR, USB_EP_DIR_IN);
 		if (ep == NULL) {
-			ccid_error(ccid, "failed to find CCID Intr-IN "
+			ccid_error(ccid, "!failed to find CCID Intr-IN "
 			    "endpoint");
 			return (B_FALSE);
 		}
@@ -3306,7 +3300,7 @@ ccid_open_pipes(ccid_t *ccid)
 		if ((ret = usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION,
 		    ccid->ccid_dip, ep, &ccid->ccid_intrin_xdesc)) !=
 		    USB_SUCCESS) {
-			ccid_error(ccid, "failed to fill Intr-OUT xdescr: %d",
+			ccid_error(ccid, "!failed to fill Intr-OUT xdescr: %d",
 			    ret);
 			return (B_FALSE);
 		}
@@ -3326,14 +3320,14 @@ ccid_open_pipes(ccid_t *ccid)
 	if ((ret = usb_pipe_xopen(ccid->ccid_dip, &ccid->ccid_bulkin_xdesc,
 	    &policy, USB_FLAGS_SLEEP, &ccid->ccid_bulkin_pipe)) !=
 	    USB_SUCCESS) {
-		ccid_error(ccid, "failed to open Bulk-IN pipe: %d\n", ret);
+		ccid_error(ccid, "!failed to open Bulk-IN pipe: %d\n", ret);
 		return (B_FALSE);
 	}
 
 	if ((ret = usb_pipe_xopen(ccid->ccid_dip, &ccid->ccid_bulkout_xdesc,
 	    &policy, USB_FLAGS_SLEEP, &ccid->ccid_bulkout_pipe)) !=
 	    USB_SUCCESS) {
-		ccid_error(ccid, "failed to open Bulk-OUT pipe: %d\n", ret);
+		ccid_error(ccid, "!failed to open Bulk-OUT pipe: %d\n", ret);
 		usb_pipe_close(ccid->ccid_dip, ccid->ccid_bulkin_pipe,
 		    USB_FLAGS_SLEEP, NULL, NULL);
 		ccid->ccid_bulkin_pipe = NULL;
@@ -3344,7 +3338,7 @@ ccid_open_pipes(ccid_t *ccid)
 		if ((ret = usb_pipe_xopen(ccid->ccid_dip,
 		    &ccid->ccid_intrin_xdesc, &policy, USB_FLAGS_SLEEP,
 		    &ccid->ccid_intrin_pipe)) != USB_SUCCESS) {
-			ccid_error(ccid, "failed to open Intr-IN pipe: %d\n",
+			ccid_error(ccid, "!failed to open Intr-IN pipe: %d\n",
 			    ret);
 			usb_pipe_close(ccid->ccid_dip, ccid->ccid_bulkin_pipe,
 			    USB_FLAGS_SLEEP, NULL, NULL);
@@ -3448,7 +3442,7 @@ ccid_minors_init(ccid_t *ccid)
 		(void) ccid_minor_idx_alloc(&ccid->ccid_slots[i].cs_idx,
 		    B_TRUE);
 
-		(void) snprintf(buf, sizeof (buf), "slot%d", i);
+		(void) snprintf(buf, sizeof (buf), "slot%u", i);
 		if (ddi_create_minor_node(ccid->ccid_dip, buf, S_IFCHR,
 		    ccid->ccid_slots[i].cs_idx.cmi_minor,
 		    DDI_NT_CCID_ATTACHMENT_POINT, 0) != DDI_SUCCESS) {
@@ -3465,6 +3459,7 @@ ccid_intr_poll_fini(ccid_t *ccid)
 {
 	if (ccid->ccid_flags & CCID_F_HAS_INTR) {
 		timeout_id_t tid;
+
 		mutex_enter(&ccid->ccid_mutex);
 		tid = ccid->ccid_poll_timeout;
 		ccid->ccid_poll_timeout = NULL;
@@ -3634,12 +3629,12 @@ ccid_cleanup(dev_info_t *dip)
 	ccid->ccid_flags |= CCID_F_DETACHING;
 	mutex_exit(&ccid->ccid_mutex);
 
-	if (ccid->ccid_attach & CCID_ATTACH_MINORS) {
+	if ((ccid->ccid_attach & CCID_ATTACH_MINORS) != 0) {
 		ccid_minors_fini(ccid);
 		ccid->ccid_attach &= ~CCID_ATTACH_MINORS;
 	}
 
-	if (ccid->ccid_attach & CCID_ATTACH_INTR_ACTIVE) {
+	if ((ccid->ccid_attach & CCID_ATTACH_INTR_ACTIVE) != 0) {
 		ccid_intr_poll_fini(ccid);
 		ccid->ccid_attach &= ~CCID_ATTACH_INTR_ACTIVE;
 	}
@@ -3656,30 +3651,30 @@ ccid_cleanup(dev_info_t *dip)
 		mutex_exit(&ccid->ccid_mutex);
 	}
 
-	if (ccid->ccid_attach & CCID_ATTACH_HOTPLUG_CB) {
+	if ((ccid->ccid_attach & CCID_ATTACH_HOTPLUG_CB) != 0) {
 		usb_unregister_event_cbs(dip, &ccid_usb_events);
 		ccid->ccid_attach &= ~CCID_ATTACH_HOTPLUG_CB;
 	}
 
-	if (ccid->ccid_attach & CCID_ATTACH_SLOTS) {
+	if ((ccid->ccid_attach & CCID_ATTACH_SLOTS) != 0) {
 		ccid_slots_fini(ccid);
 		ccid->ccid_attach &= ~CCID_ATTACH_SLOTS;
 	}
 
-	if (ccid->ccid_attach & CCID_ATTACH_SEQ_IDS) {
+	if ((ccid->ccid_attach & CCID_ATTACH_SEQ_IDS) != 0) {
 		id_space_destroy(ccid->ccid_seqs);
 		ccid->ccid_seqs = NULL;
 		ccid->ccid_attach &= ~CCID_ATTACH_SEQ_IDS;
 	}
 
-	if (ccid->ccid_attach & CCID_ATTACH_OPEN_PIPES) {
+	if ((ccid->ccid_attach & CCID_ATTACH_OPEN_PIPES) != 0) {
 		usb_pipe_close(dip, ccid->ccid_bulkin_pipe, USB_FLAGS_SLEEP,
 		    NULL, NULL);
 		ccid->ccid_bulkin_pipe = NULL;
 		usb_pipe_close(dip, ccid->ccid_bulkout_pipe, USB_FLAGS_SLEEP,
 		    NULL, NULL);
 		ccid->ccid_bulkout_pipe = NULL;
-		if (ccid->ccid_flags & CCID_F_HAS_INTR) {
+		if ((ccid->ccid_flags & CCID_F_HAS_INTR) != 0) {
 			usb_pipe_close(dip, ccid->ccid_intrin_pipe,
 			    USB_FLAGS_SLEEP, NULL, NULL);
 			ccid->ccid_intrin_pipe = NULL;
@@ -3712,18 +3707,18 @@ ccid_cleanup(dev_info_t *dip)
 		list_destroy(&ccid->ccid_complete_queue);
 	}
 
-	if (ccid->ccid_attach & CCID_ATTACH_TASKQ) {
+	if ((ccid->ccid_attach & CCID_ATTACH_TASKQ) != 0) {
 		ddi_taskq_destroy(ccid->ccid_taskq);
 		ccid->ccid_taskq = NULL;
 		ccid->ccid_attach &= ~CCID_ATTACH_TASKQ;
 	}
 
-	if (ccid->ccid_attach & CCID_ATTACH_MUTEX_INIT) {
+	if ((ccid->ccid_attach & CCID_ATTACH_MUTEX_INIT) != 0) {
 		mutex_destroy(&ccid->ccid_mutex);
 		ccid->ccid_attach &= ~CCID_ATTACH_MUTEX_INIT;
 	}
 
-	if (ccid->ccid_attach & CCID_ATTACH_USB_CLIENT) {
+	if ((ccid->ccid_attach & CCID_ATTACH_USB_CLIENT) != 0) {
 		usb_client_detach(dip, ccid->ccid_dev_data);
 		ccid->ccid_dev_data = NULL;
 		ccid->ccid_attach &= ~CCID_ATTACH_USB_CLIENT;
@@ -3745,7 +3740,7 @@ ccid_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	inst = ddi_get_instance(dip);
 	if (ddi_soft_state_zalloc(ccid_softstate, inst) != DDI_SUCCESS) {
-		ccid_error(NULL, "failed to allocate soft state for ccid "
+		ccid_error(NULL, "!failed to allocate soft state for ccid "
 		    "instance %d", inst);
 		return (DDI_FAILURE);
 	}
@@ -3754,14 +3749,14 @@ ccid_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	ccid->ccid_dip = dip;
 
 	if ((ret = usb_client_attach(dip, USBDRV_VERSION, 0)) != USB_SUCCESS) {
-		ccid_error(ccid, "failed to attach to usb client: %d", ret);
+		ccid_error(ccid, "!failed to attach to usb client: %d", ret);
 		goto cleanup;
 	}
 	ccid->ccid_attach |= CCID_ATTACH_USB_CLIENT;
 
 	if ((ret = usb_get_dev_data(dip, &ccid->ccid_dev_data, USB_PARSE_LVL_IF,
 	    0)) != USB_SUCCESS) {
-		ccid_error(ccid, "failed to get usb device data: %d", ret);
+		ccid_error(ccid, "!failed to get usb device data: %d", ret);
 		goto cleanup;
 	}
 
@@ -3772,7 +3767,7 @@ ccid_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	(void) snprintf(buf, sizeof (buf), "ccid%d_taskq", inst);
 	ccid->ccid_taskq = ddi_taskq_create(dip, buf, 1, TASKQ_DEFAULTPRI, 0);
 	if (ccid->ccid_taskq == NULL) {
-		ccid_error(ccid, "failed to create CCID taskq");
+		ccid_error(ccid, "!failed to create CCID taskq");
 		goto cleanup;
 	}
 	ccid->ccid_attach |= CCID_ATTACH_TASKQ;
@@ -3783,17 +3778,18 @@ ccid_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	    offsetof(ccid_command_t, cc_list_node));
 
 	if (!ccid_parse_class_desc(ccid)) {
-		ccid_error(ccid, "failed to parse CCID class descriptor");
+		ccid_error(ccid, "!failed to parse CCID class descriptor");
 		goto cleanup;
 	}
 
 	if (!ccid_supported(ccid)) {
-		ccid_error(ccid, "CCID reader is not supported, not attaching");
+		ccid_error(ccid,
+		    "!CCID reader is not supported, not attaching");
 		goto cleanup;
 	}
 
 	if (!ccid_open_pipes(ccid)) {
-		ccid_error(ccid, "failed to open CCID pipes, not attaching");
+		ccid_error(ccid, "!failed to open CCID pipes, not attaching");
 		goto cleanup;
 	}
 	ccid->ccid_attach |= CCID_ATTACH_OPEN_PIPES;
@@ -3801,19 +3797,19 @@ ccid_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	(void) snprintf(buf, sizeof (buf), "ccid%d_seqs", inst);
 	if ((ccid->ccid_seqs = id_space_create(buf, CCID_SEQ_MIN,
 	    CCID_SEQ_MAX + 1)) == NULL) {
-		ccid_error(ccid, "failed to create CCID sequence id space");
+		ccid_error(ccid, "!failed to create CCID sequence id space");
 		goto cleanup;
 	}
 	ccid->ccid_attach |= CCID_ATTACH_SEQ_IDS;
 
 	if (!ccid_slots_init(ccid)) {
-		ccid_error(ccid, "failed to initialize CCID slot structures");
+		ccid_error(ccid, "!failed to initialize CCID slot structures");
 		goto cleanup;
 	}
 	ccid->ccid_attach |= CCID_ATTACH_SLOTS;
 
 	if (usb_register_event_cbs(dip, &ccid_usb_events, 0) != USB_SUCCESS) {
-		ccid_error(ccid, "failed to register USB hotplug callbacks");
+		ccid_error(ccid, "!failed to register USB hotplug callbacks");
 		goto cleanup;
 	}
 	ccid->ccid_attach |= CCID_ATTACH_HOTPLUG_CB;
@@ -3835,7 +3831,7 @@ ccid_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	 * Create minor nodes for each slot.
 	 */
 	if (!ccid_minors_init(ccid)) {
-		ccid_error(ccid, "failed to create minor nodes");
+		ccid_error(ccid, "!failed to create minor nodes");
 		goto cleanup;
 	}
 	ccid->ccid_attach |= CCID_ATTACH_MINORS;
@@ -3926,7 +3922,7 @@ ccid_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 	if (crgetzoneid(credp) != GLOBAL_ZONEID)
 		return (ENOENT);
 
-	if (otyp & (FNDELAY | FEXCL))
+	if ((otyp & (FNDELAY | FEXCL)) != 0)
 		return (EINVAL);
 
 	if (drv_priv(credp) != 0)
@@ -4140,7 +4136,9 @@ ccid_complete_tpdu_t1(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 		slot->cs_io.ci_errno = ENXIO;
 		ccid_user_io_done(ccid, slot);
 		return;
-	} else if (crs != CCID_REPLY_STATUS_COMPLETE) {
+	}
+
+	if (crs != CCID_REPLY_STATUS_COMPLETE) {
 		/* XXX */
 		cmn_err(CE_PANIC,
 		    "implement crs != CCID_REPLY_STATUS_COMPLETE case");
@@ -4496,7 +4494,7 @@ ccid_read(dev_t dev, struct uio *uiop, cred_t *credp)
 	/*
 	 * First, check if we have exclusive access. If not, we're done.
 	 */
-	if (!(cmp->cm_flags & CCID_MINOR_F_HAS_EXCL)) {
+	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
 		mutex_exit(&ccid->ccid_mutex);
 		return (EACCES);
 	}
@@ -4653,12 +4651,12 @@ ccid_write(dev_t dev, struct uio *uiop, cred_t *credp)
 	 * Check if we have exclusive access and if there's a card present. If
 	 * not, both are errors.
 	 */
-	if (!(cmp->cm_flags & CCID_MINOR_F_HAS_EXCL)) {
+	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
 		mutex_exit(&ccid->ccid_mutex);
 		return (EACCES);
 	}
 
-	if (!(slot->cs_flags & CCID_SLOT_F_ACTIVE)) {
+	if ((slot->cs_flags & CCID_SLOT_F_ACTIVE) == 0) {
 		mutex_exit(&ccid->ccid_mutex);
 		return (ENXIO);
 	}
@@ -4753,9 +4751,9 @@ ccid_ioctl_status(ccid_slot_t *slot, intptr_t arg, int mode)
 	ucs.ucs_instance = ddi_get_instance(slot->cs_ccid->ccid_dip);
 	ucs.ucs_slot = slot->cs_slotno;
 
-	if (slot->cs_flags & CCID_SLOT_F_PRESENT)
+	if ((slot->cs_flags & CCID_SLOT_F_PRESENT) != 0)
 		ucs.ucs_status |= UCCID_STATUS_F_CARD_PRESENT;
-	if (slot->cs_flags & CCID_SLOT_F_ACTIVE)
+	if ((slot->cs_flags & CCID_SLOT_F_ACTIVE) != 0)
 		ucs.ucs_status |= UCCID_STATUS_F_CARD_ACTIVE;
 
 	if (slot->cs_atr != NULL) {
@@ -4887,7 +4885,7 @@ ccid_ioctl_fionread(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 		return (ENODEV);
 	}
 
-	if (!(cmp->cm_flags & CCID_MINOR_F_HAS_EXCL)) {
+	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
 		mutex_exit(&slot->cs_ccid->ccid_mutex);
 		return (EACCES);
 	}
@@ -5031,7 +5029,7 @@ ccid_chpoll(dev_t dev, short events, int anyyet, short *reventsp,
 		return (ENODEV);
 	}
 
-	if (!(cmp->cm_flags & CCID_MINOR_F_HAS_EXCL)) {
+	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
 		mutex_exit(&ccid->ccid_mutex);
 		return (EACCES);
 	}
@@ -5050,7 +5048,7 @@ ccid_chpoll(dev_t dev, short events, int anyyet, short *reventsp,
 		ready |= POLLOUT;
 	}
 
-	if (!(slot->cs_flags & CCID_SLOT_F_PRESENT)) {
+	if ((slot->cs_flags & CCID_SLOT_F_PRESENT) == 0) {
 		ready |= POLLHUP;
 	}
 

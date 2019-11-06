@@ -45,7 +45,14 @@ nicenum_scale(uint64_t n, size_t units, char *buf, size_t buflen,
 	uint64_t divisor = 1;
 	int index = 0;
 	int rc = 0;
+	int spclen = 0;
+	char *spc = "";
 	char u;
+
+	if (flags & NN_UNIT_SPACE) {
+		spc = " ";
+		spclen = 1;
+	}
 
 	if (units == 0)
 		units = 1;
@@ -91,11 +98,7 @@ nicenum_scale(uint64_t n, size_t units, char *buf, size_t buflen,
 		 * If this is an even multiple of the base, always display
 		 * without any decimal precision.
 		 */
-		if ((flags & NN_UNIT_SPACE) != 0) {
-			rc = snprintf(buf, buflen, "%llu %c", n / divisor, u);
-		} else {
-			rc = snprintf(buf, buflen, "%llu%c", n / divisor, u);
-		}
+		rc = snprintf(buf, buflen, "%llu%s%c", n / divisor, spc, u);
 	} else {
 		/*
 		 * We want to choose a precision that reflects the best choice
@@ -109,15 +112,9 @@ nicenum_scale(uint64_t n, size_t units, char *buf, size_t buflen,
 		 */
 		int i;
 		for (i = 2; i >= 0; i--) {
-			if ((flags & NN_UNIT_SPACE) != 0) {
-				if ((rc = snprintf(buf, buflen, "%.*f %c", i,
-				    (double)n / divisor, u)) <= 5)
-					break;
-			} else {
-				if ((rc = snprintf(buf, buflen, "%.*f%c", i,
-				    (double)n / divisor, u)) <= 5)
-					break;
-			}
+			if ((rc = snprintf(buf, buflen, "%.*f%s%c", i,
+			    (double)n / divisor, spc, u)) <= 5 + spclen)
+				break;
 		}
 	}
 

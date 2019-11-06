@@ -23,7 +23,6 @@ CFLAGS += $(CCVERBOSE)
 LDLIBS += -lofmt -lcmdutils
 SRCS = ccidadm.c atr.c
 OBJS = $(SRCS:%.c=%.o)
-LNSRCS = ccidadm.c $(SRC)/common/ccid/atr.c
 CPPFLAGS += -I$(SRC)/common/ccid
 
 ROOTCCIDFILES = $(PROG:%=$(ROOTCMDDIR)/%)
@@ -48,8 +47,5 @@ install: all $(ROOTCMD)
 
 clean:
 	$(RM) $(OBJS)
-
-lint:	$$(LNSRCS)
-	$(LINT.c) $(LNSRCS) $(LDLIBS)
 
 include ../Makefile.targ

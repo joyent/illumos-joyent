@@ -123,7 +123,6 @@ pcsc_stringify_error(const LONG err)
 /*
  * This is called when a caller wishes to open a new Library context.
  */
-/* ARGSUSED */
 LONG
 SCardEstablishContext(DWORD scope, LPCVOID unused0, LPCVOID unused1,
     LPSCARDCONTEXT outp)
@@ -163,7 +162,6 @@ SCardReleaseContext(SCARDCONTEXT hdl)
  * make sense to take a const pointer when being given memory to free. It just
  * means we have to cast it, but remember: this isn't our API.
  */
-/* ARGSUSED */
 LONG
 SCardFreeMemory(SCARDCONTEXT unused, LPCVOID mem)
 {
@@ -176,7 +174,6 @@ SCardFreeMemory(SCARDCONTEXT unused, LPCVOID mem)
  * If lenp is set to SCARD_AUTOALLOCATE, then we are responsible for dealing
  * with this memory.
  */
-/* ARGSUSED */
 LONG
 SCardListReaders(SCARDCONTEXT unused, LPCSTR groups, LPSTR bufp, LPDWORD lenp)
 {
@@ -304,7 +301,6 @@ out:
 	return (ret);
 }
 
-/* ARGSUSED */
 LONG
 SCardConnect(SCARDCONTEXT hdl, LPCSTR reader, DWORD mode, DWORD prots,
     LPSCARDHANDLE iccp, LPDWORD protp)
@@ -558,7 +554,6 @@ SCardReconnect(SCARDHANDLE arg, DWORD mode, DWORD prots, DWORD init,
 	return (SCARD_S_SUCCESS);
 }
 
-/* ARGSUSED */
 LONG
 SCardTransmit(SCARDHANDLE arg, const SCARD_IO_REQUEST *sendreq,
     LPCBYTE sendbuf, DWORD sendlen, SCARD_IO_REQUEST *recvreq, LPBYTE recvbuf,

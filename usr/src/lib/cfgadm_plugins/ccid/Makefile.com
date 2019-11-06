@@ -39,9 +39,6 @@ ROOTLIBDIR64=	$(ROOTLIBDIR)/$(MACH64)
 
 LIBS=	$(DYNLIB)
 
-LINTFLAGS +=	-DDEBUG
-LINTFLAGS64 +=	-DDEBUG
-
 CFLAGS +=	$(CCVERBOSE)
 CFLAGS64 +=	$(CCVERBOSE)
 
@@ -50,8 +47,6 @@ LDLIBS +=	-lc
 .KEEP_STATE:
 
 all:	$(LIBS)
-
-lint:	lintcheck
 
 # Install rules
 
