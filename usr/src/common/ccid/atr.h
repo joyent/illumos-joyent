@@ -165,6 +165,7 @@ extern atr_data_rate_choice_t atr_data_rate(atr_data_t *, ccid_class_descr_t *,
     uint32_t *, uint_t, uint32_t *);
 
 #ifndef	_KERNEL
+extern void atr_data_hexdump(const uint8_t *, size_t, FILE *);
 extern void atr_data_dump(atr_data_t *, FILE *);
 #endif
 

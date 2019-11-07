@@ -305,58 +305,6 @@ ccidadm_list_usage(FILE *out)
 	(void) fprintf(out, "\tlist\n");
 }
 
-/* XXX Probably fold this back into the atr common code */
-static void
-ccidadm_atr_hexdump(const uint8_t *buf, size_t nbytes)
-{
-	size_t i;
-
-	/* Print out the header */
-	(void) printf("%*s    0", 4, "");
-	for (i = 1; i < 16; i++) {
-		if (i % 4 == 0 && i % 16 != 0) {
-			(void) printf(" ");
-		}
-
-		(void) printf("%2x", i);
-	}
-	(void) printf("  0123456789abcdef\n");
-
-	/* Print out data */
-	for (i = 0; i < nbytes; i++) {
-
-		if (i % 16 == 0) {
-			(void) printf("%04x:  ", i);
-		}
-
-		if (i % 4 == 0 && i % 16 != 0) {
-			(void) printf(" ");
-		}
-
-		(void) printf("%02x", buf[i]);
-
-		if (i % 16 == 15 || i + 1 == nbytes) {
-			int j;
-			for (j = (i % 16); j <= 16; j++) {
-				if (j % 4 == 0 && j % 16 != 0) {
-					(void) printf(" ");
-				}
-
-				(void) printf("  ");
-			}
-
-			for (j = i - (i % 16); j <= i; j++) {
-				if (!isprint(buf[j])) {
-					(void) printf(".");
-				} else {
-					(void) printf("%c", buf[j]);
-				}
-			}
-			(void) printf("\n");
-		}
-	}
-}
-
 /*
  * Print out logical information about the ICC's ATR. This includes information
  * about what protocols it supports, required negotiation, etc.
@@ -406,11 +354,12 @@ ccidadm_atr_props(uccid_cmd_status_t *ucs)
 	/*
 	 * For each supported protocol, figure out parameters we would
 	 * negotiate. We only need to warn about auto-negotiation if this
-	 * is TPDU and specific bits are missing. XXX Mask for TDPU and
-	 * maybe character?
+	 * is TPDU or character and specific bits are missing.
 	 */
-	if ((ucs->ucs_class.ccd_dwFeatures & (CCID_CLASS_F_AUTO_PARAM_NEG |
-	    CCID_CLASS_F_AUTO_PPS)) == 0) {
+	if (((ucs->ucs_class.ccd_dwFeatures & (CCID_CLASS_F_SHORT_APDU_XCHG |
+	    CCID_CLASS_F_EXT_APDU_XCHG)) == 0) &&
+	    ((ucs->ucs_class.ccd_dwFeatures & (CCID_CLASS_F_AUTO_PARAM_NEG |
+	    CCID_CLASS_F_AUTO_PPS)) == 0)) {
 		(void) printf("CCID/ICC require explicit TPDU parameter/PPS "
 		    "negotiation\n");
 	}
@@ -547,7 +496,7 @@ ccidadm_atr_fetch(int fd, const char *name, void *arg)
 	}
 
 	if (caa->caa_hex) {
-		ccidadm_atr_hexdump(ucs.ucs_atr, ucs.ucs_atrlen);
+		atr_data_hexdump(ucs.ucs_atr, ucs.ucs_atrlen, stdout);
 	}
 
 	if (caa->caa_verbose) {
@@ -785,7 +734,6 @@ ccidadm_do_reader(int argc, char *argv[])
 {
 	int i;
 
-	/* XXX argc == 0, dump all */
 	if (argc == 0) {
 		ccidadm_iter(B_TRUE, B_TRUE, ccidadm_reader_print, NULL);
 	}

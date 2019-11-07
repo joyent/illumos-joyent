@@ -1027,10 +1027,10 @@ atr_data_rate(atr_data_t *data, ccid_class_descr_t *class, uint32_t *rates,
 	negotiable = atr_params_negotiable(data);
 
 	/*
-	 * XXX We don't quite support cards with fixed rates at this time as
-	 * it's not clear what that rate should be. If it's negotiable, we'll
-	 * let them run at the default. Otherwise, we have to fail the request
-	 * until we implement the logic to search their data rates.
+	 * We don't support cards with fixed rates at this time as it's not
+	 * clear what that rate should be. If it's negotiable, we'll let them
+	 * run at the default. Otherwise, we have to fail the request until
+	 * we implement the logic to search their data rates.
 	 */
 	if (exprates) {
 		if (negotiable) {
@@ -1391,8 +1391,7 @@ atr_data_dump_tb(atr_ti_t *atp, FILE *out, uint_t level)
 		case ATR_PROTOCOL_T15:
 			if (level != 0)
 				break;
-			/* XXX Find how to decode these */
-			(void) fprintf(out, "; SPU: %s",
+			(void) fprintf(out, "; SPU: %s", tb == 0 ? "not used" :
 			    ATR_T15_TB0_SPU_STANDARD(tb) ? "standard" :
 			    "proprietary");
 			break;
@@ -1444,52 +1443,60 @@ atr_data_dump_tc(atr_ti_t *atp, FILE *out, uint_t level)
 	(void) fprintf(out, "\n");
 }
 
+void
+atr_data_hexdump(const uint8_t *buf, size_t nbytes, FILE *out)
+{
+	size_t i, j;
+
+	/* Print out the header */
+	(void) fprintf(out, "%*s    0", 4, "");
+	for (i = 1; i < 16; i++) {
+		if (i % 4 == 0 && i % 16 != 0) {
+			(void) fprintf(out, " ");
+		}
+
+		(void) fprintf(out, "%2x", i);
+	}
+	(void) fprintf(out, "  0123456789abcdef\n");
+
+	/* Print out data */
+	for (i = 0; i < nbytes; i++) {
+
+		if (i % 16 == 0) {
+			(void) fprintf(out, "%04x:  ", i);
+		}
+
+		if (i % 4 == 0 && i % 16 != 0) {
+			(void) fprintf(out, " ");
+		}
+
+		(void) fprintf(out, "%02x", buf[i]);
+
+		if (i % 16 == 15 || i + 1 == nbytes) {
+			for (j = (i % 16) + 1; j < 16; j++) {
+				if (j % 4 == 0 && j % 16 != 0) {
+					(void) fprintf(out, " ");
+				}
+
+				(void) fprintf(out, "  ");
+			}
+
+			(void) fprintf(out, "  ");
+			for (j = i - (i % 16); j <= i; j++) {
+				(void) fprintf(out, "%c",
+				    isprint(buf[j]) ? buf[j] : '.');
+			}
+			(void) printf("\n");
+		}
+	}
+}
+
 static void
 atr_data_hexdump_historical(atr_data_t *data, FILE *out)
 {
-	size_t i;
 	(void) fprintf(out, "Dumping raw historical bytes\n");
 
-	/* Print out the header */
-	(void) printf("%*s    0", 4, "");
-	for (i = 1; i < 16; i++) {
-		if (i % 4 == 0 && i % 16 != 0) {
-			(void) printf(" ");
-		}
-
-		(void) printf("%2x", i);
-	}
-	(void) printf("  0123456789abcdef\n");
-
-	for (i = 0; i < data->atr_nhistoric; i++) {
-
-		if (i % 16 == 0) {
-			(void) printf("%04x:  ", i);
-		}
-
-		if (i % 4 == 0 && i % 16 != 0) {
-			(void) printf(" ");
-		}
-
-		(void) printf("%02x", data->atr_historic[i]);
-	}
-
-	for (; (i % 16) != 0; i++) {
-		if (i % 4 == 0 && i % 16 != 0) {
-			(void) printf(" ");
-		}
-		(void) printf("--");
-	}
-
-	(void) printf("  ");
-	for (i = 0; i < data->atr_nhistoric; i++) {
-		if (!isprint(data->atr_historic[i])) {
-			(void) printf(".");
-		} else {
-			(void) printf("%c", data->atr_historic[i]);
-		}
-	}
-	(void) printf("\n");
+	atr_data_hexdump(data->atr_historic, data->atr_nhistoric, out);
 }
 
 static void
