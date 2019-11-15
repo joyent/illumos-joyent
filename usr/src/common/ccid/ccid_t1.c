@@ -331,10 +331,6 @@ t1_validate_hdr(t1_state_t *t1, const void *buf, size_t len,
 		 * Check the length. We save checking for a length of zero in
 		 * other conditions, as it may or may not be valid depending on
 		 * the chaining situation.
-		 *
-		 * XXX Maybe we should add a chaining flag and check it here.
-		 * But we'd want to make sure it was the last entry in the chain
-		 * only.
 		 */
 		if (hdr->t1h_len == T1_INF_RESERVED) {
 			return (t1_invalid(t1, T1_VALIDATE_RESV_LEN,
@@ -426,46 +422,11 @@ t1_validate_hdr(t1_state_t *t1, const void *buf, size_t len,
 }
 
 /*
- * XXX Commonize with the above. This should only have a check that it's an
- * sblock, that it's the right op, and the value.
+ * Check that it's an sblock and that it's the right op.
  */
 static t1_validate_t
-t1_validate_sblock(t1_state_t *t1, const void *buf, size_t len,
-    t1_sblock_op_t op)
+t1_validate_sblock(t1_state_t *t1, const t1_hdr_t *hdr, t1_sblock_op_t op)
 {
-	uint8_t explen;
-	const t1_hdr_t *hdr;
-
-	/*
-	 * Do we have enough data to cover the protocol prologue and epilogue?
-	 */
-	if (len < t1->t1_protlen) {
-		return (t1_invalid(t1, T1_VALIDATE_SHORT, "data payload (%ld) "
-		    "less than required protocol length (%u)", len,
-		    t1->t1_protlen));
-	}
-
-	/*
-	 * We have a slight Chicken and Egg problem. We want to look at the
-	 * contents of the T=1 header, but it may not have passed its checksum.
-	 * To deal with that we start with the assumption that we got all the
-	 * data that we expect. In other words that the ccid length equals the
-	 * message block length. We'll validate the checksum based on that raw
-	 * data. Later, we'll go back and make sure that the header makes
-	 * semantic sense.
-	 */
-	if (!t1_checksum_check(t1, buf, len)) {
-		return (t1_invalid(t1, T1_VALIDATE_BAD_CKSUM,
-		    "invalid checksum"));
-	}
-
-	hdr = buf;
-	if (hdr->t1h_nad != T1_DEFAULT_NAD) {
-		return (t1_invalid(t1, T1_VALIDATE_BAD_NAD, "received invalid "
-		    "NAD value %u, expected %u", hdr->t1h_nad, T1_DEFAULT_NAD));
-	}
-
-
 	if ((hdr->t1h_pcb & T1_TYPE_RSMASK) != T1_TYPE_SBLOCK) {
 		return (t1_invalid(t1, T1_VALIDATE_BAD_PCB, "invalid pcb mode "
 		    "bits for S-block. Expected %u, found %u", T1_TYPE_SBLOCK,
@@ -477,39 +438,6 @@ t1_validate_sblock(t1_state_t *t1, const void *buf, size_t len,
 		    "S-block operation. Expected %x, found %x", op,
 		    hdr->t1h_pcb & T1_SBLOCK_OP_MASK));
 	}
-
-	/* XXX This had some gcc7 warnings, come back and verify it's correct */
-	switch (op) {
-	case T1_SBLOCK_REQ_RESYNCH:
-	case T1_SBLOCK_RESP_RSYNCH:
-	case T1_SBLOCK_REQ_ABORT:
-	case T1_SBLOCK_RESP_ABORT:
-		explen = 0;
-		break;
-	case T1_SBLOCK_REQ_WTX:
-	case T1_SBLOCK_RESP_WTX:
-	case T1_SBLOCK_REQ_IFS:
-	case T1_SBLOCK_RESP_IFS:
-		explen = 1;
-		break;
-	default:
-		return (t1_invalid(t1, T1_VALIDATE_BAD_SBLOCK_OP, "asked to "
-		    "process S-block operation 0x%x with an operation type "
-		    "that isn't an S-block", op));
-	}
-
-	if (explen != hdr->t1h_len) {
-		return (t1_invalid(t1, T1_VALIDATE_BAD_LEN, "header length "
-		    "value (%d) does not match length required for S-block "
-		    "(%d)", hdr->t1h_len, explen));
-	}
-
-	if (hdr->t1h_len + t1->t1_protlen != len) {
-		return (t1_invalid(t1, T1_VALIDATE_BAD_LEN, "t1 message "
-		    "logical length (%u), does not match actual length (%u)",
-		    hdr->t1h_len + t1->t1_protlen, len));
-	}
-
 	return (T1_VALIDATE_OK);
 }
 
@@ -521,9 +449,14 @@ t1_validate_t
 t1_ifsd_resp(t1_state_t *t1, const void *buf, size_t len)
 {
 	t1_validate_t t;
+	t1_block_type_t type;
 	const t1_hdr_t *reqhdr, *resphdr;
 
-	if ((t = t1_validate_sblock(t1, buf, len, T1_SBLOCK_RESP_IFS)) !=
+	if ((t = t1_validate_hdr(t1, buf, len, &type)) != T1_VALIDATE_OK) {
+		return (t);
+	}
+
+	if ((t = t1_validate_sblock(t1, buf, T1_SBLOCK_RESP_IFS)) !=
 	    T1_VALIDATE_OK) {
 		return (t);
 	}
@@ -784,9 +717,7 @@ t1_reply_rblock(t1_state_t *t1, const t1_hdr_t *hdr)
 	 * an acknowledgement and the status in the R-Block should be zero.
 	 *
 	 * If instead it does match, then the status should be non-zero and that
-	 * should tell us to retransmit. XXX We don't support retransmits at
-	 * this time and therefore we'll just go ahead and note that this is an
-	 * error.
+	 * should tell us to retransmit.
 	 *
 	 * If we get a case where the R-Block doesn't make semantic sense then
 	 * we'll consider that an error and issue a warm reset. Though in theory
@@ -798,8 +729,7 @@ t1_reply_rblock(t1_state_t *t1, const t1_hdr_t *hdr)
 	if ((seqmatch && status == T1_RBLOCK_STATUS_OK) ||
 	    (!seqmatch && status != T1_RBLOCK_STATUS_OK)) {
 		/*
-		 * XXX This represents the mismatch. This doesn't make semantic
-		 * sense.
+		 * This R-Block doesn't make semantic sense.
 		 */
 		t1->t1_flags |= T1_F_CMD_ERROR;
 		return (t1_invalid(t1, T1_VALIDATE_BAD_RBLOCK, "sequence match "
