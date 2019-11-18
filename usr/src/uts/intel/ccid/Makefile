@@ -25,12 +25,6 @@ ALL_TARGET	= $(BINARY)
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 CPPFLAGS	+= -I$(SRC)/common/ccid
 
-#
-# XXX For dev
-#
-CERRWARN	+= -_gcc=-Wno-unused-function
-CERRWARN	+= -_gcc=-Wno-unused-variable
-
 LDFLAGS		+= -dy -N misc/usba
 
 .KEEP_STATE:
