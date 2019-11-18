@@ -180,10 +180,6 @@ will still be possible to read any successfully completed commands.
 To clear the error state the program will need to end the transaction
 and begin a new one or close the file descriptor if the device has been
 removed.
-It is possible to obtain more detailed information about the error
-through the
-.Dv UCCID_CMD_ERROR_INFO
-command.
 .Ss Opening Devices, Exclusive Access, and Performing I/O
 To perform I/O to a particular card, one must first open the slot of
 interest.
@@ -372,8 +368,6 @@ time.
 If the device is closed without ending a transaction first, then the ICC
 will be reset.
 .El
-.Ss UCCID_CMD_ERROR_INFO
-XXX needs to be documented
 .Ss UCCID_CMD_ICC_MODIFY
 This command can be used to change the state of an ICC, if present.
 .Pp
