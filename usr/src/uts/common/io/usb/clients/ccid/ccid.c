@@ -19,12 +19,12 @@
  * Slot Detection
  * --------------
  *
- * A CCID reader has one or more slots, each of which may or may not have a card
- * present. Some devices actually have a card that's permanently plugged in
- * while other readers allow for cards to be inserted and removed. We model all
- * CCID readers that don't have removable cards as ones that are removable, but
- * never fire any events. Removable devices are required to have an Interrupt-IN
- * pipe.
+ * A CCID reader has one or more slots, each of which may or may not have a ICC
+ * (integrated circuit card) present. Some readers actually have a card that's
+ * permanently plugged in while other readers allow for cards to be inserted and
+ * removed. We model all CCID readers that don't have removable cards as ones
+ * that are removable, but never fire any events. Readers with removable cards
+ * are required to have an Interrupt-IN pipe.
  *
  * Each slot starts in an unknown state. After attaching we always kick off a
  * discovery. When a change event comes in, that causes us to kick off a
@@ -34,8 +34,8 @@
  * initial Interrupt-IN polling to allow for the case where either the hardware
  * doesn't report it or to better handle the devices without an Interrupt-IN
  * entry. Just because we open up the Interupt-IN pipe, hardware is not
- * obligated to tell us, as the adding and removing a driver will not cause a
- * power cycle.
+ * obligated to tell us, as the detaching and reattaching of a driver will not
+ * cause a power cycle.
  *
  * The Interrupt-IN exception callback may need to restart polling. In addition,
  * we may fail to start or restart polling due to a transient issue. In cases
@@ -50,13 +50,12 @@
  * Two state flags are used to keep track of this dance: CCID_F_WORKER_REQUESTED
  * and CCID_F_WORKER_RUNNING. The first is used to indicate that discovery is
  * desired. The second is to indicate that it is actively running. When
- * discovery is requested, the caller first checks to make sure the current
- * flags. If neither flag is set, then it knows that it can kick off discovery.
- * Regardless if it can kick off the taskq, it always sets requested. Once the
- * taskq entry starts, it removes any DISCOVER_REQUESTED flags and sets
- * DISCOVER_RUNNING. If at the end of discovery, we find that another request
- * has been made, the discovery function will kick off another entry in the
- * taskq.
+ * discovery is requested, the caller first checks the current flags. If neither
+ * flag is set, then it knows that it can kick off discovery. Regardless if it
+ * can kick off the taskq, it always sets requested. Once the taskq entry
+ * starts, it removes any DISCOVER_REQUESTED flags and sets DISCOVER_RUNNING. If
+ * at the end of discovery, we find that another request has been made, the
+ * discovery function will kick off another entry in the taskq.
  *
  * The one possible problem with this model is that it means that we aren't
  * throttling the set of incoming requests with respect to taskq dispatches.
@@ -85,15 +84,53 @@
  *
  * To simplify the driver, we only support issuing a single command to a CCID
  * reader at any given time. All commands that are outstanding are queued in a
- * global list ccid_command_queue. The head of the queue is the current command
- * that we believe is outstanding to the reader or will be shortly. The command
- * is issued by sending a Bulk-OUT request with a CCID header. Once we have the
- * Bulk-OUT request acknowledged, we begin sending Bulk-IN messages to the
- * controller. Once the Bulk-IN message is acknowledged, then we complete the
- * command proceed to the next command. This is summarized in the following
- * state machine:
+ * per-device list ccid_command_queue. The head of the queue is the current
+ * command that we believe is outstanding to the reader or will be shortly. The
+ * command is issued by sending a Bulk-OUT request with a CCID header. Once we
+ * have the Bulk-OUT request acknowledged, we begin sending Bulk-IN messages to
+ * the controller. Once the Bulk-IN message is acknowledged, then we complete
+ * the command and proceed to the next command. This is summarized in the
+ * following state machine:
  *
- * XXX
+ *              +-----------------------------------------------------+
+ *              |                                                     |
+ *              |                        ccid_command_queue           |
+ *              |                    +---+---+---------+---+---+      |
+ *              v                    | h |   |         |   | t |      |
+ *  +-------------------------+      | e |   |         |   | a |      |
+ *  | ccid_command_dispatch() |<-----| a |   |   ...   |   | i |      |
+ *  +-----------+-------------+      | d |   |         |   | l |      |
+ *              |                    +---+---+---------+---+---+      |
+ *              v                                                     |
+ *  +-------------------------+      +-------------------------+      |
+ *  | usb_pipe_bulk_xfer()    |----->| ccid_dispatch_bulk_cb() |      |
+ *  | ccid_bulkout_pipe       |      +------------+------------+      |
+ *  +-------------------------+                   |                   |
+ *                                                |                   |
+ *              |                                 v                   |
+ *              |                    +-------------------------+      |
+ *              |                    | ccid_bulkin_schedule()  |      |
+ *              v                    +------------+------------+      |
+ *                                                |                   |
+ *     /--------------------\                     |                   |
+ *    /                      \                    v                   |
+ *    |  ###    CCID HW      |       +-------------------------+      |
+ *    |  ###                 |       | usb_pipe_bulk_xfer()    |      |
+ *    |                      | ----> | ccid_bulkin_pipe        |      |
+ *    |                      |       +------------+------------+      |
+ *    \                      /                    |                   |
+ *     \--------------------/                     |                   |
+ *                                                v                   |
+ *                                   +-------------------------+      |
+ *                                   | ccid_reply_bulk_cb()    |      |
+ *                                   +------------+------------+      |
+ *                                                |                   |
+ *                                                |                   |
+ *                                                v                   |
+ *                                   +-------------------------+      |
+ *                                   | ccid_command_complete() +------+
+ *                                   +-------------------------+
+ *
  *
  * APDU and TPDU Processing and Parameter Selection
  * ------------------------------------------------
@@ -103,9 +140,10 @@
  *
  * 1. Character Mode 2. TPDU Mode 3. Short APDU Mode 4. Extended APDU Mode
  *
- * Devices either support mode 1, mode 2, mode 3, or mode 3 and 4. All readers
+ * Readers either support mode 1, mode 2, mode 3, or mode 3 and 4. All readers
  * that support extended APDUs support short APDUs. At this time, we do not
- * support character mode.
+ * support character mode. Support for TPDU mode is incomplete and disabled
+ * by default.
  *
  * The ICC and the reader need to be in agreement in order for them to be able
  * to exchange information. The ICC indicates what it supports by replying to a
@@ -117,14 +155,14 @@
  *  o T=1
  *
  * These protocols are defined in the ISO/IEC 7816-3:2006 specification. When a
- * reader supports an APDU mode, then it does not have to worry about the
- * underlying protocol and can just send an application data unit (APDU).
- * Otherwise, the reader must take the application data (APDU) and transform it
+ * reader supports an APDU mode, then the driver does not have to worry about
+ * the underlying protocol and can just send an application data unit (APDU).
+ * Otherwise, the driver must take the application data (APDU) and transform it
  * into the form required by the corresponding protocol.
  *
  * There are several parameters that need to be negotiated to insure that the
  * protocols work correctly. To negotiate these parameters and to select a
- * protocol, the reader must construct a PPS (protocol and parameters structure)
+ * protocol, the driver must construct a PPS (protocol and parameters structure)
  * request and exchange that with the ICC. A reader may optionally take care of
  * performing this and indicates its support for this in dwFeatures member of
  * the USB class descriptor.
@@ -140,36 +178,38 @@
  * never consider performing this for APDU related activity and only worry about
  * this for TPDU transfers.
  *
- * In the ATR data the device can indicate whether or not it supports
- * negotiating this information. If the hardware does not support negotiation,
- * then it likely does not support a PPS and in which case we need to program
- * the hardware with the parameters indicated by the ATR through a
- * CCID_REQUEST_SET_PARAMS command and do not need to negotiate a PPS.
+ * In the ATR data the card can indicate whether or not it supports negotiating
+ * this information. If the card does not support negotiation, then it likely
+ * does not support a PPS and in which case we need to program the reader with
+ * the parameters indicated by the ATR through a CCID_REQUEST_SET_PARAMS command
+ * and do not need to negotiate a PPS.
  *
- * Many ICC devices support negotiation. When an ICC supporting negotiation is
- * first turned on then it enters into a default mode and uses the default
- * values while in that mode. The PPS may be used to change the protocol as well
- * as several parameters. Once the PPS has been agreed upon, this driver just
- * sends a CCID_REQUEST_SET_PARAMS command to inform the reader what is going
- * on.
+ * Many ICCs support negotiation. When an ICC supporting negotiation is first
+ * turned on, it enters into a default mode and uses the default values while in
+ * that mode. The PPS may be used to change the protocol as well as several
+ * parameters. Once the protocol and parameters have been agreed upon, this
+ * driver sends a CCID_REQUEST_SET_PARAMS command to inform the reader what is
+ * going on.
  *
  * If the CCID reader supports neither of the hardware related mechanisms for a
  * PPS exchange, then we must do both of these. If hardware supports automatic
  * parameter negotiation then we do not need to send either the PPS or the
  * CCID_REQUEST_SET_PARAMS command.
  *
- * The ATR offers us what the hardware's maximum value of Di and Fi are. If the
- * reader supports higher speeds, then we will XXX
- *
- * XXX At the moment we're not adjusting any of the Di or Fi values beyond their
+ * The ATR offers us what the cards's maximum value of Di (baud rate adjustment)
+ * and Fi (clock rate conversion) are. Even if higher speeds are supported we're
+ * currently not adjusting any of the Di or Fi values beyond their initial
  * default.
  *
  * To summarize this all, the following is the flow chart we perform after
- * successfully powering on the device:
+ * successfully powering on the card:
  *
- *  - If the reader supports APDU transfers, then we are done.
- *     XXX Depending on level of automation we may need to still do things.
- *  - If the reader supports XXX
+ *  - parse the card's ATR data
+ *  - send a PPS to the card if we're changing the protocol or data rate from
+ *    the defaults based on the ATR, if the reader doesn't do it for us
+ *  - set the reader's paramters accordingly, if the reader requires it
+ *  - do protocol-specific initialization of the card
+ *  - if we're using T=1, set the IFSD, if required by the reader
  *
  * User I/O Basics
  * ---------------
@@ -202,7 +242,7 @@
  *   4. CCID Reader state
  *
  * Of course, each level cares about the state above it. The kernel protocol
- * level state (2), cares about the User threads in I/O (1). The same is true
+ * level state (2) cares about the User threads in I/O (1). The same is true
  * with the other levels caring about the levels above it. With this in mind
  * there are three non-data path things that can go wrong:
  *
@@ -283,10 +323,10 @@
  *   configured options are when they ended the transaction. They may tell us to
  *   either reset or to keep the card in the same state.
  *
- *   While this is ongoing an additional flag (XXX) will be set on the slot to
- *   make sure that we know that we can't issue new I/O or that we can't proceed
- *   to the next transaction until this phase is finished. XXX This feels rather
- *   rough.
+ *   While this is ongoing an additional flag (CCID_SLOT_F_NEED_IO_TEARDOWN)
+ *   will be set on the slot to make sure that we know that we can't issue new
+ *   I/O or that we can't proceed to the next transaction until this phase is
+ *   finished.
  *
  * Cleaning up State 3
  *
@@ -295,12 +335,10 @@
  *   finished being cleaned up. We will have to _block_ on this from the worker
  *   thread. The problem is that we have certain values such as the operations
  *   vector, the ATR data, etc. that we need to make sure are still valid while
- *   we're in the process of cleaning up state. Only once all that is done
- *   should we consider processing a new ICC insertion or dealing with other
- *   aspects of this. The one good side is that if the ICC was removed, then it
- *   should be simpler to handle all of the outstanding I/O.
- *
- *   XXX We need more details about how all this happens, etc.
+ *   we're in the process of cleaning up state. Once all that is done and the
+ *   worker thread proceeds we will consider processing a new ICC insertion.
+ *   The one good side is that if the ICC was removed, then it should be simpler
+ *   to handle all of the outstanding I/O.
  *
  * Cleaning up State 4
  *
@@ -310,14 +348,12 @@
  *   resources. Therefore, before we call detach, we need to explicitly clean up
  *   state 1; however, we then at this time leave all the remaining state to be
  *   cleaned up during detach(9E) as part of normal tear down.
- *
- *   XXX Is that really true, this seems like a lot of BS.
  */
 
 /*
  * Various XXX:
  *
- * o If hardware says that the ICC became shut down / disactivated. Should we
+ * o If reader says that the ICC became shut down / disactivated. Should we
  * explicitly reactivate it as part of something or just make that a future
  * error?
  *  - Should we provide an ioctl to try to reactivate?
@@ -971,9 +1007,9 @@ ccid_slot_excl_rele(ccid_slot_t *slot)
 	pollwakeup(&cmp->cm_pollhead, POLLERR);
 
 	/*
-	 * If we've been asked to reset the device before handing it off,
-	 * schedule that. Otherwise, allow the next entry in the queue to get
-	 * woken up and given access to the device.
+	 * If we've been asked to reset the card before handing it off, schedule
+	 * that. Otherwise, allow the next entry in the queue to get woken up
+	 * and given access to the card.
 	 */
 	if ((cmp->cm_flags & CCID_MINOR_F_TXN_RESET) != 0) {
 		slot->cs_flags |= CCID_SLOT_F_NEED_TXN_RESET;
@@ -1023,8 +1059,8 @@ ccid_slot_excl_req(ccid_slot_t *slot, ccid_minor_t *cmp, boolean_t nosleep)
 		if (cv_wait_sig(&cmp->cm_excl_cv, &slot->cs_ccid->ccid_mutex)
 		    == 0) {
 			/*
-			 * Remove ourselves from the list, but only signal the
-			 * next thread if XXX
+			 * Remove ourselves from the list and try to signal the
+			 * next thread.
 			 */
 			list_remove(&slot->cs_excl_waiters, cmp);
 			cmp->cm_flags &= ~CCID_MINOR_F_WAITING;
@@ -1910,10 +1946,6 @@ ccid_command_power_on(ccid_t *ccid, ccid_slot_t *cs, ccid_class_voltage_t volt,
 
 		len = ccid_command_resp_length(cc);
 		if (len == 0) {
-			/*
-			 * XXX Could probably use more descriptive errors and
-			 * not errnos
-			 */
 			ret = EINVAL;
 			goto done;
 		}
@@ -2362,8 +2394,7 @@ ccid_slot_params_t0_init(ccid_t *ccid, ccid_slot_t *slot, atr_data_t *data,
 
 	bzero(&p, sizeof (p));
 	conv = atr_convention(data);
-	/* XXX Macroify */
-	p.cp0_bmFindexDindex = ((fi & 0x0f) << 4) | (di & 0x0f);
+	p.cp0_bmFindexDindex = CCID_P_FI_DI(fi, di);
 	/* B0 is set t0 0 for T=0 */
 	p.cp0_bmTCCKST0 = 0;
 	if (conv == ATR_CONVENTION_INVERSE) {
@@ -2396,12 +2427,11 @@ ccid_slot_params_t1_init(ccid_t *ccid, ccid_slot_t *slot, atr_data_t *data,
 	atr_t1_checksum_t cksum;
 
 	bzero(&p, sizeof (p));
-	/* XXX Macroify */
 	conv = atr_convention(data);
 	cksum = atr_t1_checksum(data);
 	bwi = atr_t1_bwi(data);
 	cwi = atr_t1_cwi(data);
-	p.cp1_bmFindexDindex = ((fi & 0x0f) << 4) | (di & 0x0f);
+	p.cp1_bmFindexDindex = CCID_P_FI_DI(fi, di);
 	p.cp1_bmTCCKST1 = 0x10;
 	if (cksum == ATR_T1_CHECKSUM_CRC) {
 		p.cp1_bmTCCKST1 |= 0x1;
@@ -2545,7 +2575,7 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 	atr_data_t *data;
 
 	/*
-	 * Hardware handles all initialization features. There's nothing else
+	 * Reader handles all initialization features. There's nothing else
 	 * that we need to do for now.
 	 */
 	if ((ccid->ccid_flags & CCID_F_ICC_INIT_MASK) == 0)
@@ -2673,11 +2703,10 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 
 		/*
 		 * Determine whether or not we need to send a PPS. We need to if
-		 * we're going to change the protocol, if we need to change the
-		 * Di/Fi values or we need to change the protocol, and if the
-		 * hardware requires that we perform all this work. If we're
-		 * sending a PPS, we do not have to send a new value of Fi and
-		 * Di, but we must send a protocol.
+		 * we're going to change the protocol or the Di/Fi values, and
+		 * if the reader requires that we perform all this work. If
+		 * we're sending a PPS, we do not have to send a new value of Fi
+		 * and Di, but we must send a protocol.
 		 */
 		if ((ccid->ccid_flags & CCID_F_NEEDS_PPS) != 0 && neg &&
 		    (changeprot || rate != ATR_RATE_USEDEFAULT)) {
@@ -3166,9 +3195,9 @@ ccid_supported(ccid_t *ccid)
 	 * reader accepts. While it may be tempting to try and use a larger
 	 * value such as the maximum size, the readers really don't like
 	 * receiving bulk transfers that large. However, there are also reports
-	 * of readers that will overwrite to a fixed minimum size. XXX which
-	 * devices were those and should this be a p2roundup on the order of 256
-	 * bytes maybe?
+	 * of readers that will overwrite to a fixed minimum size. Until we see
+	 * such a thing in the wild there's probably no point in trying to deal
+	 * with it here.
 	 */
 	ccid->ccid_bufsize = ccid->ccid_class.ccd_dwMaxCCIDMessageLength;
 	if (ccid->ccid_bufsize < CCID_MIN_MESSAGE_LENGTH) {
@@ -3199,7 +3228,7 @@ ccid_supported(ccid_t *ccid)
 	/*
 	 * Check which automatic features the reader provides and which features
 	 * it does not. Missing features will require additional work before a
-	 * card can be activated. Note, this also applies to APDU based devices
+	 * card can be activated. Note, this also applies to APDU based readers
 	 * which may need to have various aspects of the device negotiated.
 	 */
 
@@ -3222,11 +3251,8 @@ ccid_supported(ccid_t *ccid)
 		ccid->ccid_flags |= CCID_F_NEEDS_DATAFREQ;
 	}
 
-	/*
-	 * XXX This should probably check on the actual support for T=1. If it
-	 * doesn't exist, we should probably ignore it.
-	 */
-	if ((feat & CCID_CLASS_F_AUTO_IFSD) == 0) {
+	if ((feat & CCID_CLASS_F_TPDU_XCHG) != 0 &&
+	    (feat & CCID_CLASS_F_AUTO_IFSD) == 0) {
 		ccid->ccid_flags |= CCID_F_NEEDS_IFSD;
 
 		/*
@@ -3572,7 +3598,7 @@ ccid_disconnect_cb(dev_info_t *dip)
 	 * sure that they don't wait there forever and make sure that anyone
 	 * polling gets a POLLHUP. We can't really distinguish between this and
 	 * an ICC being removed. It will be discovered when someone tries to do
-	 * an operation and they receive an EXDEV. We only need to do this on
+	 * an operation and they receive an ENODEV. We only need to do this on
 	 * minors that have exclusive access. Don't worry about them finishing
 	 * up, this'll be done as part of detach.
 	 */

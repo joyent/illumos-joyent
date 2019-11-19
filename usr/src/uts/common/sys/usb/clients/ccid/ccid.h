@@ -141,6 +141,8 @@ typedef union ccid_params {
 	ccid_params_t1_t ccp_t1;
 } ccid_params_t;
 
+#define	CCID_P_FI_DI(fi, di)	((((fi) & 0x0f) << 4) | ((di) & 0x0f))
+
 /*
  * Everything below this point is reserved for the kernel.
  */
