@@ -54,11 +54,9 @@ At this time, the following protcols are supported:
 .Bl -bullet -offset indent
 .It
 APDU
-.It
-TPDU T=1
 .El
 .Pp
-At this time, TPDU T=0 and character level readers are not supported by
+At this time, TPDU and character level readers are not supported by
 the driver.
 Readers in this category will still attach; however,
 I/O cannot be performed to them.
