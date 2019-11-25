@@ -2297,6 +2297,27 @@ ccid_slot_teardown(ccid_t *ccid, ccid_slot_t *slot, boolean_t signal)
 }
 
 /*
+ * Wait for teardown of outstanding user I/O.
+ */
+static void
+ccid_slot_io_teardown(ccid_t *ccid, ccid_slot_t *slot)
+{
+	/*
+	 * If there is outstanding user I/O, then we need to go ahead and take
+	 * care of that. Once this function returns, the user I/O will have been
+	 * dealt with; however, before we can tear down things, we need to make
+	 * sure that the logical I/O has been completed.
+	 */
+	if (slot->cs_icc.icc_teardown != NULL) {
+		slot->cs_icc.icc_teardown(ccid, slot, ENXIO);
+	}
+
+	while ((slot->cs_flags & CCID_SLOT_F_NEED_IO_TEARDOWN) != 0) {
+		cv_wait(&slot->cs_io.ci_cv, &ccid->ccid_mutex);
+	}
+}
+
+/*
  * The given CCID slot has been removed. Clean up.
  */
 static void
@@ -2314,19 +2335,8 @@ ccid_slot_removed(ccid_t *ccid, ccid_slot_t *slot, boolean_t notify)
 	slot->cs_flags &= ~CCID_SLOT_F_PRESENT;
 	slot->cs_flags &= ~CCID_SLOT_F_ACTIVE;
 
-	/*
-	 * If there is outstanding user I/O, then we need to go ahead and take
-	 * care of that. Once this function returns, the user I/O will have been
-	 * dealt with; however, before we can tear down things, we need to make
-	 * sure that the logical I/O has been completed.
-	 */
-	if (slot->cs_icc.icc_teardown != NULL) {
-		slot->cs_icc.icc_teardown(ccid, slot, ENXIO);
-	}
 
-	while ((slot->cs_flags & CCID_SLOT_F_NEED_IO_TEARDOWN) != 0) {
-		cv_wait(&slot->cs_io.ci_cv, &ccid->ccid_mutex);
-	}
+	ccid_slot_io_teardown(ccid, slot);
 
 	/*
 	 * Now that we've finished completely waiting for the logical I/O to be
@@ -2764,6 +2774,14 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 	slot->cs_icc.icc_protocols = sup;
 	slot->cs_icc.icc_cur_protocol = prot;
 
+	return (B_TRUE);
+}
+
+static boolean_t
+ccid_slot_prot_init(ccid_t *ccid, ccid_slot_t *slot)
+{
+	atr_protocol_t prot = slot->cs_icc.icc_cur_protocol;
+
 	ccid_slot_setup_functions(ccid, slot);
 
 	if (slot->cs_icc.icc_init != NULL) {
@@ -2799,8 +2817,93 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 	return (B_TRUE);
 }
 
+static int
+ccid_slot_power_on(ccid_t *ccid, ccid_slot_t *slot, ccid_class_voltage_t volts,
+    mblk_t **atr)
+{
+	int ret;
 
-static void
+	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
+
+	mutex_exit(&ccid->ccid_mutex);
+	if ((ret = ccid_command_power_on(ccid, slot, volts, atr))
+	    != 0) {
+		freemsg(*atr);
+
+		/*
+		 * If we got ENXIO, then we know that there is no CCID
+		 * present. This could happen for a number of reasons.
+		 * For example, we could have just started up and no
+		 * card was plugged in (we default to assuming that one
+		 * is). Also, some readers won't really tell us that
+		 * nothing is there until after the power on fails,
+		 * hence why we don't bother with doing a status check
+		 * and just try to power on.
+		 */
+		if (ret == ENXIO) {
+			mutex_enter(&ccid->ccid_mutex);
+			slot->cs_flags &= ~CCID_SLOT_F_PRESENT;
+			return (ret);
+		}
+
+		/*
+		 * If we fail to power off the card, check to make sure
+		 * it hasn't been removed.
+		 */
+		if (ccid_command_power_off(ccid, slot) == ENXIO) {
+			mutex_enter(&ccid->ccid_mutex);
+			slot->cs_flags &= ~CCID_SLOT_F_PRESENT;
+			return (ENXIO);
+		}
+
+		mutex_enter(&ccid->ccid_mutex);
+		return (ret);
+	}
+
+	if (!ccid_slot_params_init(ccid, slot, *atr)) {
+		ccid_error(ccid, "!failed to set slot paramters for ICC");
+		mutex_enter(&ccid->ccid_mutex);
+		return (ENOTSUP);
+	}
+
+	if (!ccid_slot_prot_init(ccid, slot)) {
+		ccid_error(ccid, "!failed to setup protocol for ICC");
+		mutex_enter(&ccid->ccid_mutex);
+		return (ENOTSUP);
+	}
+
+	mutex_enter(&ccid->ccid_mutex);
+	return (0);
+}
+
+static int
+ccid_slot_power_off(ccid_t *ccid, ccid_slot_t *slot)
+{
+	int ret;
+
+	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
+
+	ccid_slot_io_teardown(ccid, slot);
+
+	/*
+	 * Now that we've finished completely waiting for the logical I/O to be
+	 * torn down, try and power off the ICC.
+	 */
+	mutex_exit(&ccid->ccid_mutex);
+	ret = ccid_command_power_off(ccid, slot);
+	mutex_enter(&ccid->ccid_mutex);
+
+	if (ret != 0)
+		return (ret);
+
+	slot->cs_flags &= ~CCID_SLOT_F_ACTIVE;
+
+	ccid_slot_teardown(ccid, slot, B_TRUE);
+
+	return (ret);
+}
+
+static int
 ccid_slot_inserted(ccid_t *ccid, ccid_slot_t *slot)
 {
 	uint_t nvolts = 4;
@@ -2811,11 +2914,10 @@ ccid_slot_inserted(ccid_t *ccid, ccid_slot_t *slot)
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
 	if ((slot->cs_flags & CCID_SLOT_F_ACTIVE) != 0) {
-		return;
+		return (0);
 	}
 
 	slot->cs_flags |= CCID_SLOT_F_PRESENT;
-	mutex_exit(&ccid->ccid_mutex);
 
 	/*
 	 * Now, we need to activate this ccid device before we can do anything
@@ -2827,14 +2929,10 @@ ccid_slot_inserted(ccid_t *ccid, ccid_slot_t *slot)
 	 * What's less clear in the specification is if the Auto-Voltage
 	 * property is present is if we should try manual voltages or not. For
 	 * the moment we do.
-	 *
-	 * Also, don't forget to drop the lock while performing this I/O.
-	 * Nothing else should be able to access the ICC yet, as there is no
-	 * minor node present.
 	 */
 	if ((ccid->ccid_class.ccd_dwFeatures &
-	    (CCID_CLASS_F_AUTO_ICC_ACTIVATE | CCID_CLASS_F_AUTO_ICC_VOLTAGE)) ==
-	    0) {
+	    (CCID_CLASS_F_AUTO_ICC_ACTIVATE | CCID_CLASS_F_AUTO_ICC_VOLTAGE))
+	    == 0) {
 		/* Skip auto-voltage */
 		cvolt++;
 	}
@@ -2843,42 +2941,13 @@ ccid_slot_inserted(ccid_t *ccid, ccid_slot_t *slot)
 		int ret;
 
 		if (volts[cvolt] != CCID_CLASS_VOLT_AUTO &&
-		    (ccid->ccid_class.ccd_bVoltageSupport & volts[cvolt]) ==
-		    0) {
+		    (ccid->ccid_class.ccd_bVoltageSupport & volts[cvolt])
+		    == 0) {
 			continue;
 		}
 
-		if ((ret = ccid_command_power_on(ccid, slot, volts[cvolt],
-		    &atr)) != 0) {
-			freemsg(atr);
-			atr = NULL;
-
-			/*
-			 * If we got ENXIO, then we know that there is no CCID
-			 * present. This could happen for a number of reasons.
-			 * For example, we could have just started up and no
-			 * card was plugged in (we default to assuming that one
-			 * is). Also, some readers won't really tell us that
-			 * nothing is there until after the power on fails,
-			 * hence why we don't bother with doing a status check
-			 * and just try to power on.
-			 */
-			if (ret == ENXIO) {
-				mutex_enter(&ccid->ccid_mutex);
-				slot->cs_flags &= ~CCID_SLOT_F_PRESENT;
-				return;
-			}
-
-			/*
-			 * If we fail to power off the card, check to make sure
-			 * it hasn't been removed.
-			 */
-			ret = ccid_command_power_off(ccid, slot);
-			if (ret == ENXIO) {
-				mutex_enter(&ccid->ccid_mutex);
-				slot->cs_flags &= ~CCID_SLOT_F_PRESENT;
-				return;
-			}
+		if ((ret = ccid_slot_power_on(ccid, slot, volts[cvolt], &atr))
+		    != 0) {
 			continue;
 		}
 
@@ -2888,24 +2957,46 @@ ccid_slot_inserted(ccid_t *ccid, ccid_slot_t *slot)
 	if (cvolt >= nvolts) {
 		ccid_error(ccid, "!failed to activate and power on ICC, no "
 		    "supported voltages found");
-		freemsg(atr);
-		mutex_enter(&ccid->ccid_mutex);
-		return;
+		goto notsup;
 	}
-
-	if (!ccid_slot_params_init(ccid, slot, atr)) {
-		ccid_error(ccid, "!failed to set slot paramters for ICC");
-		freemsg(atr);
-		mutex_enter(&ccid->ccid_mutex);
-		ccid_slot_teardown(ccid, slot, B_FALSE);
-		return;
-	}
-
-	mutex_enter(&ccid->ccid_mutex);
 
 	slot->cs_voltage = volts[cvolt];
 	slot->cs_atr = atr;
 	slot->cs_flags |= CCID_SLOT_F_ACTIVE;
+
+	return (0);
+
+notsup:
+	freemsg(atr);
+	ccid_slot_teardown(ccid, slot, B_FALSE);
+	return (ENOTSUP);
+}
+
+static int
+ccid_slot_warm_reset(ccid_t *ccid, ccid_slot_t *slot)
+{
+	int ret;
+	mblk_t *atr;
+	ccid_class_voltage_t voltage;
+
+	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
+
+	ccid_slot_io_teardown(ccid, slot);
+
+	voltage = slot->cs_voltage;
+
+	ccid_slot_teardown(ccid, slot, B_FALSE);
+
+	ret = ccid_slot_power_on(ccid, slot, voltage, &atr);
+	if (ret != 0) {
+		freemsg(atr);
+		return (ret);
+	}
+
+	slot->cs_voltage = voltage;
+	slot->cs_atr = atr;
+
+	return (ret);
 }
 
 static boolean_t
@@ -2918,25 +3009,9 @@ ccid_slot_reset(ccid_t *ccid, ccid_slot_t *slot)
 	VERIFY(ccid->ccid_flags & CCID_F_WORKER_RUNNING);
 
 	/*
-	 * If there is outstanding user I/O, then we need to go ahead and take
-	 * care of that. Once this function returns, the user I/O will have been
-	 * dealt with; however, before we can tear down things, we need to make
-	 * sure that the logical I/O has been completed.
+	 * Power off the ICC. This will wait for logical I/O if needed.
 	 */
-	if (slot->cs_icc.icc_teardown != NULL) {
-		slot->cs_icc.icc_teardown(ccid, slot, ENXIO);
-	}
-
-	while ((slot->cs_flags & CCID_SLOT_F_NEED_IO_TEARDOWN) != 0) {
-		cv_wait(&slot->cs_io.ci_cv, &ccid->ccid_mutex);
-	}
-
-	/*
-	 * Now that we've finished this, try and power off the ICC.
-	 */
-	mutex_exit(&ccid->ccid_mutex);
-	ret = ccid_command_power_off(ccid, slot);
-	mutex_enter(&ccid->ccid_mutex);
+	ret = ccid_slot_power_off(ccid, slot);
 
 	/*
 	 * If we failed to power off the ICC because the ICC is removed, then
@@ -2952,10 +3027,6 @@ ccid_slot_reset(ccid_t *ccid, ccid_slot_t *slot)
 		    "taking another lap", ret);
 		return (B_FALSE);
 	}
-
-	slot->cs_flags &= ~CCID_SLOT_F_ACTIVE;
-
-	ccid_slot_teardown(ccid, slot, B_TRUE);
 
 	/*
 	 * Mimic a slot insertion to power this back on. Don't worry about
@@ -3013,7 +3084,7 @@ ccid_worker(void *arg)
 			if (flags & CCID_SLOT_F_INTR_GONE) {
 				ccid_slot_removed(ccid, slot, B_TRUE);
 			} else {
-				ccid_slot_inserted(ccid, slot);
+				(void) ccid_slot_inserted(ccid, slot);
 				if ((slot->cs_flags & CCID_SLOT_F_ACTIVE)
 				    != 0) {
 					ccid_slot_excl_maybe_signal(slot);
@@ -4946,9 +5017,10 @@ ccid_ioctl_fionread(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 }
 
 static int
-ccid_ioctl_icc_modify(ccid_slot_t *slot, intptr_t arg, int mode)
+ccid_ioctl_icc_modify(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
+    int mode)
 {
-	int ret;
+	int ret = 0;
 	uccid_cmd_icc_modify_t uci;
 	ccid_t *ccid;
 
@@ -4971,18 +5043,33 @@ ccid_ioctl_icc_modify(ccid_slot_t *slot, intptr_t arg, int mode)
 
 	ccid = slot->cs_ccid;
 	mutex_enter(&ccid->ccid_mutex);
-	if ((slot->cs_ccid->ccid_flags & CCID_F_DISCONNECTED) != 0) {
-		mutex_exit(&slot->cs_ccid->ccid_mutex);
+	if ((ccid->ccid_flags & CCID_F_DISCONNECTED) != 0) {
+		mutex_exit(&ccid->ccid_mutex);
 		return (ENODEV);
 	}
 
-	/*
-	 * XXX do something.
-	 */
+	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
+		mutex_exit(&ccid->ccid_mutex);
+		return (EACCES);
+	}
+
+	switch (uci.uci_action) {
+	case UCCID_ICC_WARM_RESET:
+		ret = ccid_slot_warm_reset(ccid, slot);
+		break;
+
+	case UCCID_ICC_POWER_OFF:
+		ret = ccid_slot_power_off(ccid, slot);
+		break;
+
+	case UCCID_ICC_POWER_ON:
+		ret = ccid_slot_inserted(ccid, slot);
+		break;
+	}
 
 	mutex_exit(&ccid->ccid_mutex);
 
-	return (ENOTSUP);
+	return (ret);
 }
 
 static int
@@ -5015,7 +5102,7 @@ ccid_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 	case FIONREAD:
 		return (ccid_ioctl_fionread(slot, cmp, arg, mode));
 	case UCCID_CMD_ICC_MODIFY:
-		return (ccid_ioctl_icc_modify(slot, arg, mode));
+		return (ccid_ioctl_icc_modify(slot, cmp, arg, mode));
 	default:
 		break;
 	}

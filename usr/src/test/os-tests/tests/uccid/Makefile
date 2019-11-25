@@ -26,6 +26,7 @@ PROGS =		\
 	excl-loop	\
 	excl-nonblock	\
 	excl-reset	\
+	modify		\
 	notxn-poll	\
 	status		\
 	pollin		\
