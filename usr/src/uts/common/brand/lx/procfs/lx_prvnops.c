@@ -3991,22 +3991,24 @@ lxpr_read_meminfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	 * model, so just inform the caller that no swap is being used.
 	 */
 	lxpr_uiobuf_printf(uiobuf,
-	    "MemTotal:  %8lu kB\n"
-	    "MemFree:   %8lu kB\n"
-	    "MemShared: %8u kB\n"
-	    "Buffers:   %8u kB\n"
-	    "Cached:    %8u kB\n"
-	    "SwapCached:%8u kB\n"
-	    "Active:    %8u kB\n"
-	    "Inactive:  %8u kB\n"
-	    "HighTotal: %8u kB\n"
-	    "HighFree:  %8u kB\n"
-	    "LowTotal:  %8u kB\n"
-	    "LowFree:   %8u kB\n"
-	    "SwapTotal: %8lu kB\n"
-	    "SwapFree:  %8lu kB\n",
+	    "MemTotal:       %8lu kB\n"
+	    "MemFree:        %8lu kB\n"
+	    "MemAvailable:   %8lu kB\n"
+	    "MemShared:      %8u kB\n"
+	    "Buffers:        %8u kB\n"
+	    "Cached:         %8u kB\n"
+	    "SwapCached:     %8u kB\n"
+	    "Active:         %8u kB\n"
+	    "Inactive:       %8u kB\n"
+	    "HighTotal:      %8u kB\n"
+	    "HighFree:       %8u kB\n"
+	    "LowTotal:       %8u kB\n"
+	    "LowFree:        %8u kB\n"
+	    "SwapTotal:      %8lu kB\n"
+	    "SwapFree:       %8lu kB\n",
 	    btok(total_mem),				/* MemTotal */
 	    btok(free_mem),				/* MemFree */
+	    btok(free_mem),				/* MemAvailable */
 	    0,						/* MemShared */
 	    0,						/* Buffers */
 	    0,						/* Cached */
