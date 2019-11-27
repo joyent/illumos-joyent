@@ -686,6 +686,7 @@ typedef enum ccid_flags {
 	CCID_F_DISCONNECTED	= 1 << 8
 } ccid_flags_t;
 
+#define	CCID_F_DEV_GONE_MASK	(CCID_F_DETACHING | CCID_F_DISCONNECTED)
 #define	CCID_F_WORKER_MASK	(CCID_F_WORKER_REQUESTED | \
     CCID_F_WORKER_RUNNING)
 #define	CCID_F_ICC_INIT_MASK	(CCID_F_NEEDS_PPS | CCID_F_NEEDS_PARAMS | \
@@ -1077,11 +1078,6 @@ ccid_slot_excl_req(ccid_slot_t *slot, ccid_minor_t *cmp, boolean_t nosleep)
 			cmp->cm_flags &= ~CCID_MINOR_F_WAITING;
 			return (ENODEV);
 		}
-
-		/*
-		 * XXX Waiting on a lock, need to reassert usability of device /
-		 * going awayness
-		 */
 	}
 
 	VERIFY0(slot->cs_flags & CCID_SLOT_F_NOEXCL_MASK);
@@ -1283,6 +1279,7 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 {
 	size_t mlen;
 	ccid_t *ccid;
+	ccid_slot_t *slot;
 	ccid_header_t cch;
 	ccid_command_t *cc;
 
@@ -1310,6 +1307,8 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 		usb_free_bulk_req(ubrp);
 		return;
 	}
+
+	slot = &ccid->ccid_slots[cc->cc_slot];
 
 	if (mlen >= sizeof (ccid_header_t)) {
 		bcopy(ubrp->bulk_data->b_rptr, &cch, sizeof (cch));
@@ -1352,13 +1351,13 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 	/*
 	 * If the sequence number doesn't match the head of the list then we
 	 * should be very suspect of the hardware at this point. At a minimum we
-	 * should fail this command, XXX
+	 * should fail this command and issue a reset.
 	 */
 	if (cch.ch_seq != cc->cc_seq) {
-		/*
-		 * XXX we should fail this command in a way to indicate that
-		 * this has happened and figure out how to clean up.
-		 */
+		ccid_command_state_transition(cc, CCID_COMMAND_CCID_ABORTED);
+		ccid_command_complete(cc);
+		slot->cs_flags |= CCID_SLOT_F_NEED_TXN_RESET;
+		ccid_worker_request(ccid);
 		mutex_exit(&ccid->ccid_mutex);
 		usb_free_bulk_req(ubrp);
 		return;
@@ -1366,12 +1365,13 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 
 	/*
 	 * Check that we have all the bytes that we were told we'd have. If we
-	 * don't, simulate this as an aborted command. XXX is this the right
-	 * thing to do?
+	 * don't, simulate this as an aborted command and issue a reset.
 	 */
 	if (LE_32(cch.ch_length) + sizeof (ccid_header_t) > mlen) {
 		ccid_command_state_transition(cc, CCID_COMMAND_CCID_ABORTED);
 		ccid_command_complete(cc);
+		slot->cs_flags |= CCID_SLOT_F_NEED_TXN_RESET;
+		ccid_worker_request(ccid);
 		mutex_exit(&ccid->ccid_mutex);
 		usb_free_bulk_req(ubrp);
 		return;
@@ -1382,14 +1382,6 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 	 * what the state of the command is. If the command indicates that more
 	 * time has been requested, then we need to schedule a new Bulk-IN
 	 * request.
-	 *
-	 * XXX Should we actually just always honor this and not check the
-	 * message type?
-	 *
-	 * XXX What about checking that the slot makes sense?
-	 *
-	 * XXX What about checking if the thing didn't post us all the bytes
-	 * that it said it would
 	 */
 	if (CCID_REPLY_STATUS(cch.ch_param0) == CCID_REPLY_STATUS_MORE_TIME) {
 		int ret;
@@ -1397,6 +1389,8 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 		ret = ccid_bulkin_schedule(ccid);
 		if (ret != USB_SUCCESS) {
 			ccid_command_transport_error(cc, ret, USB_CR_OK);
+			slot->cs_flags |= CCID_SLOT_F_NEED_TXN_RESET;
+			ccid_worker_request(ccid);
 		}
 		mutex_exit(&ccid->ccid_mutex);
 		usb_free_bulk_req(ubrp);
@@ -1543,7 +1537,7 @@ ccid_command_dispatch(ccid_t *ccid)
 	while ((cc = list_head(&ccid->ccid_command_queue)) != NULL) {
 		int ret;
 
-		if ((ccid->ccid_flags & CCID_F_DETACHING) != 0)
+		if ((ccid->ccid_flags & CCID_F_DEV_GONE_MASK) != 0)
 			return;
 
 		/*
@@ -1816,7 +1810,8 @@ ccid_command_poll(ccid_t *ccid, ccid_command_t *cc)
 	VERIFY0(cc->cc_flags & CCID_COMMAND_F_USER);
 
 	mutex_enter(&ccid->ccid_mutex);
-	while (cc->cc_state < CCID_COMMAND_COMPLETE) {
+	while ((cc->cc_state < CCID_COMMAND_COMPLETE) &&
+	    (ccid->ccid_flags & CCID_F_DEV_GONE_MASK) == 0) {
 		cv_wait(&cc->cc_cv, &ccid->ccid_mutex);
 	}
 
@@ -2913,6 +2908,10 @@ ccid_slot_inserted(ccid_t *ccid, ccid_slot_t *slot)
 	    CCID_CLASS_VOLT_5_0, CCID_CLASS_VOLT_3_0, CCID_CLASS_VOLT_1_8 };
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
+	if ((ccid->ccid_flags & CCID_F_DEV_GONE_MASK) != 0) {
+		return (0);
+	}
+
 	if ((slot->cs_flags & CCID_SLOT_F_ACTIVE) != 0) {
 		return (0);
 	}
@@ -3008,6 +3007,9 @@ ccid_slot_reset(ccid_t *ccid, ccid_slot_t *slot)
 	VERIFY(slot->cs_flags & CCID_SLOT_F_NEED_TXN_RESET);
 	VERIFY(ccid->ccid_flags & CCID_F_WORKER_RUNNING);
 
+	if (ccid->ccid_flags & CCID_F_DEV_GONE_MASK)
+		return (B_TRUE);
+
 	/*
 	 * Power off the ICC. This will wait for logical I/O if needed.
 	 */
@@ -3024,7 +3026,7 @@ ccid_slot_reset(ccid_t *ccid, ccid_slot_t *slot)
 
 	if (ret != 0) {
 		ccid_error(ccid, "!failed to reset slot %d for next txn: %d; "
-		    "taking another lap", ret);
+		    "taking another lap", slot->cs_slotno, ret);
 		return (B_FALSE);
 	}
 
@@ -3053,11 +3055,6 @@ ccid_worker(void *arg)
 	mutex_enter(&ccid->ccid_mutex);
 	ccid->ccid_stats.cst_ndiscover++;
 	ccid->ccid_stats.cst_lastdiscover = gethrtime();
-	if ((ccid->ccid_flags & CCID_F_DETACHING) != 0) {
-		ccid->ccid_flags &= ~CCID_F_WORKER_MASK;
-		mutex_exit(&ccid->ccid_mutex);
-		return;
-	}
 	ccid->ccid_flags |= CCID_F_WORKER_RUNNING;
 	ccid->ccid_flags &= ~CCID_F_WORKER_REQUESTED;
 
@@ -3069,6 +3066,12 @@ ccid_worker(void *arg)
 		boolean_t skip_reset;
 
 		VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
+
+		if ((ccid->ccid_flags & CCID_F_DEV_GONE_MASK) != 0) {
+			ccid->ccid_flags &= ~CCID_F_WORKER_MASK;
+			mutex_exit(&ccid->ccid_mutex);
+			return;
+		}
 
 		/*
 		 * Snapshot the flags before we start processing the worker. At
@@ -3110,8 +3113,8 @@ ccid_worker(void *arg)
 			VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
 			slot->cs_flags &= ~CCID_SLOT_F_NEED_TXN_RESET;
 			/*
-			 * XXX The signaling in all of this worker logic makes
-			 * no sense.
+			 * Try to signal the next thread waiting for exclusive
+			 * access.
 			 */
 			ccid_slot_excl_maybe_signal(slot);
 		}
@@ -3128,7 +3131,8 @@ ccid_worker(void *arg)
 	}
 
 	ccid->ccid_flags &= ~CCID_F_WORKER_RUNNING;
-	if ((ccid->ccid_flags & CCID_F_DETACHING) != 0) {
+	if ((ccid->ccid_flags & CCID_F_DEV_GONE_MASK) != 0) {
+		ccid->ccid_flags &= ~CCID_F_WORKER_REQUESTED;
 		mutex_exit(&ccid->ccid_mutex);
 		return;
 	}
@@ -3146,7 +3150,7 @@ ccid_worker_request(ccid_t *ccid)
 	boolean_t run;
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
-	if ((ccid->ccid_flags & CCID_F_DETACHING) != 0) {
+	if ((ccid->ccid_flags & CCID_F_DEV_GONE_MASK) != 0) {
 		return;
 	}
 
@@ -3166,7 +3170,7 @@ ccid_intr_restart_timeout(void *arg)
 	ccid_t *ccid = arg;
 
 	mutex_enter(&ccid->ccid_mutex);
-	if ((ccid->ccid_flags & CCID_F_DETACHING) != 0) {
+	if ((ccid->ccid_flags & CCID_F_DEV_GONE_MASK) != 0) {
 		ccid->ccid_poll_timeout = NULL;
 		mutex_exit(&ccid->ccid_mutex);
 	}
@@ -3584,7 +3588,7 @@ ccid_intr_poll_init(ccid_t *ccid)
 	uirp->intr_exc_cb = ccid_intr_pipe_except_cb;
 
 	mutex_enter(&ccid->ccid_mutex);
-	if (ccid->ccid_flags & CCID_F_DETACHING) {
+	if (ccid->ccid_flags & CCID_F_DEV_GONE_MASK) {
 		mutex_exit(&ccid->ccid_mutex);
 		usb_free_intr_req(uirp);
 		return;
@@ -3637,10 +3641,6 @@ ccid_disconnect_cb(dev_info_t *dip)
 		goto done;
 	VERIFY3P(dip, ==, ccid->ccid_dip);
 
-	/*
-	 * XXX We need to check this and throw errors throughout, throw out
-	 * poll, etc.
-	 */
 	mutex_enter(&ccid->ccid_mutex);
 	/*
 	 * First, set the disconnected flag. This will make sure that anyone
@@ -4046,6 +4046,14 @@ ccid_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 	}
 
 	slot = idx->cmi_data.cmi_slot;
+
+	mutex_enter(&slot->cs_ccid->ccid_mutex);
+	if ((slot->cs_ccid->ccid_flags & CCID_F_DISCONNECTED) != 0) {
+		mutex_exit(&slot->cs_ccid->ccid_mutex);
+		return (ENODEV);
+	}
+	mutex_exit(&slot->cs_ccid->ccid_mutex);
+
 	cmp = kmem_zalloc(sizeof (ccid_minor_t), KM_SLEEP);
 
 	cmp->cm_idx.cmi_minor = CCID_MINOR_INVALID;
@@ -4480,12 +4488,11 @@ ccid_complete_apdu(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 	/*
 	 * Process this command and figure out what we should logically be
 	 * returning to the user.
-	 *
-	 * XXX If the command did not complete successfully, then we need to
-	 * request that the slot be reset.
 	 */
 	if (cc->cc_state != CCID_COMMAND_COMPLETE) {
 		slot->cs_io.ci_errno = EIO;
+		slot->cs_flags |= CCID_SLOT_F_NEED_TXN_RESET;
+		ccid_worker_request(ccid);
 		goto consume;
 	}
 
@@ -4839,15 +4846,10 @@ ccid_ioctl_status(ccid_slot_t *slot, intptr_t arg, int mode)
 		return (EINVAL);
 
 	ucs.ucs_status = 0;
-	mutex_enter(&slot->cs_ccid->ccid_mutex);
-	if ((slot->cs_ccid->ccid_flags & CCID_F_DISCONNECTED) != 0) {
-		mutex_exit(&slot->cs_ccid->ccid_mutex);
-		return (ENODEV);
-	}
-
 	ucs.ucs_instance = ddi_get_instance(slot->cs_ccid->ccid_dip);
 	ucs.ucs_slot = slot->cs_slotno;
 
+	mutex_enter(&slot->cs_ccid->ccid_mutex);
 	if ((slot->cs_flags & CCID_SLOT_F_PRESENT) != 0)
 		ucs.ucs_status |= UCCID_STATUS_F_CARD_PRESENT;
 	if ((slot->cs_flags & CCID_SLOT_F_ACTIVE) != 0)
@@ -4911,10 +4913,6 @@ ccid_ioctl_txn_begin(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 	nowait = (uct.uct_flags & UCCID_TXN_DONT_BLOCK) != 0;
 
 	mutex_enter(&slot->cs_ccid->ccid_mutex);
-	if ((slot->cs_ccid->ccid_flags & CCID_F_DISCONNECTED) != 0) {
-		mutex_exit(&slot->cs_ccid->ccid_mutex);
-		return (ENODEV);
-	}
 	ret = ccid_slot_excl_req(slot, cmp, nowait);
 	mutex_exit(&slot->cs_ccid->ccid_mutex);
 
@@ -4950,11 +4948,6 @@ ccid_ioctl_txn_end(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
 	}
 
 	mutex_enter(&slot->cs_ccid->ccid_mutex);
-	if ((slot->cs_ccid->ccid_flags & CCID_F_DISCONNECTED) != 0) {
-		mutex_exit(&slot->cs_ccid->ccid_mutex);
-		return (ENODEV);
-	}
-
 	if (slot->cs_excl_minor != cmp) {
 		mutex_exit(&slot->cs_ccid->ccid_mutex);
 		return (EINVAL);
@@ -4977,11 +4970,6 @@ ccid_ioctl_fionread(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 	int data;
 
 	mutex_enter(&slot->cs_ccid->ccid_mutex);
-	if ((slot->cs_ccid->ccid_flags & CCID_F_DISCONNECTED) != 0) {
-		mutex_exit(&slot->cs_ccid->ccid_mutex);
-		return (ENODEV);
-	}
-
 	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
 		mutex_exit(&slot->cs_ccid->ccid_mutex);
 		return (EACCES);
@@ -5043,11 +5031,6 @@ ccid_ioctl_icc_modify(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 
 	ccid = slot->cs_ccid;
 	mutex_enter(&ccid->ccid_mutex);
-	if ((ccid->ccid_flags & CCID_F_DISCONNECTED) != 0) {
-		mutex_exit(&ccid->ccid_mutex);
-		return (ENODEV);
-	}
-
 	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
 		mutex_exit(&ccid->ccid_mutex);
 		return (EACCES);
@@ -5092,6 +5075,13 @@ ccid_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 	cmp = idx->cmi_data.cmi_user;
 	slot = cmp->cm_slot;
 
+	mutex_enter(&slot->cs_ccid->ccid_mutex);
+	if ((slot->cs_ccid->ccid_flags & CCID_F_DISCONNECTED) != 0) {
+		mutex_exit(&slot->cs_ccid->ccid_mutex);
+		return (ENODEV);
+	}
+	mutex_exit(&slot->cs_ccid->ccid_mutex);
+
 	switch (cmd) {
 	case UCCID_CMD_TXN_BEGIN:
 		return (ccid_ioctl_txn_begin(slot, cmp, arg, mode));
@@ -5129,9 +5119,6 @@ ccid_chpoll(dev_t dev, short events, int anyyet, short *reventsp,
 		return (ENXIO);
 	}
 
-	/*
-	 * First tear down the global index entry.
-	 */
 	cmp = idx->cmi_data.cmi_user;
 	slot = cmp->cm_slot;
 	ccid = slot->cs_ccid;
