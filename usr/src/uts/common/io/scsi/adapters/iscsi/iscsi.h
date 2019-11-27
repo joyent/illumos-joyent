@@ -22,7 +22,7 @@
 /*
  * Copyright 2000 by Cisco Systems, Inc.  All rights reserved.
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014-2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _ISCSI_H
@@ -385,7 +385,7 @@ typedef enum iscsi_cmd_text_stage {
 #define	ISCSI_CMD_MISCFLAG_INTERNAL	0x1
 #define	ISCSI_CMD_MISCFLAG_FREE		0x2
 #define	ISCSI_CMD_MISCFLAG_STUCK	0x4
-#define	ISCSI_CMD_MISCFLAG_XARQ 	0x8
+#define	ISCSI_CMD_MISCFLAG_XARQ		0x8
 #define	ISCSI_CMD_MISCFLAG_SENT		0x10
 #define	ISCSI_CMD_MISCFLAG_FLUSH	0x20
 
@@ -549,6 +549,8 @@ typedef struct iscsi_lun {
 	uchar_t			lun_pid[ISCSI_INQ_PID_BUF_LEN];	/* Product ID */
 
 	uchar_t			lun_type;
+	kmutex_t		lun_mutex;
+	int			lun_refcnt;
 } iscsi_lun_t;
 
 #define	ISCSI_LUN_STATE_CLEAR	    0		/* used to clear all states */
@@ -1174,7 +1176,7 @@ typedef struct iscsi_hba {
 	 *	  - need to be exclusive
 	 *
 	 * The service has three status:
-	 * 	ISCSI_SERVICE_ENABLED	 -	client is permitted to
+	 *	ISCSI_SERVICE_ENABLED	 -	client is permitted to
 	 *				 -	request service
 	 *
 	 *	ISCSI_SERVICE_DISABLED	 -	client is not permitted to
@@ -1266,6 +1268,7 @@ void iscsi_enqueue_cmd_head(iscsi_cmd_t **, iscsi_cmd_t **,
     iscsi_cmd_t *);
 
 /* iscsi_login.c */
+void iscsi_login_cb(void *arg);
 iscsi_status_t iscsi_login_start(void *arg);
 void iscsi_login_update_state(iscsi_conn_t *icp,
     iscsi_login_state_t next_state);
@@ -1327,8 +1330,9 @@ void iscsi_conn_update_state_locked(iscsi_conn_t *icp,
 /* iscsi_lun.c */
 iscsi_status_t iscsi_lun_create(iscsi_sess_t *isp, uint16_t lun_num,
     uint8_t lun_addr_type, struct scsi_inquiry *inq, char *guid);
-iscsi_status_t iscsi_lun_destroy(iscsi_hba_t *ihp,
-    iscsi_lun_t *ilp);
+void iscsi_lun_hold(iscsi_lun_t *ilp);
+void iscsi_lun_rele(iscsi_lun_t *ilp);
+iscsi_status_t iscsi_lun_destroy(iscsi_hba_t *ihp, iscsi_lun_t *ilp);
 void iscsi_lun_online(iscsi_hba_t *ihp,
     iscsi_lun_t *ilp);
 iscsi_status_t iscsi_lun_offline(iscsi_hba_t *ihp,

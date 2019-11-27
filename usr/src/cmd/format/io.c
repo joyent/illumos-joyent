@@ -38,6 +38,7 @@
 #include <sys/tty.h>
 #include <sys/termio.h>
 #include <sys/termios.h>
+#include <sys/efi_partition.h>
 
 #include "startup.h"
 #include "misc.h"
@@ -1556,8 +1557,11 @@ or g(gigabytes)\n");
 		 * either blocks/cyls/megabytes - a convenient fiction.
 		 */
 		if (strcmp(cleantoken, WILD_STRING) == 0) {
-			return (bounds->upper - EFI_MIN_RESV_SIZE -
-			    efi_deflt->start_sector);
+			uint64_t reserved;
+
+			reserved = efi_reserved_sectors(cur_parts->etoc);
+			return (bounds->upper - reserved -
+			    efi_deflt->start_sector + 1);
 		}
 
 		/*
