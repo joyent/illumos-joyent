@@ -555,12 +555,13 @@ typedef enum ccid_slot_flags {
 	CCID_SLOT_F_ACTIVE		= 1 << 4,
 	CCID_SLOT_F_NEED_TXN_RESET	= 1 << 5,
 	CCID_SLOT_F_NEED_IO_TEARDOWN	= 1 << 6,
+	CCID_SLOT_F_INTR_OVERCURRENT	= 1 << 7,
 } ccid_slot_flags_t;
 
 #define	CCID_SLOT_F_INTR_MASK	(CCID_SLOT_F_CHANGED | CCID_SLOT_F_INTR_GONE | \
     CCID_SLOT_F_INTR_ADD)
 #define	CCID_SLOT_F_WORK_MASK	(CCID_SLOT_F_INTR_MASK | \
-    CCID_SLOT_F_NEED_TXN_RESET)
+    CCID_SLOT_F_NEED_TXN_RESET | CCID_SLOT_F_INTR_OVERCURRENT)
 #define	CCID_SLOT_F_NOEXCL_MASK	(CCID_SLOT_F_NEED_TXN_RESET | \
     CCID_SLOT_F_NEED_IO_TEARDOWN)
 
@@ -2165,12 +2166,35 @@ done:
 }
 
 static void
+ccid_hw_error(ccid_t *ccid, ccid_intr_hwerr_t *hwerr)
+{
+	ccid_slot_t *slot;
+
+	/* Make sure the slot number is within range. */
+	if (hwerr->cih_slot >= ccid->ccid_nslots)
+		return;
+
+	slot = &ccid->ccid_slots[hwerr->cih_slot];
+
+	/* The only error condition defined by the spec is overcurrent. */
+	if (hwerr->cih_code != CCID_INTR_HWERR_OVERCURRENT)
+		return;
+
+	/*
+	 * The worker thread will take care of this situation.
+	 */
+	slot->cs_flags |= CCID_SLOT_F_INTR_OVERCURRENT;
+	ccid_worker_request(ccid);
+}
+
+static void
 ccid_intr_pipe_cb(usb_pipe_handle_t ph, usb_intr_req_t *uirp)
 {
 	mblk_t *mp;
 	size_t msglen, explen;
 	uint_t i;
 	boolean_t change;
+	ccid_intr_hwerr_t ccid_hwerr;
 	ccid_t *ccid = (ccid_t *)uirp->intr_client_private;
 
 	mp = uirp->intr_data;
@@ -2229,7 +2253,9 @@ ccid_intr_pipe_cb(usb_pipe_handle_t ph, usb_intr_req_t *uirp)
 			goto done;
 		}
 
-		/* XXX what should we do with this? */
+		bcopy(mp->b_rptr, &ccid_hwerr, sizeof (ccid_intr_hwerr_t));
+		ccid_hw_error(ccid, &ccid_hwerr);
+
 		mutex_exit(&ccid->ccid_mutex);
 		break;
 	default:
@@ -2313,6 +2339,26 @@ ccid_slot_io_teardown(ccid_t *ccid, ccid_slot_t *slot)
 }
 
 /*
+ * The given CCID slot has been inactivated. Clean up.
+ */
+static void
+ccid_slot_inactive(ccid_t *ccid, ccid_slot_t *slot)
+{
+	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
+
+	slot->cs_flags &= ~CCID_SLOT_F_ACTIVE;
+
+	ccid_slot_io_teardown(ccid, slot);
+
+	/*
+	 * Now that we've finished completely waiting for the logical I/O to be
+	 * torn down, it's safe for us to proceed with the rest of the needed
+	 * tear down.
+	 */
+	ccid_slot_teardown(ccid, slot, B_TRUE);
+}
+
+/*
  * The given CCID slot has been removed. Clean up.
  */
 static void
@@ -2328,17 +2374,8 @@ ccid_slot_removed(ccid_t *ccid, ccid_slot_t *slot, boolean_t notify)
 	 * This slot is gone, mark the flags accordingly.
 	 */
 	slot->cs_flags &= ~CCID_SLOT_F_PRESENT;
-	slot->cs_flags &= ~CCID_SLOT_F_ACTIVE;
 
-
-	ccid_slot_io_teardown(ccid, slot);
-
-	/*
-	 * Now that we've finished completely waiting for the logical I/O to be
-	 * torn down, it's safe for us to proceed with the rest of the needed
-	 * tear down.
-	 */
-	ccid_slot_teardown(ccid, slot, B_TRUE);
+	ccid_slot_inactive(ccid, slot);
 }
 
 static boolean_t
@@ -2891,9 +2928,7 @@ ccid_slot_power_off(ccid_t *ccid, ccid_slot_t *slot)
 	if (ret != 0)
 		return (ret);
 
-	slot->cs_flags &= ~CCID_SLOT_F_ACTIVE;
-
-	ccid_slot_teardown(ccid, slot, B_TRUE);
+	ccid_slot_inactive(ccid, slot);
 
 	return (ret);
 }
@@ -3082,6 +3117,10 @@ ccid_worker(void *arg)
 		 */
 		flags = slot->cs_flags & CCID_SLOT_F_WORK_MASK;
 		slot->cs_flags &= ~CCID_SLOT_F_INTR_MASK;
+
+		if ((flags & CCID_SLOT_F_INTR_OVERCURRENT) != 0) {
+			ccid_slot_inactive(ccid, slot);
+		}
 
 		if ((flags & CCID_SLOT_F_CHANGED) != 0) {
 			if (flags & CCID_SLOT_F_INTR_GONE) {
