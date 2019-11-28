@@ -755,6 +755,7 @@ typedef struct ccid_command {
 	list_node_t		cc_list_node;
 	kcondvar_t		cc_cv;
 	uint8_t			cc_mtype;
+	ccid_response_code_t	cc_rtype;
 	uint8_t			cc_slot;
 	ccid_command_state_t	cc_state;
 	ccid_command_flags_t	cc_flags;
@@ -1350,11 +1351,14 @@ ccid_reply_bulk_cb(usb_pipe_handle_t ph, usb_bulk_req_t *ubrp)
 	}
 
 	/*
-	 * If the sequence number doesn't match the head of the list then we
-	 * should be very suspect of the hardware at this point. At a minimum we
-	 * should fail this command and issue a reset.
+	 * If the sequence or slot number don't match the head of the list or
+	 * the response type is unexpected for this command then we should be
+	 * very suspect of the hardware at this point. At a minimum we should
+	 * fail this command and issue a reset.
 	 */
-	if (cch.ch_seq != cc->cc_seq) {
+	if (cch.ch_seq != cc->cc_seq ||
+	    cch.ch_slot != cc->cc_slot ||
+	    cch.ch_mtype != cc->cc_rtype) {
 		ccid_command_state_transition(cc, CCID_COMMAND_CCID_ABORTED);
 		ccid_command_complete(cc);
 		slot->cs_flags |= CCID_SLOT_F_NEED_TXN_RESET;
@@ -1707,6 +1711,7 @@ ccid_command_alloc(ccid_t *ccid, ccid_slot_t *slot, boolean_t block,
 	int kmflag, usbflag;
 	ccid_command_t *cc;
 	ccid_header_t *cchead;
+	ccid_response_code_t rtype;
 
 	switch (mtype) {
 	case CCID_REQUEST_POWER_ON:
@@ -1726,6 +1731,39 @@ ccid_command_alloc(ccid_t *ccid, ccid_slot_t *slot, boolean_t block,
 	case CCID_REQUEST_SECURE:
 	case CCID_REQUEST_SET_PARAMS:
 	case CCID_REQUEST_DATA_CLOCK:
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	switch (mtype) {
+	case CCID_REQUEST_POWER_ON:
+	case CCID_REQUEST_SECURE:
+	case CCID_REQUEST_TRANSFER_BLOCK:
+		rtype = CCID_RESPONSE_DATA_BLOCK;
+		break;
+
+	case CCID_REQUEST_POWER_OFF:
+	case CCID_REQUEST_SLOT_STATUS:
+	case CCID_REQUEST_ICC_CLOCK:
+	case CCID_REQUEST_T0APDU:
+	case CCID_REQUEST_MECHANICAL:
+	case CCID_REQEUST_ABORT:
+		rtype = CCID_RESPONSE_SLOT_STATUS;
+		break;
+
+	case CCID_REQUEST_GET_PARAMS:
+	case CCID_REQUEST_RESET_PARAMS:
+	case CCID_REQUEST_SET_PARAMS:
+		rtype = CCID_RESPONSE_PARAMETERS;
+		break;
+
+	case CCID_REQUEST_ESCAPE:
+		rtype = CCID_RESPONSE_ESCAPE;
+		break;
+
+	case CCID_REQUEST_DATA_CLOCK:
+		rtype = CCID_RESPONSE_DATA_CLOCK;
 		break;
 	default:
 		return (EINVAL);
@@ -1763,6 +1801,7 @@ ccid_command_alloc(ccid_t *ccid, ccid_slot_t *slot, boolean_t block,
 	list_link_init(&cc->cc_list_node);
 	cv_init(&cc->cc_cv, NULL, CV_DRIVER, NULL);
 	cc->cc_mtype = mtype;
+	cc->cc_rtype = rtype;
 	cc->cc_slot = slot->cs_slotno;
 	cc->cc_reqlen = datasz;
 	cc->cc_ccid = ccid;
@@ -1916,8 +1955,7 @@ ccid_command_power_on(ccid_t *ccid, ccid_slot_t *cs, ccid_class_voltage_t volt,
 	}
 
 	/*
-	 * XXX Assume slot and message type logic is being done for us. Look for
-	 * a few specific errors here:
+	 * Look for a few specific errors here:
 	 *
 	 * - ICC_MUTE via a few potential ways
 	 * - Bad voltage
