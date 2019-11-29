@@ -14,7 +14,8 @@
  */
 
 /*
- * Open up a device and make sure we get pollout by default.
+ * Open a YubiKey class device and get the basic information applet
+ * through an APDU while using poll(2) to check device readyness.
  */
 
 #include <err.h>
@@ -29,12 +30,17 @@
 
 #include <sys/usb/clients/ccid/uccid.h>
 
+static const uint8_t yk_req[] = {
+	0x00, 0xa4, 0x04, 0x00, 0x07, 0xa0, 0x00, 0x00, 0x05, 0x27, 0x20, 0x01
+};
+
 int
 main(int argc, char *argv[])
 {
 	int fd, ret;
 	struct pollfd pfds[1];
 	uccid_cmd_txn_begin_t begin;
+	uint8_t buf[UCCID_APDU_SIZE_MAX];
 
 	if (argc != 2) {
 		errx(EXIT_FAILURE, "missing required ccid path");
@@ -51,7 +57,7 @@ main(int argc, char *argv[])
 	}
 
 	pfds[0].fd = fd;
-	pfds[0].events = POLLOUT;
+	pfds[0].events = POLLOUT | POLLIN | POLLRDNORM;
 	pfds[0].revents = 0;
 
 	ret = poll(pfds, 1, 0);
@@ -60,8 +66,42 @@ main(int argc, char *argv[])
 		    "(errno %d)", ret, errno);
 	}
 
-	if (!(pfds[0].revents & POLLOUT)) {
-		err(EXIT_FAILURE, "missing pollout, got %d", pfds[0].revents);
+	if ((pfds[0].revents & POLLOUT) != POLLOUT) {
+		err(EXIT_FAILURE, "expecting pollout, got %d", pfds[0].revents);
+	}
+
+	if ((ret = write(fd, yk_req, sizeof (yk_req))) < 0) {
+		err(EXIT_FAILURE, "failed to write data");
+	}
+
+	pfds[0].revents = 0;
+
+	ret = poll(pfds, 1, -1);
+	if (ret != 1) {
+		err(EXIT_FAILURE, "poll didn't return 1, returned %d "
+		    "(errno %d)", ret, errno);
+	}
+
+	if ((pfds[0].revents & (POLLIN | POLLRDNORM)) !=
+	    (POLLIN | POLLRDNORM)) {
+		err(EXIT_FAILURE, "expecting pollin|pollrdnorm, got %d",
+		    pfds[0].revents);
+	}
+
+	if ((ret = read(fd, buf, sizeof (buf))) < 0) {
+		err(EXIT_FAILURE, "failed to read data");
+	}
+
+	pfds[0].revents = 0;
+
+	ret = poll(pfds, 1, 0);
+	if (ret != 1) {
+		err(EXIT_FAILURE, "poll didn't return 1, returned %d "
+		    "(errno %d)", ret, errno);
+	}
+
+	if ((pfds[0].revents & POLLOUT) != POLLOUT) {
+		err(EXIT_FAILURE, "expecting pollout, got %d", pfds[0].revents);
 	}
 
 	return (0);

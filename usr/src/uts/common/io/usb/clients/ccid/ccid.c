@@ -1104,11 +1104,17 @@ static void
 ccid_slot_pollin_signal(ccid_slot_t *slot)
 {
 	ccid_t *ccid = slot->cs_ccid;
-	ccid_minor_t *cmp;
+	ccid_minor_t *cmp = slot->cs_excl_minor;
+
+	if (cmp == NULL)
+		return;
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
 
-	/* XXX */
+	if ((slot->cs_io.ci_flags & CCID_IO_F_DONE) == 0)
+		return;
+
+	pollwakeup(&cmp->cm_pollhead, POLLIN | POLLRDNORM);
 }
 
 /*
@@ -1127,11 +1133,20 @@ static void
 ccid_slot_pollout_signal(ccid_slot_t *slot)
 {
 	ccid_t *ccid = slot->cs_ccid;
-	ccid_minor_t *cmp;
+	ccid_minor_t *cmp = slot->cs_excl_minor;
+
+	if (cmp == NULL)
+		return;
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
 
-	/* XXX */
+	if ((slot->cs_io.ci_flags & CCID_IO_F_POLLOUT_FLAGS) != 0 ||
+	    (slot->cs_flags & CCID_SLOT_F_ACTIVE) == 0 ||
+	    (ccid->ccid_flags & CCID_F_DEV_GONE_MASK) != 0 ||
+	    (slot->cs_flags & CCID_SLOT_F_NEED_IO_TEARDOWN) != 0)
+		return;
+
+	pollwakeup(&cmp->cm_pollhead, POLLOUT);
 }
 
 static void
@@ -1143,10 +1158,7 @@ ccid_slot_io_teardown_done(ccid_slot_t *slot)
 	slot->cs_flags &= ~CCID_SLOT_F_NEED_IO_TEARDOWN;
 	cv_broadcast(&slot->cs_io.ci_cv);
 
-	/*
-	 * XXX Check if we're in a state where we should signal pollout, as we
-	 * might be.
-	 */
+	ccid_slot_pollout_signal(slot);
 }
 
 /*
@@ -3036,6 +3048,8 @@ ccid_slot_inserted(ccid_t *ccid, ccid_slot_t *slot)
 	slot->cs_atr = atr;
 	slot->cs_flags |= CCID_SLOT_F_ACTIVE;
 
+	ccid_slot_pollout_signal(slot);
+
 	return (0);
 
 notsup:
@@ -3762,10 +3776,8 @@ ccid_disconnect_cb(dev_info_t *dip)
 	}
 
 	/*
-	 * XXX If there are outstanding commands, they should ultimately be
-	 * cleaned up as the USB commands themselves time out. It's not clear
-	 * that we need to clean them up ourselves or how all those callbacks
-	 * will function exactly.
+	 * If there are outstanding commands, they will ultimately be cleaned
+	 * up as the USB commands themselves time out.
 	 */
 	mutex_exit(&ccid->ccid_mutex);
 
@@ -4195,7 +4207,7 @@ ccid_user_io_done(ccid_t *ccid, ccid_slot_t *slot)
 	slot->cs_io.ci_flags |= CCID_IO_F_DONE;
 	cmp = slot->cs_excl_minor;
 	if (cmp != NULL) {
-		pollwakeup(&cmp->cm_pollhead, POLLIN | POLLRDNORM);
+		ccid_slot_pollin_signal(slot);
 		cv_signal(&cmp->cm_read_cv);
 	}
 }
@@ -4549,11 +4561,6 @@ ccid_complete_apdu(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 	 * longer present, but we still have outstanding work to do in the
 	 * stack. As such, we need to go through and check if the flag was set
 	 * on the slot during teardown and if so, clean it up now.
-	 *
-	 * XXX Once this is done, we may be able to proceed with I/O depending
-	 * on what else is happening. So signal that fact or at least check.
-	 * This needs to do more than just signal on a CV, we may need to do
-	 * various POLL activities.
 	 */
 	if ((slot->cs_flags & CCID_SLOT_F_NEED_IO_TEARDOWN) != 0) {
 		ccid_command_free(cc);
@@ -4777,7 +4784,7 @@ ccid_read(dev_t dev, struct uio *uiop, cred_t *credp)
 
 	if (done) {
 		ccid_clear_io(&slot->cs_io);
-		/* XXX Signal next write may be able to happen at this point */
+		ccid_slot_pollout_signal(slot);
 	}
 
 	mutex_exit(&ccid->ccid_mutex);
@@ -4888,14 +4895,8 @@ ccid_write(dev_t dev, struct uio *uiop, cred_t *credp)
 		slot->cs_io.ci_ilen = 0;
 		bzero(slot->cs_io.ci_ibuf, sizeof (slot->cs_io.ci_ibuf));
 		slot->cs_io.ci_flags &= ~CCID_IO_F_PREPARING;
-		/*
-		 * XXX We should be checking more conditions then just this. We
-		 * don't want to signal, if for example, we're disconnected, or
-		 * we're going to end up going away, etc.
-		 */
-		if (slot->cs_excl_minor != NULL) {
-			pollwakeup(&slot->cs_excl_minor->cm_pollhead, POLLOUT);
-		}
+
+		ccid_slot_pollout_signal(slot);
 	} else {
 		slot->cs_io.ci_flags &= ~CCID_IO_F_PREPARING;
 		slot->cs_io.ci_flags |= CCID_IO_F_IN_PROGRESS;
@@ -5217,11 +5218,9 @@ ccid_chpoll(dev_t dev, short events, int anyyet, short *reventsp,
 	 */
 	if ((slot->cs_io.ci_flags & CCID_IO_F_DONE) != 0) {
 		ready |= POLLIN | POLLRDNORM;
-	} else if ((slot->cs_io.ci_flags & CCID_IO_F_POLLOUT_FLAGS) == 0) {
-		/*
-		 * XXX This isn't quite true, as we need to consider other
-		 * states of the device, ICC present, etc.
-		 */
+	} else if ((slot->cs_io.ci_flags & CCID_IO_F_POLLOUT_FLAGS) == 0 &&
+	    (slot->cs_flags & CCID_SLOT_F_ACTIVE) != 0 &&
+	    slot->cs_icc.icc_tx != NULL) {
 		ready |= POLLOUT;
 	}
 
