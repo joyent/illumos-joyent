@@ -350,81 +350,6 @@
  *   cleaned up during detach(9E) as part of normal tear down.
  */
 
-/*
- * Various XXX:
- *
- * o If reader says that the ICC became shut down / disactivated. Should we
- * explicitly reactivate it as part of something or just make that a future
- * error?
- *  - Should we provide an ioctl to try to reactivate?
- *
- * o There is a series of edge cases that we need to handle with both read /
- *   write. These include:
- *
- *   + I/O in flight when end transaction occurs
- *       o Quiesce the I/O (may involve reset and abort) from a kernel
- *         perspective
- *       o Hand off to next transaction only when above is complete
- *       o POLLERR should signaled on the minor's pollhead
- *   + I/O in flight when ICC is removed
- *       o Quiesce the I/O from a kernel perspective
- *       o End the I/O with an ENXIO (maybe ECONNRESET?) from a user perspective
- *       o Kernel worker thread should block on kernel clean up, but not user
- *         consumption. We should not call into rx function to try and consume /
- *         clean up. It should get cleaned up by other functions.
- *       o POLLOUT is not signalled until both I/O is consumed and new ICC is
- *         present
- *       o POLLIN | POLLHUP should be signaled
- *   + I/O in flight when reader is removed
- *       o Ensure that I/O is quiesced from a kernel perspective, nothing should
- *         be queued for user
- *       o POLLERR | POLLHUP should be signaled to tell the user that this I/O
- *         is not coming back.
- *   + Blocked in read when an end transaction occurs
- *       o Quiesce the I/O (may involve reset and abort) form a kernel
- *         perspective
- *       o Signal and wake up the thread blocked in read(), it should get
- *         ECANCELED
- *       o Don't allow the transaction hand off to progress until read thread is
- *         gone
- *       o Follow all of the I/O in flight when transaction ends steps
- *   + Blocked in read when an ICC is removed
- *       o follow all I/O in flight when ICC is removed steps
- *       o Signal and wake up the thread blocked in read() to get the error set
- *         on disconnect.
- *   + Blocked in read when an reader is removed
- *       o Follow all normal I/O steps when reader removed
- *       o Signal and wake up the thread blocked in read(). It should check the
- *         DISCONNECTED, not the DETACHED flag.
- *   + Unread, but completed I/O when an end transaction occurs w/ ICC
- *       o Consume logical I/O state. Do not signal in this case
- *       o Potentially warm reset ICC
- *       o POLLERR should be raised with transaction end
- *   + Unread, but completed I/O when an end transaction occurs w/o ICC
- *       o Consume logical I/O state. Do not signal.
- *       o POLLERR should be raised with transaction end
- *   + Unread, but completed I/O when the ICC is removed
- *       o XXX This one is tricky, because we might want to reset our T=1 state
- *         on insertion of a new ICC before this is read. Ugh. Maybe we should
- *         pull out the mblk_t chain when the I/O is completed so we can
- *         disassociate this state.
- *       o Still need to signal POLLHUP, but POLLIN should already have been
- *         done
- *   + Unread, but completed I/O when the reader is removed
- *       o POLLERR | POLLHUP? should be signaled on the device
- *       o Outstanding I/O should be cleaned up as part of minor close
- *
- * o Proper POLLOUT on ICC insertion / activation
- *
- *
- *
- * o XXX We're not properly handling the case where we get a transport error,
- * say we get a time extension and we fail to schedule the next bulk request.
- * While today we'll clean up the I/O corectly, the actual ICC will still be
- * expecting us to take action. In which case we should request a reset and make
- * sure that write is blocked on that.
- */
-
 #include <sys/modctl.h>
 #include <sys/errno.h>
 #include <sys/conf.h>
@@ -469,8 +394,7 @@
 #define	CCID_BULK_NALLOCED		16
 
 /*
- * XXX This is a time in seconds for the bulk-out command to run and be
- * submitted. We'll need to evaluate this and see if it actually makes sense.
+ * This is a time in seconds for the bulk-out command to run and be submitted.
  */
 #define	CCID_BULK_OUT_TIMEOUT	5
 #define	CCID_BULK_IN_TIMEOUT	5
@@ -612,16 +536,6 @@ typedef enum ccid_io_flags {
 	 * idle and it should be safe to tear down.
 	 */
 	CCID_IO_F_DONE		= 1 << 2,
-	/*
-	 * This flag is used to indicate that a given I/O has been abandoned by
-	 * the user and that we need to clean things up before the ICC is usable
-	 * again.
-	 *
-	 * XXX Should this really be set? I'm now starting to wonder if this
-	 * would make more sense to have like we have the resetting flag.
-	 * Especially if for T=1 we issue an abort.
-	 */
-	CCID_IO_F_ABANDONED	= 1 << 3
 } ccid_io_flags_t;
 
 /*
@@ -800,9 +714,6 @@ static void ccid_command_free(ccid_command_t *);
 static int ccid_bulkin_schedule(ccid_t *);
 static void ccid_command_bcopy(ccid_command_t *, const void *, size_t);
 
-/*
- * XXX Are these needed?
- */
 static int ccid_write_apdu(ccid_t *, ccid_slot_t *);
 static void ccid_complete_apdu(ccid_t *, ccid_slot_t *, ccid_command_t *);
 static void ccid_teardown_apdu(ccid_t *, ccid_slot_t *, int);
@@ -3273,7 +3184,7 @@ ccid_intr_restart_timeout(void *arg)
 /*
  * Search for the current class descriptor from the configuration cloud and
  * parse it for our use. We do this by first finding the current interface
- * descriptor and expecting it to be one of the next descriptors XXX
+ * descriptor and expecting it to be one of the next descriptors.
  */
 static boolean_t
 ccid_parse_class_desc(ccid_t *ccid)
@@ -3500,11 +3411,6 @@ ccid_open_pipes(ccid_t *ccid)
 
 	/*
 	 * Now open up the pipes.
-	 */
-
-	/*
-	 * First determine the maximum number of asynchronous requests. This
-	 * determines the maximum XXX: of what?
 	 */
 	bzero(&policy, sizeof (policy));
 	policy.pp_max_async_reqs = CCID_NUM_ASYNC_REQS;
