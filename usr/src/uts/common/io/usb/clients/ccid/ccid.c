@@ -456,6 +456,7 @@ typedef enum ccid_minor_flags {
 	CCID_MINOR_F_HAS_EXCL		= 1 << 1,
 	CCID_MINOR_F_TXN_RESET		= 1 << 2,
 	CCID_MINOR_F_READ_WAITING	= 1 << 3,
+	CCID_MINOR_F_WRITABLE		= 1 << 4,
 } ccid_minor_flags_t;
 
 typedef struct ccid_minor {
@@ -4023,8 +4024,7 @@ ccid_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 	if (otyp != OTYP_CHR)
 		return (ENOTSUP);
 
-	/* XXX We should maybe reduce this for just getting the status */
-	if ((flag & (FREAD | FWRITE)) != (FREAD | FWRITE))
+	if ((flag & FREAD) != FREAD)
 		return (EINVAL);
 
 	idx = ccid_minor_find(getminor(*devp));
@@ -4064,6 +4064,10 @@ ccid_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 	cmp->cm_opener = crdup(credp);
 	cmp->cm_slot = slot;
 	*devp = makedevice(getmajor(*devp), cmp->cm_idx.cmi_minor);
+
+	if ((flag & FWRITE) == FWRITE) {
+		cmp->cm_flags |= CCID_MINOR_F_WRITABLE;
+	}
 
 	mutex_enter(&slot->cs_ccid->ccid_mutex);
 	list_insert_tail(&slot->cs_minors, cmp);
@@ -4499,7 +4503,7 @@ ccid_complete_apdu(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 		slot->cs_io.ci_errno = ENXIO;
 	} else {
 		/*
-		 * XXX There are a few more semantic things we can do
+		 * There are a few more semantic things we can do
 		 * with the errors here that we're throwing out and
 		 * lumping as EIO. Oh well.
 		 */
@@ -4742,10 +4746,11 @@ ccid_write(dev_t dev, struct uio *uiop, cred_t *credp)
 	}
 
 	/*
-	 * Check if we have exclusive access and if there's a card present. If
-	 * not, both are errors.
+	 * Check that we are open for writing, have exclusive access, and
+	 * there's a card present. If not, error out.
 	 */
-	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
+	if ((cmp->cm_flags & (CCID_MINOR_F_WRITABLE | CCID_MINOR_F_HAS_EXCL)) !=
+	    (CCID_MINOR_F_WRITABLE | CCID_MINOR_F_HAS_EXCL)) {
 		mutex_exit(&ccid->ccid_mutex);
 		return (EACCES);
 	}
@@ -4897,6 +4902,11 @@ ccid_ioctl_txn_begin(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 	nowait = (uct.uct_flags & UCCID_TXN_DONT_BLOCK) != 0;
 
 	mutex_enter(&slot->cs_ccid->ccid_mutex);
+	if ((cmp->cm_flags & CCID_MINOR_F_WRITABLE) == 0) {
+		mutex_exit(&slot->cs_ccid->ccid_mutex);
+		return (EACCES);
+	}
+
 	ret = ccid_slot_excl_req(slot, cmp, nowait);
 	mutex_exit(&slot->cs_ccid->ccid_mutex);
 
@@ -4954,7 +4964,8 @@ ccid_ioctl_fionread(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 	int data;
 
 	mutex_enter(&slot->cs_ccid->ccid_mutex);
-	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
+	if ((cmp->cm_flags & (CCID_MINOR_F_WRITABLE | CCID_MINOR_F_HAS_EXCL)) ==
+	    (CCID_MINOR_F_WRITABLE | CCID_MINOR_F_HAS_EXCL)) {
 		mutex_exit(&slot->cs_ccid->ccid_mutex);
 		return (EACCES);
 	}
@@ -5015,7 +5026,8 @@ ccid_ioctl_icc_modify(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 
 	ccid = slot->cs_ccid;
 	mutex_enter(&ccid->ccid_mutex);
-	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
+	if ((cmp->cm_flags & (CCID_MINOR_F_WRITABLE | CCID_MINOR_F_HAS_EXCL)) !=
+	    (CCID_MINOR_F_WRITABLE | CCID_MINOR_F_HAS_EXCL)) {
 		mutex_exit(&ccid->ccid_mutex);
 		return (EACCES);
 	}

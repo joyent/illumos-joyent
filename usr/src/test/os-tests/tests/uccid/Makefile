@@ -33,7 +33,8 @@ PROGS =		\
 	pollout		\
 	txn-pollerr	\
 	yk		\
-	yk-poll
+	yk-poll		\
+	yk-readonly
 
 DATA = \
 	smartcard_list.txt
