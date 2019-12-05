@@ -891,8 +891,6 @@ ccid_slot_excl_rele(ccid_slot_t *slot)
 static int
 ccid_slot_excl_req(ccid_slot_t *slot, ccid_minor_t *cmp, boolean_t nosleep)
 {
-	ccid_minor_t *check;
-
 	VERIFY(MUTEX_HELD(&slot->cs_ccid->ccid_mutex));
 
 	if (slot->cs_excl_minor == cmp) {
@@ -1896,7 +1894,6 @@ ccid_command_get_parameters(ccid_t *ccid, ccid_slot_t *slot,
 	int ret;
 	uint8_t prot;
 	size_t mlen;
-	ccid_header_t cch;
 	ccid_command_t *cc;
 	ccid_reply_command_status_t crs;
 	ccid_reply_icc_status_t cis;
@@ -2517,10 +2514,7 @@ ccid_worker(void *arg)
 
 	for (i = 0; i < ccid->ccid_nslots; i++) {
 		ccid_slot_t *slot = &ccid->ccid_slots[i];
-		ccid_reply_icc_status_t ss;
-		int ret;
 		uint_t flags;
-		boolean_t skip_reset;
 
 		VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
 
@@ -3113,7 +3107,6 @@ ccid_disconnect_cb(dev_info_t *dip)
 	 * up, this'll be done as part of detach.
 	 */
 	for (i = 0; i < ccid->ccid_nslots; i++) {
-		ccid_minor_t *cmp;
 		ccid_slot_t *slot = &ccid->ccid_slots[i];
 		if (slot->cs_excl_minor == NULL)
 			continue;
@@ -3391,7 +3384,6 @@ static int
 ccid_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 {
 	int inst;
-	uint_t i;
 	ccid_t *ccid;
 
 	if (cmd != DDI_DETACH)
@@ -3428,8 +3420,6 @@ ccid_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 static void
 ccid_minor_free(ccid_minor_t *cmp)
 {
-	ccid_command_t *cc;
-
 	/*
 	 * Clean up queued commands.
 	 */
@@ -3445,7 +3435,6 @@ ccid_minor_free(ccid_minor_t *cmp)
 static int
 ccid_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 {
-	int ret;
 	ccid_minor_idx_t *idx;
 	ccid_minor_t *cmp;
 	ccid_slot_t *slot;
@@ -3573,7 +3562,6 @@ ccid_user_io_done(ccid_t *ccid, ccid_slot_t *slot)
 static void
 ccid_teardown_apdu(ccid_t *ccid, ccid_slot_t *slot, int error)
 {
-	ccid_command_t *cc;
 
 	VERIFY(MUTEX_HELD(&ccid->ccid_mutex));
 
@@ -3601,7 +3589,6 @@ ccid_teardown_apdu(ccid_t *ccid, ccid_slot_t *slot, int error)
 static void
 ccid_complete_apdu(ccid_t *ccid, ccid_slot_t *slot, ccid_command_t *cc)
 {
-	ccid_minor_t *cmp;
 	ccid_reply_command_status_t crs;
 	ccid_reply_icc_status_t cis;
 	ccid_command_err_t cce;
@@ -3853,7 +3840,6 @@ ccid_write(dev_t dev, struct uio *uiop, cred_t *credp)
 	ccid_minor_t *cmp;
 	ccid_slot_t *slot;
 	ccid_t *ccid;
-	mblk_t *mp = NULL;
 	size_t len, cbytes;
 
 	if (uiop->uio_resid > CCID_APDU_LEN_MAX) {
@@ -4059,9 +4045,7 @@ ccid_ioctl_txn_begin(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 static int
 ccid_ioctl_txn_end(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
 {
-	int ret;
 	uccid_cmd_txn_end_t uct;
-	boolean_t nowait;
 
 	if (ddi_copyin((void *)arg, &uct, sizeof (uct), mode & FKIOCTL) != 0) {
 		return (EFAULT);
