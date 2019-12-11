@@ -34,8 +34,10 @@ extern "C" {
 #endif
 
 /*
- * This is a departure from the PCSC system which treats this as a LONG. We
- * don't, because we'd like a single value that makes sense across j XXX?
+ * This is a departure from the PCSC system which defines this as a LONG,
+ * which is the same size on 32bit and 64bit Windows (ILP32 and LLP64).
+ * We need to use the real native pointer size for the context handle as
+ * it wouldn't fit into a LONG on our LP64 platform.
  */
 typedef void *SCARDCONTEXT;
 typedef void **PSCARDCONTEXT;

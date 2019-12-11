@@ -1079,18 +1079,8 @@ ccid_command_complete(ccid_command_t *cc)
 		ccid_slot_t *slot;
 
 		slot = &ccid->ccid_slots[cc->cc_slot];
-		/*
-		 * If the user ops vector has been destroyed, free this command.
-		 * There's not much we can do at this point. Otherwise, deliver
-		 * it.
-		 *
-		 * XXX This doesn't make sense
-		 */
-		if (slot->cs_icc.icc_complete == NULL) {
-			ccid_command_free(cc);
-		} else {
-			slot->cs_icc.icc_complete(ccid, slot, cc);
-		}
+		ASSERT(slot->cs_icc.icc_complete != NULL);
+		slot->cs_icc.icc_complete(ccid, slot, cc);
 	} else {
 		list_insert_tail(&ccid->ccid_complete_queue, cc);
 		cv_broadcast(&cc->cc_cv);
