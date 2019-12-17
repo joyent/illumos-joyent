@@ -90,12 +90,16 @@ typedef struct zfs_case {
 #define	CASE_DATA_VERSION_INITIAL	1
 #define	CASE_DATA_VERSION_SERD		2
 
+/* The length of the maximum uint64 rendered as a decimal string. */
+#define	MAX_ULL_STR 21
+
 typedef struct zfs_de_stats {
 	fmd_stat_t	old_drops;
 	fmd_stat_t	dev_drops;
 	fmd_stat_t	vdev_drops;
 	fmd_stat_t	import_drops;
 	fmd_stat_t	resource_drops;
+	fmd_stat_t	pool_drops;
 } zfs_de_stats_t;
 
 zfs_de_stats_t zfs_stats = {
@@ -103,7 +107,8 @@ zfs_de_stats_t zfs_stats = {
 	{ "dev_drops", FMD_TYPE_UINT64, "ereports dropped (dev during open)"},
 	{ "vdev_drops", FMD_TYPE_UINT64, "ereports dropped (weird vdev types)"},
 	{ "import_drops", FMD_TYPE_UINT64, "ereports dropped (during import)" },
-	{ "resource_drops", FMD_TYPE_UINT64, "resource related ereports" }
+	{ "resource_drops", FMD_TYPE_UINT64, "resource related ereports" },
+	{ "pool_drops", FMD_TYPE_UINT64, "ereports dropped (pool iter failed)"},
 };
 
 static hrtime_t zfs_remove_timeout;
@@ -564,9 +569,7 @@ zfs_fm_recv(fmd_hdl_t *hdl, fmd_event_t *ep, nvlist_t *nvl, const char *class)
 	boolean_t isresource;
 	boolean_t isspare, islog, iscache;
 	nvlist_t *vd_nvl = NULL;
-	char *fru, *type, *vp;
-	uint_t vdg_size = 32;
-	char vdg[32];
+	char *fru, *type, *vdg;
 	find_cbdata_t cb;
 
 	/*
@@ -834,19 +837,21 @@ zfs_fm_recv(fmd_hdl_t *hdl, fmd_event_t *ep, nvlist_t *nvl, const char *class)
 	 */
 	cb.cb_guid = pool_guid;
 	cb.cb_zhp = NULL;
-	if (zhdl != NULL && zpool_iter(zhdl, find_pool, &cb) != 0)
+	if (zhdl != NULL && zpool_iter(zhdl, find_pool, &cb) != 0) {
+		zfs_stats.pool_drops.fmds_value.ui64++;
 		return;
+	}
 
 	zhp = cb.cb_zhp; /* NULL if pool was not found. */
+	if (zhp != NULL) {
+		/*
+		 * The libzfs API takes a string representation of a base-10
+		 * guid here instead of a number, likely because the primary
+		 * libzfs consumers are the CLI tools.
+		 */
+		vdg = fmd_hdl_zalloc(hdl, MAX_ULL_STR, FMD_SLEEP);
+		(void) snprintf(vdg, MAX_ULL_STR, "%" PRIx64, vdev_guid);
 
-	/*
-	 * The libzfs API takes a string representation of a base-10 guid here
-	 * instead of a number, likely because the primary libzfs consumer are
-	 * the CLI tools.
-	 */
-	vdg[vdg_size - 1] = '\0';
-	vp = ulltostr(vdev_guid, &vdg[vdg_size - 1]);
-	if (zhp != NULL && vp != NULL) {
 		/*
 		 * According to libzfs the 'spare' bit is set when the spare is
 		 * unused, and unset when in use.
@@ -854,18 +859,19 @@ zfs_fm_recv(fmd_hdl_t *hdl, fmd_event_t *ep, nvlist_t *nvl, const char *class)
 		 * We don't really care about the returned nvlist. We're only
 		 * interested in the boolean flags.
 		 */
-		if ((vd_nvl = zpool_find_vdev(zhp, vp,
+		if ((vd_nvl = zpool_find_vdev(zhp, vdg,
 		    &isspare, &islog, &iscache)) != NULL) {
 			nvlist_free(vd_nvl);
 		}
+		fmd_hdl_free(hdl, vdg, MAX_ULL_STR);
 	}
 
 	/*
 	 * Determine if we should solve the case and generate a fault.  We solve
 	 * a case if:
 	 *
-	 * 	a. A pool failed to open (ereport.fs.zfs.pool)
-	 * 	b. A device failed to open (ereport.fs.zfs.pool) while a pool
+	 *	a. A pool failed to open (ereport.fs.zfs.pool)
+	 *	b. A device failed to open (ereport.fs.zfs.pool) while a pool
 	 *	   was up and running.
 	 *
 	 * We may see a series of ereports associated with a pool open, all
