@@ -74,11 +74,8 @@ ccidadm_open(const char *base, boolean_t card)
 	 * For an absolute path, just try the base path. If it doesn't match our
 	 * prefix, simulate ENOENT.
 	 */
-	if (strncmp(base, CCID_ROOT, strlen(CCID_ROOT)) == 0) {
+	if (base[0] == '/') {
 		return (open(base, O_RDWR));
-	} else if (base[0] == '/') {
-		errno = ENOENT;
-		return (-1);
 	}
 
 	/*
