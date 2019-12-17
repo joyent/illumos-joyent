@@ -1515,9 +1515,9 @@ atr_data_dump_historical(atr_data_t *data, FILE *out)
 	cat = data->atr_historic[0];
 	(void) fprintf(out, "; format (0x%02x) ", cat);
 	if (cat == ATR_HIST_CAT_MAND_STATUS) {
-
+		(void) fprintf(out, "card status, not shown");
 	} else if (cat == ATR_HIST_CAT_TLV_STATUS) {
-
+		(void) fprintf(out, "COMPACT-TLV, not shown");
 	} else if (cat >= ATR_HIST_CAT_RFU_MIN && cat <= ATR_HIST_CAT_RFU_MAX) {
 		(void) fprintf(out, "reserved\n");
 		atr_data_hexdump_historical(data, out);
@@ -1527,10 +1527,6 @@ atr_data_dump_historical(atr_data_t *data, FILE *out)
 		atr_data_hexdump_historical(data, out);
 		return;
 	}
-
-	/*
-	 * XXX Process one or more TLVs.
-	 */
 }
 
 void

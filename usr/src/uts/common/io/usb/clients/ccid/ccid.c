@@ -765,9 +765,7 @@ ccid_minor_find_user(minor_t m)
 	if (idx == NULL) {
 		return (NULL);
 	}
-	ASSERT0(idx->cmi_isslot);
-	if (idx->cmi_isslot)
-		return (NULL);
+	VERIFY0(idx->cmi_isslot);
 	return (idx);
 }
 
@@ -3104,8 +3102,10 @@ ccid_disconnect_cb(dev_info_t *dip)
 
 	/*
 	 * If there are outstanding commands, they will ultimately be cleaned
-	 * up as the USB commands themselves time out. This will also include
-	 * cleanup up of commands waiting for I/O teardown.
+	 * up as the USB commands themselves time out. We will get notified
+	 * through the various bulk xfer exception callbacks, which will induce
+	 * the cleanup through ccid_command_transport_error(). This will also
+	 * take care of commands waiting for I/O teardown.
 	 */
 	mutex_exit(&ccid->ccid_mutex);
 
@@ -3684,12 +3684,8 @@ ccid_read(dev_t dev, struct uio *uiop, cred_t *credp)
 		return (EINVAL);
 	}
 
-	if ((idx = ccid_minor_find(getminor(dev))) == NULL) {
+	if ((idx = ccid_minor_find_user(getminor(dev))) == NULL) {
 		return (ENOENT);
-	}
-
-	if (idx->cmi_isslot) {
-		return (ENXIO);
 	}
 
 	cmp = idx->cmi_data.cmi_user;
@@ -3834,13 +3830,9 @@ ccid_write(dev_t dev, struct uio *uiop, cred_t *credp)
 	}
 
 	len = uiop->uio_resid;
-	idx = ccid_minor_find(getminor(dev));
+	idx = ccid_minor_find_user(getminor(dev));
 	if (idx == NULL) {
 		return (ENOENT);
-	}
-
-	if (idx->cmi_isslot) {
-		return (ENXIO);
 	}
 
 	cmp = idx->cmi_data.cmi_user;
@@ -4038,19 +4030,6 @@ ccid_ioctl_txn_end(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
 		return (EINVAL);
 	}
 
-	if ((uct.uct_flags & ~(UCCID_TXN_END_RESET |
-	    UCCID_TXN_END_RELEASE)) != 0) {
-		return (EINVAL);
-	}
-
-	/*
-	 * Require exactly one of these flags to be set.
-	 */
-	if ((((uct.uct_flags & UCCID_TXN_END_RESET) != 0) ^
-	    ((uct.uct_flags & UCCID_TXN_END_RELEASE) != 0)) == 0) {
-		return (EINVAL);
-	}
-
 	mutex_enter(&slot->cs_ccid->ccid_mutex);
 	if (slot->cs_excl_minor != cmp) {
 		mutex_exit(&slot->cs_ccid->ccid_mutex);
@@ -4058,9 +4037,21 @@ ccid_ioctl_txn_end(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
 	}
 	VERIFY3S(cmp->cm_flags & CCID_MINOR_F_HAS_EXCL, !=, 0);
 
-	if (uct.uct_flags & UCCID_TXN_END_RESET) {
+	/*
+	 * Require exactly one of the flags to be set.
+	 */
+	switch (uct.uct_flags) {
+	case UCCID_TXN_END_RESET:
 		cmp->cm_flags |= CCID_MINOR_F_TXN_RESET;
+
+	case UCCID_TXN_END_RELEASE:
+		break;
+
+	default:
+		mutex_exit(&slot->cs_ccid->ccid_mutex);
+		return (EINVAL);
 	}
+
 	ccid_slot_excl_rele(slot);
 	mutex_exit(&slot->cs_ccid->ccid_mutex);
 
@@ -4174,10 +4165,6 @@ ccid_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 		return (ENOENT);
 	}
 
-	if (idx->cmi_isslot) {
-		return (ENXIO);
-	}
-
 	cmp = idx->cmi_data.cmi_user;
 	slot = cmp->cm_slot;
 
@@ -4221,10 +4208,6 @@ ccid_chpoll(dev_t dev, short events, int anyyet, short *reventsp,
 		return (ENOENT);
 	}
 
-	if (idx->cmi_isslot) {
-		return (ENXIO);
-	}
-
 	cmp = idx->cmi_data.cmi_user;
 	slot = cmp->cm_slot;
 	ccid = slot->cs_ccid;
@@ -4235,25 +4218,22 @@ ccid_chpoll(dev_t dev, short events, int anyyet, short *reventsp,
 		return (ENODEV);
 	}
 
-	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) == 0) {
-		mutex_exit(&ccid->ccid_mutex);
-		return (EACCES);
-	}
+	if ((cmp->cm_flags & CCID_MINOR_F_HAS_EXCL) != 0) {
+		/*
+		 * If the CCID_IO_F_DONE flag is set, then we're always
+		 * readable. However, flags are insufficient to be writeable.
+		 */
+		if ((slot->cs_io.ci_flags & CCID_IO_F_DONE) != 0) {
+			ready |= POLLIN | POLLRDNORM;
+		} else if ((slot->cs_io.ci_flags & CCID_IO_F_POLLOUT_FLAGS) == 0 &&
+		    (slot->cs_flags & CCID_SLOT_F_ACTIVE) != 0 &&
+		    slot->cs_icc.icc_tx != NULL) {
+			ready |= POLLOUT;
+		}
 
-	/*
-	 * If the CCID_IO_F_DONE flag is set, then we're always readable.
-	 * However, flags are insufficient to be writeable.
-	 */
-	if ((slot->cs_io.ci_flags & CCID_IO_F_DONE) != 0) {
-		ready |= POLLIN | POLLRDNORM;
-	} else if ((slot->cs_io.ci_flags & CCID_IO_F_POLLOUT_FLAGS) == 0 &&
-	    (slot->cs_flags & CCID_SLOT_F_ACTIVE) != 0 &&
-	    slot->cs_icc.icc_tx != NULL) {
-		ready |= POLLOUT;
-	}
-
-	if ((slot->cs_flags & CCID_SLOT_F_PRESENT) == 0) {
-		ready |= POLLHUP;
+		if ((slot->cs_flags & CCID_SLOT_F_PRESENT) == 0) {
+			ready |= POLLHUP;
+		}
 	}
 
 	*reventsp = ready & events;
