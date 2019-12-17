@@ -186,7 +186,7 @@ ccidadm_list_slot_transport_str(uccid_cmd_status_t *ucs, char *buf,
 
 	switch (ucs->ucs_class.ccd_dwFeatures & bits) {
 	case 0:
-		tran = "Character";
+		tran = "character";
 		break;
 	case CCID_CLASS_F_TPDU_XCHG:
 		tran = "TPDU";
@@ -196,7 +196,7 @@ ccidadm_list_slot_transport_str(uccid_cmd_status_t *ucs, char *buf,
 		tran = "APDU";
 		break;
 	default:
-		tran = "Unknown";
+		tran = "unknown";
 		break;
 	}
 
@@ -334,6 +334,7 @@ ccidadm_atr_props(uccid_cmd_status_t *ucs)
 	(void) printf("ICC supports protocol(s): ");
 	if (prots == ATR_P_NONE) {
 		(void) printf("none\n");
+		atr_data_free(data);
 		return;
 	}
 
@@ -490,7 +491,7 @@ ccidadm_atr_fetch(int fd, const char *name, void *arg)
 		return;
 	}
 
-	(void) printf("ATR for %s (%u bytes)\n", name, ucs.ucs_atrlen);
+	(void) printf("ATR for %s (%u bytes):\n", name, ucs.ucs_atrlen);
 	if (caa->caa_props) {
 		ccidadm_atr_props(&ucs);
 	}
@@ -543,6 +544,7 @@ ccidadm_do_atr(int argc, char *argv[])
 
 	if (argc == 0) {
 		ccidadm_iter(B_FALSE, B_TRUE, ccidadm_atr_fetch, &caa);
+		return;
 	}
 
 	for (i = 0; i < argc; i++) {
@@ -635,14 +637,14 @@ static ccidadm_pair_t ccidadm_p_pin[] = {
 };
 
 static void
-ccidadm_reader_print(int fd, const char *name, void *unused)
+ccidadm_reader_print(int fd, const char *name, void *unused __unused)
 {
 	uccid_cmd_status_t ucs;
 	ccid_class_descr_t *cd;
 	char nnbuf[NN_NUMBUF_SZ + 1];
 
 	bzero(&ucs, sizeof (uccid_cmd_status_t));
-	ucs.ucs_version = UCCID_VERSION_ONE;
+	ucs.ucs_version = UCCID_CURRENT_VERSION;
 
 	if (ioctl(fd, UCCID_CMD_STATUS, &ucs) != 0) {
 		err(EXIT_FAILURE, "failed to issue status ioctl to %s",
@@ -736,6 +738,7 @@ ccidadm_do_reader(int argc, char *argv[])
 
 	if (argc == 0) {
 		ccidadm_iter(B_TRUE, B_TRUE, ccidadm_reader_print, NULL);
+		return;
 	}
 
 	for (i = 0; i < argc; i++) {

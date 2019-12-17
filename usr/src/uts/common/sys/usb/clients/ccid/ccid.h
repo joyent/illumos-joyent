@@ -113,14 +113,13 @@ typedef struct ccid_class_descr {
  * and the CCID_RESPONSE_PARAMETERS response. There are different structures for
  * T=0 and T=1. These come from CCID r1.1 / Section 6.1.7.
  */
-#pragma pack(1)
 typedef struct ccid_params_t0 {
 	uint8_t cp0_bmFindexDindex;
 	uint8_t cp0_bmTCCKST0;
 	uint8_t cp0_bGuardTimeT0;
 	uint8_t cp0_bWaitingIntegerT0;
 	uint8_t	cp0_bClockStop;
-} ccid_params_t0_t;
+} __packed ccid_params_t0_t;
 
 #define	CCID_P_TCCKST0_DIRECT	0x00
 #define	CCID_P_TCCKST0_INVERSE	0x02
@@ -133,8 +132,7 @@ typedef struct ccid_params_t1 {
 	uint8_t cp1_bClockStop;
 	uint8_t cp1_bIFSC;
 	uint8_t cp1_bNadValue;
-} ccid_params_t1_t;
-#pragma pack()
+} __packed ccid_params_t1_t;
 
 typedef union ccid_params {
 	ccid_params_t0_t ccp_t0;
@@ -171,31 +169,29 @@ typedef union ccid_params {
  * All structures from the specification must be packed.
  */
 
-#pragma pack(1)
-
 /*
  * Interrupt-IN messages codes.
  */
 typedef enum ccid_intr_code {
 	CCID_INTR_CODE_SLOT_CHANGE	= 0x50,
 	CCID_INTR_CODE_HW_ERROR		= 0x51
-} ccid_intr_code_t;
+} __packed ccid_intr_code_t;
 
 typedef enum ccid_intr_hwerr_code {
 	CCID_INTR_HWERR_OVERCURRENT	= 0x01
-} ccid_intr_hwerr_code_t;
+} __packed ccid_intr_hwerr_code_t;
 
 typedef struct ccid_intr_slot {
 	uint8_t	cis_type;
 	uint8_t	cis_state[];
-} ccid_intr_slot_t;
+} __packed ccid_intr_slot_t;
 
 typedef struct ccid_intr_hwerr {
 	uint8_t	cih_type;
 	uint8_t	cih_slot;
 	uint8_t	cih_seq;
 	uint8_t	cih_code;
-} ccid_intr_hwerr_t;
+} __packed ccid_intr_hwerr_t;
 
 /*
  * Message request codes. These codes are based on CCID r1.1.0 Table 6.1-1
@@ -218,7 +214,7 @@ typedef enum ccid_request_code {
 	CCID_REQEUST_ABORT		= 0x72,	/* PC_to_RDR_Abort */
 	CCID_REQUEST_DATA_CLOCK		= 0x73	/* PC_to_RDR_SetDataRateAnd */
 						/* ClockFrequency */
-} ccid_request_code_t;
+} __packed ccid_request_code_t;
 
 /*
  * Message request codes. These codes are based on CCID r1.1.0 Table 6.2-1
@@ -232,7 +228,7 @@ typedef enum ccid_response_code {
 	CCID_RESPONSE_ESCAPE		= 0x83,	/* RDR_to_PC_Escape */
 	CCID_RESPONSE_DATA_CLOCK	= 0x84	/* RDR_to_PC_DataRateAnd */
 						/* Clock Frequency */
-} ccid_response_code_t;
+} __packed ccid_response_code_t;
 
 /*
  * This represents the CCID command header that is used for every request and
@@ -247,7 +243,7 @@ typedef struct ccid_header {
 	uint8_t		ch_param1;	/* Request/Response specific */
 	uint8_t		ch_param2;	/* Request/Response specific */
 	uint8_t		ch_data[];	/* Optional Request/Response Data */
-} ccid_header_t;
+} __packed ccid_header_t;
 
 /*
  * This structure is used as the data for the CCID_REQUEST_DATA_CLOCK and
@@ -256,7 +252,7 @@ typedef struct ccid_header {
 typedef struct ccid_data_clock {
 	uint32_t	cdc_clock;
 	uint32_t	cdc_data;
-} ccid_data_clock_t;
+} __packed ccid_data_clock_t;
 
 /*
  * Macros and constants to take apart the slot status (in ch_param1) when a CCID
@@ -269,13 +265,13 @@ typedef enum {
 	CCID_REPLY_ICC_ACTIVE = 0,
 	CCID_REPLY_ICC_INACTIVE,
 	CCID_REPLY_ICC_MISSING
-} ccid_reply_icc_status_t;
+} __packed ccid_reply_icc_status_t;
 
 typedef enum {
 	CCID_REPLY_STATUS_COMPLETE = 0,
 	CCID_REPLY_STATUS_FAILED,
 	CCID_REPLY_STATUS_MORE_TIME
-} ccid_reply_command_status_t;
+} __packed ccid_reply_command_status_t;
 
 /*
  * Errors that are defined based when commands fail. These are based on CCID
@@ -298,15 +294,13 @@ typedef enum ccid_command_err {
 	CCID_ERR_PIN_CANCELLED			= 0xef,
 	CCID_ERR_CMD_SLOT_BUSY			= 0xe0,
 	CCID_ERR_CMD_NOT_SUPPORTED		= 0x00
-} ccid_command_err_t;
+} __packed ccid_command_err_t;
 
 /*
  * Maximum size of an APDU (application data unit) payload. There are both short
  * and extended ADPUs. At this time, we only support the short ADPUs.
  */
 #define	CCID_APDU_LEN_MAX	261
-
-#pragma pack()
 
 #endif	/* _KERNEL */
 

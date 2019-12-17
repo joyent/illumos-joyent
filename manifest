@@ -19466,6 +19466,7 @@ f usr/share/man/man7d/bfe.7d 0444 root bin
 f usr/share/man/man7d/bge.7d 0444 root bin
 f usr/share/man/man7d/blkdev.7d 0444 root bin
 f usr/share/man/man7d/bnxe.7d 0444 root bin
+f usr/share/man/man7d/ccid.7d 0444 root bin
 f usr/share/man/man7d/chxge.7d 0444 root bin
 f usr/share/man/man7d/cmdk.7d 0444 root bin
 f usr/share/man/man7d/coretemp.7d 0444 root bin
@@ -19628,6 +19629,7 @@ f usr/share/man/man7i/sockio.7i 0444 root bin
 f usr/share/man/man7i/streamio.7i 0444 root bin
 f usr/share/man/man7i/termio.7i 0444 root bin
 f usr/share/man/man7i/termiox.7i 0444 root bin
+s usr/share/man/man7i/uccid.7i=../man7d/ccid.7d
 f usr/share/man/man7i/uscsi.7i 0444 root bin
 f usr/share/man/man7i/visual_io.7i 0444 root bin
 f usr/share/man/man7i/vt.7i 0444 root bin

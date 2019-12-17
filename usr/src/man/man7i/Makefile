@@ -41,6 +41,10 @@ MANFILES=	audio.7i	\
 		visual_io.7i	\
 		vt.7i
 
+MANLINKS=	uccid.7i
+
+uccid.7i	:= LINKSRC = ../man7d/ccid.7d
+
 .KEEP_STATE:
 
 include		$(SRC)/man/Makefile.man

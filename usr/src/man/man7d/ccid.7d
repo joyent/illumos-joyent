@@ -18,7 +18,6 @@
 .Nm ccid
 .Nd chip card interface device USB client class driver
 .Sh SYNOPSIS
-.Pa /dev/ccid/
 .In sys/usb/clients/ccid/uccid.h
 .Sh INTERFACE LEVEL
 .Sy Volatile
@@ -38,26 +37,14 @@ The driver also provides interfaces to obtain status information, the
 ATR (answer to reset), and obtain exclusive access to the device.
 In addition, the system exposes control of CCID devices through
 .Xr cfgadm 1M .
-This is accomplished through a combination of the standard
-.Xr open 2 ,
-.Xr ioctl 2 ,
-.Xr read 2 ,
-and
-.Xr write 2
-system calls.
 .Ss Supported Devices
 The CCID specification allows for readers to come in different flavors.
 These different flavors support different communication protocols and
 have different levels of automation for determining the protocol and
 transfers that are required.
-At this time, the following protcols are supported:
-.Bl -bullet -offset indent
-.It
-APDU
-.El
 .Pp
-At this time, TPDU and character level readers are not supported by
-the driver.
+At this time, only the APDU protocol is supported.
+TPDU and character level readers are not supported by the driver.
 Readers in this category will still attach; however,
 I/O cannot be performed to them.
 .Pp
@@ -189,7 +176,10 @@ The device node can be opened through the
 or
 .Xr openat 2
 system calls.
-Programs must request that the device be opened both for reading and
+For programs that just want to query the slot status using the
+.Dv UCCID_CMD_STATUS
+command, opening the device node read-only is sufficient.
+All other uses require that the device be opened both for reading and
 writing
 .Po Dv O_RDWR Pc .
 .Pp
@@ -326,10 +316,9 @@ Should be set to
 .Dv UCCID_CURRENT_VERSION .
 .It Fa uint32_t uct_flags
 Flags that impact the behavior of the command.
-The following flags are
-defined:
+The following flags are defined:
 .Bl -tag -width Dv
-.It Dv UCCID_TXN_F_DONT_BLOCK
+.It Dv UCCID_TXN_DONT_BLOCK
 The command should not block for exclusive access.
 If exclusive access is not available, then the command will fail
 immediately.
@@ -403,13 +392,14 @@ CCID device.
 .Ss close
 .Ss write
 .Ss read
-.Ss close
+.Ss poll
 .Sh SEE ALSO
 .Xr ccidadm 1M ,
 .Xr cfgadm 1M ,
 .Xr close 2 ,
 .Xr ioctl 2 ,
 .Xr open 2 ,
+.Xr poll 2 ,
 .Xr read 2 ,
 .Xr write 2
 .Rs

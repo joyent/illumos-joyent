@@ -301,6 +301,39 @@ out:
 	return (ret);
 }
 
+static int
+uccid_status_helper(int fd, DWORD prots, uccid_cmd_status_t *ucs)
+{
+	/*
+	 * Get the status of this slot and find out information about the slot.
+	 * We need to see if there's an ICC present and if it matches the
+	 * current protocol. If not, then we have to fail this.
+	 */
+	bzero(ucs, sizeof (uccid_cmd_status_t));
+	ucs->ucs_version = UCCID_CURRENT_VERSION;
+	if (ioctl(fd, UCCID_CMD_STATUS, ucs) != 0) {
+		return (SCARD_F_UNKNOWN_ERROR);
+	}
+
+	if ((ucs->ucs_status & UCCID_STATUS_F_CARD_PRESENT) == 0) {
+		return (SCARD_W_REMOVED_CARD);
+	}
+
+	if ((ucs->ucs_status & UCCID_STATUS_F_CARD_ACTIVE) == 0) {
+		return (SCARD_W_UNPOWERED_CARD);
+	}
+
+	if ((ucs->ucs_status & UCCID_STATUS_F_PARAMS_VALID) == 0) {
+		return (SCARD_W_UNSUPPORTED_CARD);
+	}
+
+	if ((ucs->ucs_prot & prots) == 0) {
+		return (SCARD_E_PROTO_MISMATCH);
+	}
+
+	return (0);
+}
+
 LONG
 SCardConnect(SCARDCONTEXT hdl, LPCSTR reader, DWORD mode, DWORD prots,
     LPSCARDHANDLE iccp, LPDWORD protp)
@@ -344,37 +377,8 @@ SCardConnect(SCARDCONTEXT hdl, LPCSTR reader, DWORD mode, DWORD prots,
 		}
 	}
 
-	/*
-	 * Get the status of this slot and find out information about the slot.
-	 * We need to see if there's an ICC present and if it matches the
-	 * current protocol. If not, then we have to fail this.
-	 */
-	bzero(&ucs, sizeof (uccid_cmd_status_t));
-	ucs.ucs_version = UCCID_CURRENT_VERSION;
-	if (ioctl(card->pcc_fd, UCCID_CMD_STATUS, &ucs) != 0) {
-		ret = SCARD_F_UNKNOWN_ERROR;
+	if ((ret = uccid_status_helper(card->pcc_fd, prots, &ucs)) != 0)
 		goto cleanup;
-	}
-
-	if ((ucs.ucs_status & UCCID_STATUS_F_CARD_PRESENT) == 0) {
-		ret = SCARD_E_NO_SMARTCARD;
-		goto cleanup;
-	}
-
-	if ((ucs.ucs_status & UCCID_STATUS_F_CARD_ACTIVE) == 0) {
-		ret = SCARD_W_UNPOWERED_CARD;
-		goto cleanup;
-	}
-
-	if ((ucs.ucs_status & UCCID_STATUS_F_PARAMS_VALID) == 0) {
-		ret = SCARD_W_UNSUPPORTED_CARD;
-		goto cleanup;
-	}
-
-	if ((ucs.ucs_prot & prots) == 0) {
-		ret = SCARD_E_PROTO_MISMATCH;
-		goto cleanup;
-	}
 
 	*protp = ucs.ucs_prot;
 	*iccp = card;
@@ -438,7 +442,7 @@ SCardBeginTransaction(SCARDHANDLE arg)
 		case EBUSY:
 			return (SCARD_E_SHARING_VIOLATION);
 		/*
-		 * EINPROGRESS is a weird case. It means that we were tryign to
+		 * EINPROGRESS is a weird case. It means that we were trying to
 		 * grab a hold while another instance using the same handle was.
 		 * For now, treat it as an unknown error.
 		 */
@@ -497,6 +501,7 @@ SCardReconnect(SCARDHANDLE arg, DWORD mode, DWORD prots, DWORD init,
 {
 	uccid_cmd_status_t ucs;
 	pcsc_card_t *card = arg;
+	int ret;
 
 	if (card == NULL) {
 		return (SCARD_E_INVALID_HANDLE);
@@ -523,32 +528,8 @@ SCardReconnect(SCARDHANDLE arg, DWORD mode, DWORD prots, DWORD init,
 		return (SCARD_E_INVALID_VALUE);
 	}
 
-	/*
-	 * Get the status of this slot and find out information about the slot.
-	 * We need to see if there's an ICC present and if it matches the
-	 * current protocol. If not, then we have to fail this.
-	 */
-	bzero(&ucs, sizeof (uccid_cmd_status_t));
-	ucs.ucs_version = UCCID_CURRENT_VERSION;
-	if (ioctl(card->pcc_fd, UCCID_CMD_STATUS, &ucs) != 0) {
-		return (SCARD_F_UNKNOWN_ERROR);
-	}
-
-	if ((ucs.ucs_status & UCCID_STATUS_F_CARD_PRESENT) == 0) {
-		return (SCARD_W_REMOVED_CARD);
-	}
-
-	if ((ucs.ucs_status & UCCID_STATUS_F_CARD_ACTIVE) == 0) {
-		return (SCARD_W_UNPOWERED_CARD);
-	}
-
-	if ((ucs.ucs_status & UCCID_STATUS_F_PARAMS_VALID) == 0) {
-		return (SCARD_W_UNSUPPORTED_CARD);
-	}
-
-	if ((ucs.ucs_prot & prots) == 0) {
-		return (SCARD_E_PROTO_MISMATCH);
-	}
+	if ((ret = uccid_status_helper(card->pcc_fd, prots, &ucs)) != 0)
+		return (ret);
 
 	*protp = ucs.ucs_prot;
 	return (SCARD_S_SUCCESS);

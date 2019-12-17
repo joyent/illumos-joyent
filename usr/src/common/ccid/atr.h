@@ -17,7 +17,7 @@
 #define	_ATR_H
 
 /*
- * Parse Anser-To-Reset values. This header file is private to illumos and
+ * Parse Answer-To-Reset values. This header file is private to illumos and
  * should not be shipped or used by applications.
  *
  * This is based on ISO/IEC 7816-3:2006. It has been designed such that if newer
@@ -130,7 +130,7 @@ extern atr_protocol_t atr_supported_protocols(atr_data_t *);
 /*
  * Based on the ATR determine what the default protocol is and whether or not it
  * supports negotiation. When a ICC is not negotiable, it will always start up
- * with a sepcific protocol and parameters based on the ATR and be ready to use.
+ * with a specific protocol and parameters based on the ATR and be ready to use.
  * Otherwise, the card will be in a negotiable mode and be set to a default set
  * of parameters.
  */

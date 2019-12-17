@@ -21,6 +21,7 @@
 #include "atr.h"
 #include <sys/debug.h>
 #include <sys/limits.h>
+#include <sys/sysmacros.h>
 
 #ifdef	_KERNEL
 #include <sys/inttypes.h>
@@ -341,7 +342,7 @@ static const char *atr_clock_table[4] = {
 uint_t
 atr_fi_index_to_value(uint8_t val)
 {
-	if (val >= sizeof (atr_fi_valtable) / sizeof (atr_fi_valtable[0])) {
+	if (val >= ARRAY_SIZE(atr_fi_valtable)) {
 		return (0);
 	}
 
@@ -351,7 +352,7 @@ atr_fi_index_to_value(uint8_t val)
 const char *
 atr_fi_index_to_string(uint8_t val)
 {
-	if (val >= sizeof (atr_fi_table) / sizeof (atr_fi_table[0])) {
+	if (val >= ARRAY_SIZE(atr_fi_table)) {
 		return ("<invalid>");
 	}
 
@@ -361,7 +362,7 @@ atr_fi_index_to_string(uint8_t val)
 const char *
 atr_fmax_index_to_string(uint8_t val)
 {
-	if (val >= sizeof (atr_fmax_table) / sizeof (atr_fmax_table[0])) {
+	if (val >= ARRAY_SIZE(atr_fmax_table)) {
 		return ("<invalid>");
 	}
 
@@ -371,7 +372,7 @@ atr_fmax_index_to_string(uint8_t val)
 uint_t
 atr_di_index_to_value(uint8_t val)
 {
-	if (val >= sizeof (atr_di_valtable) / sizeof (atr_di_valtable[0])) {
+	if (val >= ARRAY_SIZE(atr_di_valtable)) {
 		return (0);
 	}
 
@@ -380,7 +381,7 @@ atr_di_index_to_value(uint8_t val)
 const char *
 atr_di_index_to_string(uint8_t val)
 {
-	if (val >= sizeof (atr_di_table) / sizeof (atr_di_table[0])) {
+	if (val >= ARRAY_SIZE(atr_di_table)) {
 		return ("<invalid>");
 	}
 
@@ -390,7 +391,7 @@ atr_di_index_to_string(uint8_t val)
 const char *
 atr_clock_stop_to_string(atr_clock_stop_t val)
 {
-	if (val >= sizeof (atr_clock_table) / sizeof (atr_clock_table[0])) {
+	if (val >= ARRAY_SIZE(atr_clock_table)) {
 		return ("<invalid>");
 	}
 
@@ -517,12 +518,12 @@ atr_parse(const uint8_t *buf, size_t len, atr_data_t *data)
 	/*
 	 * Ti is used to track the current iteration of T[A,B,C,D] that we are
 	 * on, as the ISO/IEC standard suggests. The way that values are
-	 * interpretted depends on the value of Ti.
+	 * interpreted depends on the value of Ti.
 	 *
 	 * When Ti is one, TA, TB, and TC represent global properties. TD's
 	 * protocol represents the preferred protocol.
 	 *
-	 * When Ti is two TA, TB, and TC also represent global properties.
+	 * When Ti is two, TA, TB, and TC also represent global properties.
 	 * However, TC only has meaning if the protocol is T=0.
 	 *
 	 * When Ti is 15, it indicates more global properties.
@@ -691,6 +692,10 @@ atr_supported_protocols(atr_data_t *data)
 			prot |= ATR_P_T1;
 			break;
 		default:
+			/*
+			 * T=15 is not a protocol, and all other protocol values
+			 * are currently reserved for future use.
+			 */
 			continue;
 		}
 	}
@@ -1104,9 +1109,6 @@ atr_data_alloc(void)
 void
 atr_data_free(atr_data_t *data)
 {
-	if (data == NULL)
-		return;
-
 	kmem_free(data, sizeof (atr_data_t));
 }
 

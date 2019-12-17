@@ -73,7 +73,7 @@ cfga_ccid_modify(uccid_cmd_icc_modify_t *modify, const char *ap,
 	}
 
 	bzero(&ucs, sizeof (ucs));
-	ucs.ucs_version = UCCID_VERSION_ONE;
+	ucs.ucs_version = UCCID_CURRENT_VERSION;
 
 	if (ioctl(fd, UCCID_CMD_STATUS, &ucs) != 0) {
 		int e = errno;
@@ -328,7 +328,7 @@ cfga_list_ext(const char *ap, struct cfga_list_data **ap_list, int *nlist,
 	}
 
 	bzero(&ucs, sizeof (ucs));
-	ucs.ucs_version = UCCID_VERSION_ONE;
+	ucs.ucs_version = UCCID_CURRENT_VERSION;
 
 	if (ioctl(fd, UCCID_CMD_STATUS, &ucs) != 0) {
 		int e = errno;

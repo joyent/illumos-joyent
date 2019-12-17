@@ -47,7 +47,7 @@ extern "C" {
 /*
  * Attempt to obtain exclusive access. If the UCN_TXN_DONT_BLOCK flag is
  * specified, the ioctl will return immediately if exclusive access cannot be
- * gained. Otherwise, it will block in an interruptable fashion. The argument is
+ * gained. Otherwise, it will block in an interruptible fashion. The argument is
  * a uccid_cmd_txn_begin_t.
  */
 #define	UCCID_CMD_TXN_BEGIN	(UCCID_IOCTL | 0x01)
@@ -75,7 +75,7 @@ typedef struct uccid_cmd_txn_end {
 } __packed uccid_cmd_txn_end_t;
 
 /*
- * Obtain the status of the slot. Fills in ucs_flags.
+ * Obtain the status of the slot. Returns a filled-in uccid_cmd_status_t.
  */
 #define	UCCID_CMD_STATUS	(UCCID_IOCTL | 0x3)
 

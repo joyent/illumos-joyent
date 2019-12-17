@@ -36,9 +36,6 @@ PROGS =		\
 	yk-poll		\
 	yk-readonly
 
-DATA = \
-	smartcard_list.txt
-
 COMMON_OBJS = \
 	atr.o
 
@@ -49,13 +46,12 @@ include $(SRC)/test/Makefile.com
 
 CMDS = $(PROGS:%=$(TESTDIR)/%)
 $(CMDS) := FILEMODE = 0555
-$(ROOTDATA) := FILEMODE = 0444
 
 CPPFLAGS += -D_REENTRANT -I$(SRC)/common/ccid/
 
 all: $(PROGS)
 
-install: all $(CMDS) $(ROOTDATA)
+install: all $(CMDS)
 
 clobber: clean
 	-$(RM) $(PROGS)

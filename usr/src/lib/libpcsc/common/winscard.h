@@ -17,13 +17,16 @@
 #define	_WINSCARD_H
 
 /*
- * This library provides a compatability interface with programs designed
+ * This library provides a compatibility interface with programs designed
  * against the PC SmartCard Library. This originates from Microsoft and has been
  * used on a few different forms over the years by folks. The purpose of this
- * library is for compatability.
+ * library is for compatibility.
+ *
+ * At the time of this writing, Microsofts API documentation can be found here:
+ * https://docs.microsoft.com/en-us/windows/win32/api/winscard/
  *
  * New consumers should not use this library and instead should leverage
- * uccid(7I) instead.
+ * ccid(7D) instead.
  */
 
 #include <stdint.h>

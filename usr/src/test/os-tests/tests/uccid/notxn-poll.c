@@ -14,7 +14,7 @@
  */
 
 /*
- * Verify that trying to poll without a transcation / excl access results in an
+ * Verify that trying to poll without a transaction / excl access results in an
  * error.
  */
 

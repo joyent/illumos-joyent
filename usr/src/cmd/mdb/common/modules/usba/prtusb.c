@@ -27,7 +27,7 @@
 
 
 #include <sys/mdb_modapi.h>
-
+#include <sys/sysmacros.h>
 
 #include <sys/usb/usba.h>
 #include <sys/usb/usba/usba_types.h>
@@ -508,7 +508,7 @@ static usb_descr_item_t usb_ccid_descr[] = {
 	{1, "bPinSupport"},
 	{1, "bMaxCCIDBusySlots"}
 };
-static uint_t usb_ccid_item = 22;
+static uint_t usb_ccid_item = ARRAY_SIZE(usb_ccid_descr);
 
 
 /* ****************************************************************** */
@@ -1157,7 +1157,7 @@ prt_usb_desc(uintptr_t usb_cfg, uint_t cfg_len)
 				mdb_printf("WA Descriptor\n");
 				print_descr(paddr, nlen, usb_wa_descr,
 				    usb_wa_item);
-			} else if (usb_if.bInterfaceClass == 0xb &&
+			} else if (usb_if.bInterfaceClass == USB_CLASS_CCID &&
 			    usb_if.bInterfaceSubClass == 0x0) {
 				mdb_printf("CCID Descriptor\n");
 				print_descr(paddr, nlen, usb_ccid_descr,

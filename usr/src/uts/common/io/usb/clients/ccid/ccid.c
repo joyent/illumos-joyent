@@ -33,7 +33,7 @@
  * allowing us to figure out what its actual state is. We don't rely on any
  * initial Interrupt-IN polling to allow for the case where either the hardware
  * doesn't report it or to better handle the devices without an Interrupt-IN
- * entry. Just because we open up the Interupt-IN pipe, hardware is not
+ * entry. Just because we open up the Interrupt-IN pipe, hardware is not
  * obligated to tell us, as the detaching and reattaching of a driver will not
  * cause a power cycle.
  *
@@ -142,7 +142,8 @@
  *
  * Readers either support mode 1, mode 2, mode 3, or mode 3 and 4. All readers
  * that support extended APDUs support short APDUs. At this time, we do not
- * support character mode or TPDU mode.
+ * support character mode or TPDU mode, and we use only short APDUs even for
+ * readers that support extended APDUs.
  *
  * The ICC and the reader need to be in agreement in order for them to be able
  * to exchange information. The ICC indicates what it supports by replying to a
@@ -159,7 +160,7 @@
  * Otherwise, the driver must take the application data (APDU) and transform it
  * into the form required by the corresponding protocol.
  *
- * There are several parameters that need to be negotiated to insure that the
+ * There are several parameters that need to be negotiated to ensure that the
  * protocols work correctly. To negotiate these parameters and to select a
  * protocol, the driver must construct a PPS (protocol and parameters structure)
  * request and exchange that with the ICC. A reader may optionally take care of
@@ -214,7 +215,7 @@
  *
  *   A. The user can end a transaction (whether through an ioctl or close(9E)).
  *   B. The ICC can be removed
- *   C. The CCID device can be removed or is reset at a USB level.
+ *   C. The CCID device can be removed or reset at a USB level.
  *
  * Each of these has implications on the outstanding I/O and other states of
  * the world. When events of type A occur, we need to clean up states 1 and 2.
@@ -282,7 +283,7 @@
  *
  *   Once that is done, we need to proceed to step 2. Since we're doing only
  *   APDU processing, this is as simple as waiting for that command to complete
- *   and/or potentially issues an abort or reset.
+ *   and/or potentially issue an abort or reset.
  *
  *   While this is ongoing an additional flag (CCID_SLOT_F_NEED_IO_TEARDOWN)
  *   will be set on the slot to make sure that we know that we can't issue new
@@ -373,7 +374,7 @@
  * Minimum and maximum minor ids. We treat the maximum valid 32-bit minor as
  * what we can use due to issues in some file systems and the minors that they
  * can use. We reserved zero as an invalid minor number to make it easier to
- * tell if things have been initailized or not.
+ * tell if things have been initialized or not.
  */
 #define	CCID_MINOR_MIN		1
 #define	CCID_MINOR_MAX		MAXMIN32
@@ -400,6 +401,13 @@ struct ccid_command;
 /*
  * This structure is used to map between the global set of minor numbers and the
  * things represented by them.
+ *
+ * We have two different kinds of  minor nodes. The first are CCID slots. The
+ * second are cloned opens of those slots. Each of these items has a
+ * ccid_minor_idx_t embedded in them that is used to index them in an AVL tree.
+ * Given that the number of entries that should be present here is unlikely to
+ * be terribly large at any given time, it is hoped that an AVL tree will
+ * suffice for now.
  */
 typedef struct ccid_minor_idx {
 	id_t cmi_minor;
@@ -554,7 +562,6 @@ typedef enum ccid_flags {
 	CCID_F_NEEDS_PPS	= 1 << 1,
 	CCID_F_NEEDS_PARAMS	= 1 << 2,
 	CCID_F_NEEDS_DATAFREQ	= 1 << 3,
-	CCID_F_NEEDS_IFSD	= 1 << 4,
 	CCID_F_DETACHING	= 1 << 5,
 	CCID_F_WORKER_REQUESTED	= 1 << 6,
 	CCID_F_WORKER_RUNNING	= 1 << 7,
@@ -564,8 +571,6 @@ typedef enum ccid_flags {
 #define	CCID_F_DEV_GONE_MASK	(CCID_F_DETACHING | CCID_F_DISCONNECTED)
 #define	CCID_F_WORKER_MASK	(CCID_F_WORKER_REQUESTED | \
     CCID_F_WORKER_RUNNING)
-#define	CCID_F_ICC_INIT_MASK	(CCID_F_NEEDS_PPS | CCID_F_NEEDS_PARAMS | \
-    CCID_F_NEEDS_IFSD | CCID_F_NEEDS_DATAFREQ)
 
 typedef struct ccid_stats {
 	uint64_t	cst_intr_errs;
@@ -653,12 +658,7 @@ typedef struct ccid_command {
 static void *ccid_softstate;
 
 /*
- * This is used to keep track of our minor nodes. We have two different kinds of
- * minor nodes. The first are CCID slots. The second are cloned opens of those
- * slots. Each of these items has a ccid_minor_idx_t embedded in them that is
- * used to index them in an AVL tree. Given that the number of entries that
- * should be present here is unlikely to be terribly large at any given time, it
- * is hoped that an AVL tree will suffice for now.
+ * This is used to keep track of our minor nodes.
  */
 static kmutex_t ccid_idxlock;
 static avl_tree_t ccid_idx;
@@ -724,8 +724,6 @@ static boolean_t
 ccid_minor_idx_alloc(ccid_minor_idx_t *idx, boolean_t sleep)
 {
 	id_t id;
-	ccid_minor_idx_t *ip;
-	avl_index_t where;
 
 	mutex_enter(&ccid_idxlock);
 	if (sleep) {
@@ -738,9 +736,7 @@ ccid_minor_idx_alloc(ccid_minor_idx_t *idx, boolean_t sleep)
 		return (B_FALSE);
 	}
 	idx->cmi_minor = id;
-	ip = avl_find(&ccid_idx, idx, &where);
-	VERIFY3P(ip, ==, NULL);
-	avl_insert(&ccid_idx, idx, where);
+	avl_add(&ccid_idx, idx);
 	mutex_exit(&ccid_idxlock);
 
 	return (B_TRUE);
@@ -2176,6 +2172,10 @@ ccid_slot_setup_functions(ccid_t *ccid, ccid_slot_t *slot)
 	switch (ccid->ccid_class.ccd_dwFeatures & bits) {
 	case CCID_CLASS_F_SHORT_APDU_XCHG:
 	case CCID_CLASS_F_EXT_APDU_XCHG:
+		/*
+		 * Readers with extended APDU support always also support
+		 * short APDUs. We only ever use short APDUs.
+		 */
 		slot->cs_icc.icc_tx = ccid_write_apdu;
 		slot->cs_icc.icc_complete = ccid_complete_apdu;
 		slot->cs_icc.icc_teardown = ccid_teardown_apdu;
@@ -2221,13 +2221,6 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 		return (B_FALSE);
 	}
 
-	if ((ccid->ccid_flags & (CCID_F_NEEDS_PPS | CCID_F_NEEDS_PARAMS |
-	    CCID_F_NEEDS_DATAFREQ)) != 0) {
-		ccid_error(ccid, "!CCID reader does not support required "
-		    "protocol/parameter setup automation");
-		return (B_FALSE);
-	}
-
 	if ((ret = ccid_command_get_parameters(ccid, slot, &prot,
 	    &slot->cs_icc.icc_params)) != 0) {
 		ccid_error(ccid, "!failed to get parameters for slot %u: %d",
@@ -2237,6 +2230,13 @@ ccid_slot_params_init(ccid_t *ccid, ccid_slot_t *slot, mblk_t *atr)
 
 	slot->cs_icc.icc_protocols = atr_supported_protocols(data);
 	slot->cs_icc.icc_cur_protocol = prot;
+
+	if ((ccid->ccid_flags & (CCID_F_NEEDS_PPS | CCID_F_NEEDS_PARAMS |
+	    CCID_F_NEEDS_DATAFREQ)) != 0) {
+		ccid_error(ccid, "!CCID reader does not support required "
+		    "protocol/parameter setup automation");
+		return (B_FALSE);
+	}
 
 	return (B_TRUE);
 }
@@ -2270,7 +2270,7 @@ ccid_slot_power_on(ccid_t *ccid, ccid_slot_t *slot, ccid_class_voltage_t volts,
 		freemsg(*atr);
 
 		/*
-		 * If we got ENXIO, then we know that there is no CCID
+		 * If we got ENXIO, then we know that there is no ICC
 		 * present. This could happen for a number of reasons.
 		 * For example, we could have just started up and no
 		 * card was plugged in (we default to assuming that one
@@ -2641,7 +2641,7 @@ ccid_parse_class_desc(ccid_t *ccid)
 	 * Establish the target length we're looking for from usb_parse_data().
 	 * Note that we cannot use the sizeof (ccid_class_descr_t) for this
 	 * because that function does not know how to account for the padding at
-	 * the end of the target structure (which is resasonble). So we manually
+	 * the end of the target structure (which is reasonble). So we manually
 	 * figure out the number of bytes it should in theory write.
 	 */
 	tlen = offsetof(ccid_class_descr_t, ccd_bMaxCCIDBusySlots) +
@@ -2769,10 +2769,6 @@ ccid_supported(ccid_t *ccid)
 	bits = CCID_CLASS_F_AUTO_BAUD | CCID_CLASS_F_AUTO_ICC_CLOCK;
 	if ((feat & bits) != bits) {
 		ccid->ccid_flags |= CCID_F_NEEDS_DATAFREQ;
-	}
-
-	if ((feat & CCID_CLASS_F_TPDU_XCHG) != 0) {
-		return (B_FALSE);
 	}
 
 	return (B_TRUE);
@@ -3108,7 +3104,8 @@ ccid_disconnect_cb(dev_info_t *dip)
 
 	/*
 	 * If there are outstanding commands, they will ultimately be cleaned
-	 * up as the USB commands themselves time out.
+	 * up as the USB commands themselves time out. This will also include
+	 * cleanup up of commands waiting for I/O teardown.
 	 */
 	mutex_exit(&ccid->ccid_mutex);
 
@@ -3396,8 +3393,8 @@ ccid_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
-	if (list_is_empty(&ccid->ccid_command_queue) == 0 ||
-	    list_is_empty(&ccid->ccid_complete_queue) == 0) {
+	if (!list_is_empty(&ccid->ccid_command_queue) ||
+	    !list_is_empty(&ccid->ccid_complete_queue)) {
 		mutex_exit(&ccid->ccid_mutex);
 		return (DDI_FAILURE);
 	}
@@ -3410,9 +3407,6 @@ ccid_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 static void
 ccid_minor_free(ccid_minor_t *cmp)
 {
-	/*
-	 * Clean up queued commands.
-	 */
 	VERIFY3U(cmp->cm_idx.cmi_minor, ==, CCID_MINOR_INVALID);
 	crfree(cmp->cm_opener);
 	cv_destroy(&cmp->cm_iowait_cv);
@@ -3544,7 +3538,7 @@ ccid_user_io_done(ccid_t *ccid, ccid_slot_t *slot)
 
 /*
  * This is called in a few different sitautions. It's called when an exclusive
- * hold is being released by a user on a the slot. It's also called when the ICC
+ * hold is being released by a user on the slot. It's also called when the ICC
  * is removed, the reader has been unplugged, or the ICC is being reset. In all
  * these cases we need to make sure that I/O is taken care of and we won't be
  * leaving behind vestigial garbage.
@@ -3655,7 +3649,6 @@ ccid_write_apdu(ccid_t *ccid, ccid_slot_t *slot)
 	if ((ret = ccid_command_alloc(ccid, slot, B_FALSE, NULL,
 	    slot->cs_io.ci_ilen, CCID_REQUEST_TRANSFER_BLOCK, 0, 0, 0,
 	    &cc)) != 0) {
-		mutex_enter(&ccid->ccid_mutex);
 		return (ret);
 	}
 
@@ -3950,7 +3943,7 @@ ccid_ioctl_status(ccid_slot_t *slot, intptr_t arg, int mode)
 	if (ddi_copyin((void *)arg, &ucs, sizeof (ucs), mode & FKIOCTL) != 0)
 		return (EFAULT);
 
-	if (ucs.ucs_version != UCCID_VERSION_ONE)
+	if (ucs.ucs_version != UCCID_CURRENT_VERSION)
 		return (EINVAL);
 
 	ucs.ucs_status = 0;
@@ -4013,7 +4006,7 @@ ccid_ioctl_txn_begin(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 	if (ddi_copyin((void *)arg, &uct, sizeof (uct), mode & FKIOCTL) != 0)
 		return (EFAULT);
 
-	if (uct.uct_version != UCCID_VERSION_ONE)
+	if (uct.uct_version != UCCID_CURRENT_VERSION)
 		return (EINVAL);
 
 	if ((uct.uct_flags & ~UCCID_TXN_DONT_BLOCK) != 0)
@@ -4041,7 +4034,7 @@ ccid_ioctl_txn_end(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg, int mode)
 		return (EFAULT);
 	}
 
-	if (uct.uct_version != UCCID_VERSION_ONE) {
+	if (uct.uct_version != UCCID_CURRENT_VERSION) {
 		return (EINVAL);
 	}
 
@@ -4128,7 +4121,7 @@ ccid_ioctl_icc_modify(ccid_slot_t *slot, ccid_minor_t *cmp, intptr_t arg,
 		return (EFAULT);
 	}
 
-	if (uci.uci_version != UCCID_VERSION_ONE) {
+	if (uci.uci_version != UCCID_CURRENT_VERSION) {
 		return (EINVAL);
 	}
 
