@@ -567,7 +567,7 @@ zfs_fm_recv(fmd_hdl_t *hdl, fmd_event_t *ep, nvlist_t *nvl, const char *class)
 	nvlist_t *detector;
 	boolean_t pool_found = B_FALSE;
 	boolean_t isresource;
-	boolean_t isspare, islog, iscache;
+	boolean_t is_inactive_spare, islog, iscache;
 	nvlist_t *vd_nvl = NULL;
 	char *fru, *type, *vdg;
 	find_cbdata_t cb;
@@ -860,7 +860,7 @@ zfs_fm_recv(fmd_hdl_t *hdl, fmd_event_t *ep, nvlist_t *nvl, const char *class)
 		 * interested in the boolean flags.
 		 */
 		if ((vd_nvl = zpool_find_vdev(zhp, vdg,
-		    &isspare, &islog, &iscache)) != NULL) {
+		    &is_inactive_spare, &islog, &iscache)) != NULL) {
 			nvlist_free(vd_nvl);
 		}
 		fmd_hdl_free(hdl, vdg, MAX_ULL_STR);
@@ -983,7 +983,7 @@ zfs_fm_recv(fmd_hdl_t *hdl, fmd_event_t *ep, nvlist_t *nvl, const char *class)
 			 * vdevs. Normal pool vdevs should be diagnosed
 			 * immediately if a probe failure is received.
 			 */
-			if (!isspare || fmd_serd_record(hdl,
+			if (!is_inactive_spare || fmd_serd_record(hdl,
 			    zcp->zc_data.zc_serd_probe, ep)) {
 				checkremove = B_TRUE;
 			}
