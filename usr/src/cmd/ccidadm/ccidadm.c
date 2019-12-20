@@ -46,7 +46,7 @@ typedef enum {
 	CCIDADM_LIST_PRODUCT,
 	CCIDADM_LIST_STATE,
 	CCIDADM_LIST_TRANSPORT,
-	CCIDADM_LIST_USABLE,
+	CCIDADM_LIST_SUPPORTED,
 } ccidadm_list_index_t;
 
 typedef struct ccidadm_pair {
@@ -261,7 +261,7 @@ ccidadm_list_ofmt_cb(ofmt_arg_t *ofmt, char *buf, uint_t buflen)
 		return (ccidadm_list_slot_transport_str(cloa->cloa_status, buf,
 		    buflen));
 		break;
-	case CCIDADM_LIST_USABLE:
+	case CCIDADM_LIST_SUPPORTED:
 		return (ccidadm_list_slot_usable_str(cloa->cloa_status, buf,
 		    buflen));
 		break;
@@ -301,7 +301,7 @@ static ofmt_field_t ccidadm_list_fields[] = {
 	{ "DEVICE",	16,	CCIDADM_LIST_DEVICE,	ccidadm_list_ofmt_cb },
 	{ "CARD STATE",	12,	CCIDADM_LIST_STATE,	ccidadm_list_ofmt_cb },
 	{ "TRANSPORT",	12,	CCIDADM_LIST_TRANSPORT,	ccidadm_list_ofmt_cb },
-	{ "USABLE",	12,	CCIDADM_LIST_USABLE,	ccidadm_list_ofmt_cb },
+	{ "SUPPORTED",	12,	CCIDADM_LIST_SUPPORTED,	ccidadm_list_ofmt_cb },
 	{ NULL,		0,	0,			NULL	}
 };
 
