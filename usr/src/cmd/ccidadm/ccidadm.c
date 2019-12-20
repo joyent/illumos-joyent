@@ -221,13 +221,20 @@ ccidadm_list_slot_usable_str(uccid_cmd_status_t *ucs, char *buf,
     uint_t buflen)
 {
 	char *un = "";
-	uint_t bits = CCID_CLASS_F_SHORT_APDU_XCHG | CCID_CLASS_F_EXT_APDU_XCHG;
+	ccid_class_features_t feat;
+	uint_t prot = CCID_CLASS_F_SHORT_APDU_XCHG | CCID_CLASS_F_EXT_APDU_XCHG;
+	uint_t param = CCID_CLASS_F_AUTO_PARAM_NEG | CCID_CLASS_F_AUTO_PPS;
+	uint_t clock = CCID_CLASS_F_AUTO_BAUD | CCID_CLASS_F_AUTO_ICC_CLOCK;
 
-	if ((ucs->ucs_class.ccd_dwFeatures & bits) == 0) {
+	feat = ucs->ucs_class.ccd_dwFeatures;
+
+	if ((feat & prot) == 0 ||
+	    (feat & param) != param ||
+	    (feat & clock) != clock) {
 		un = "un";
 	}
 
-	return (snprintf(buf, buflen, "%susable", un) < buflen);
+	return (snprintf(buf, buflen, "%ssupported", un) < buflen);
 }
 
 static boolean_t
@@ -294,7 +301,7 @@ static ofmt_field_t ccidadm_list_fields[] = {
 	{ "DEVICE",	16,	CCIDADM_LIST_DEVICE,	ccidadm_list_ofmt_cb },
 	{ "CARD STATE",	12,	CCIDADM_LIST_STATE,	ccidadm_list_ofmt_cb },
 	{ "TRANSPORT",	12,	CCIDADM_LIST_TRANSPORT,	ccidadm_list_ofmt_cb },
-	{ "USABLE",	8,	CCIDADM_LIST_USABLE,	ccidadm_list_ofmt_cb },
+	{ "USABLE",	12,	CCIDADM_LIST_USABLE,	ccidadm_list_ofmt_cb },
 	{ NULL,		0,	0,			NULL	}
 };
 
