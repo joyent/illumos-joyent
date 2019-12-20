@@ -45,7 +45,8 @@ typedef enum {
 	CCIDADM_LIST_DEVICE,
 	CCIDADM_LIST_PRODUCT,
 	CCIDADM_LIST_STATE,
-	CCIDADM_LIST_TRANSPORT
+	CCIDADM_LIST_TRANSPORT,
+	CCIDADM_LIST_USABLE,
 } ccidadm_list_index_t;
 
 typedef struct ccidadm_pair {
@@ -216,6 +217,20 @@ ccidadm_list_slot_transport_str(uccid_cmd_status_t *ucs, char *buf,
 }
 
 static boolean_t
+ccidadm_list_slot_usable_str(uccid_cmd_status_t *ucs, char *buf,
+    uint_t buflen)
+{
+	char *un = "";
+	uint_t bits = CCID_CLASS_F_SHORT_APDU_XCHG | CCID_CLASS_F_EXT_APDU_XCHG;
+
+	if ((ucs->ucs_class.ccd_dwFeatures & bits) == 0) {
+		un = "un";
+	}
+
+	return (snprintf(buf, buflen, "%susable", un) < buflen);
+}
+
+static boolean_t
 ccidadm_list_ofmt_cb(ofmt_arg_t *ofmt, char *buf, uint_t buflen)
 {
 	ccid_list_ofmt_arg_t *cloa = ofmt->ofmt_cbarg;
@@ -237,6 +252,10 @@ ccidadm_list_ofmt_cb(ofmt_arg_t *ofmt, char *buf, uint_t buflen)
 		break;
 	case CCIDADM_LIST_TRANSPORT:
 		return (ccidadm_list_slot_transport_str(cloa->cloa_status, buf,
+		    buflen));
+		break;
+	case CCIDADM_LIST_USABLE:
+		return (ccidadm_list_slot_usable_str(cloa->cloa_status, buf,
 		    buflen));
 		break;
 	default:
@@ -274,7 +293,8 @@ static ofmt_field_t ccidadm_list_fields[] = {
 	{ "PRODUCT",	24,	CCIDADM_LIST_PRODUCT,	ccidadm_list_ofmt_cb },
 	{ "DEVICE",	16,	CCIDADM_LIST_DEVICE,	ccidadm_list_ofmt_cb },
 	{ "CARD STATE",	12,	CCIDADM_LIST_STATE,	ccidadm_list_ofmt_cb },
-	{ "TRANSPORT",  10,	CCIDADM_LIST_TRANSPORT,	ccidadm_list_ofmt_cb },
+	{ "TRANSPORT",	12,	CCIDADM_LIST_TRANSPORT,	ccidadm_list_ofmt_cb },
+	{ "USABLE",	8,	CCIDADM_LIST_USABLE,	ccidadm_list_ofmt_cb },
 	{ NULL,		0,	0,			NULL	}
 };
 

@@ -381,7 +381,12 @@ cfga_list_ext(const char *ap, struct cfga_list_data **ap_list, int *nlist,
 	 * ioctl to know that the slot is resetting or something else is going
 	 * on I guess.
 	 */
-	cld->ap_cond = CFGA_COND_OK;
+	if ((ucs.ucs_class.ccd_dwFeatures &
+	    (CCID_CLASS_F_SHORT_APDU_XCHG | CCID_CLASS_F_EXT_APDU_XCHG)) == 0) {
+		cld->ap_cond = CFGA_COND_UNUSABLE;
+	} else {
+		cld->ap_cond = CFGA_COND_OK;
+	}
 	cld->ap_busy = 0;
 	cld->ap_status_time = (time_t)-1;
 	cfga_ccid_fill_info(&ucs, cld->ap_info, sizeof (cld->ap_info));
