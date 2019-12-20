@@ -4225,8 +4225,8 @@ ccid_chpoll(dev_t dev, short events, int anyyet, short *reventsp,
 		 */
 		if ((slot->cs_io.ci_flags & CCID_IO_F_DONE) != 0) {
 			ready |= POLLIN | POLLRDNORM;
-		} else if ((slot->cs_io.ci_flags & CCID_IO_F_POLLOUT_FLAGS) == 0 &&
-		    (slot->cs_flags & CCID_SLOT_F_ACTIVE) != 0 &&
+		} else if ((slot->cs_flags & CCID_SLOT_F_ACTIVE) != 0 &&
+		    (slot->cs_io.ci_flags & CCID_IO_F_POLLOUT_FLAGS) == 0 &&
 		    slot->cs_icc.icc_tx != NULL) {
 			ready |= POLLOUT;
 		}

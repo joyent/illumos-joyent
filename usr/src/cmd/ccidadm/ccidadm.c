@@ -71,8 +71,7 @@ ccidadm_open(const char *base, boolean_t card)
 	char buf[PATH_MAX];
 
 	/*
-	 * For an absolute path, just try the base path. If it doesn't match our
-	 * prefix, simulate ENOENT.
+	 * If it's an absolute path, just try to open it.
 	 */
 	if (base[0] == '/') {
 		return (open(base, O_RDWR));
@@ -511,13 +510,10 @@ ccidadm_do_atr(int argc, char *argv[])
 
 	bzero(&caa, sizeof (caa));
 	optind = 0;
-	while ((c = getopt(argc, argv, "vpx")) != -1) {
+	while ((c = getopt(argc, argv, "vx")) != -1) {
 		switch (c) {
 		case 'v':
 			caa.caa_verbose = B_TRUE;
-			break;
-		case 'p':
-			caa.caa_props = B_TRUE;
 			break;
 		case 'x':
 			caa.caa_hex = B_TRUE;
@@ -563,7 +559,7 @@ ccidadm_do_atr(int argc, char *argv[])
 static void
 ccidadm_atr_usage(FILE *out)
 {
-	(void) fprintf(out, "\tatr [-pvx]\t[device] ...\n");
+	(void) fprintf(out, "\tatr [-vx]\t[device] ...\n");
 }
 
 static void

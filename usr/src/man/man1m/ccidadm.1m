@@ -18,13 +18,13 @@
 .Nm ccidadm
 .Nd CCID administration utility
 .Sh SYNOPSIS
-.Nm
+.Nm /usr/lib/ccid/ccidadm
 .Ar list
-.Nm
+.Nm /usr/lib/ccid/ccidadm
 .Ar atr
 .Op Fl pvx
 .Op Ar device
-.Nm
+.Nm /usr/lib/ccid/ccidadm
 .Ar reader
 .Op Ar device
 .Sh DESCRIPTION
@@ -82,13 +82,11 @@ Prints the ATR of an ICC that is inserted in the specified slot.
 If a device is specified it must refer to a certain slot.
 If no device is specified the command will print the ATR of all inserted slots
 in the system.
+A human-readable summary of the ATR data is printed when no flags are given.
 The following options can be used to alter the output of the
 .Cm atr
 command::
 .Bl -tag -width Ds
-.It Fl p
-Prints a human-readable summary of the ATR data.
-This is the default if no flags are specified.
 .It Fl v
 Verbose output, the individual bytes of the ATR are printed and decoded
 bit-by-bit in a human-readable form.

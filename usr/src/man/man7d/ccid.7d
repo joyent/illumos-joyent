@@ -11,7 +11,7 @@
 .\"
 .\" Copyright 2019 Joyent, Inc.
 .\"
-.Dd February 14, 2019
+.Dd December 20, 2019
 .Dt CCID 7D
 .Os
 .Sh NAME
@@ -43,7 +43,8 @@ These different flavors support different communication protocols and
 have different levels of automation for determining the protocol and
 transfers that are required.
 .Pp
-At this time, only the APDU protocol is supported.
+At this time, only the short APDU protocol is supported, which also works with
+readers using the extended APDU protocol.
 TPDU and character level readers are not supported by the driver.
 Readers in this category will still attach; however,
 I/O cannot be performed to them.
@@ -155,13 +156,15 @@ The device has completed a command the results may be retrieved with
 .It Dv POLLHUP
 The card has been removed from the slot.
 .It Dv POLLERR
-An hardware error has occured, or the CCID reader has been disconnected.
+An hardware error has occurred, or the CCID reader has been disconnected.
 .El
 .Pp
 If
 .Xr poll 2
 is called while no transaction is active, none of these events will ever occur
-and poll may block indefinitely.
+and
+.Xr poll 2
+may block indefinitely if no timeout is given.
 .Pp
 One important note is that readers with multiple slots often still only
 allow I/O a single command to be outstanding across all of the slots in
@@ -245,8 +248,12 @@ If another transaction is already active,
 will be returned.
 Consequently, all threads in a multi-threaded application share the transaction
 state and may issue writes, and read the results.
-The same applies to parent processes and their forked child processes inheriting
-an open slot minor.
+The same applies to any other method of sharing an open file descriptor of a slot
+minor, be it by sharing the fd over a socket, a child process inheriting it from
+its parent during
+.Xr fork 2 ,
+even across calls to
+.Xr exec 2 .
 .Ss Device Status and ATR
 Once a slot has been opened, any caller may issue commands to get the
 status of the slot.

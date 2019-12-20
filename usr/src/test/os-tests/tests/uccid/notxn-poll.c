@@ -14,8 +14,8 @@
  */
 
 /*
- * Verify that trying to poll without a transaction / excl access results in an
- * error.
+ * Verify that trying to poll without a transaction / excl access works but
+ * returns no events.
  */
 
 #include <err.h>

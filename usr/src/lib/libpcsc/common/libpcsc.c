@@ -301,7 +301,7 @@ out:
 	return (ret);
 }
 
-static int
+static LONG
 uccid_status_helper(int fd, DWORD prots, uccid_cmd_status_t *ucs)
 {
 	/*
@@ -338,7 +338,7 @@ LONG
 SCardConnect(SCARDCONTEXT hdl, LPCSTR reader, DWORD mode, DWORD prots,
     LPSCARDHANDLE iccp, LPDWORD protp)
 {
-	int ret;
+	LONG ret;
 	uccid_cmd_status_t ucs;
 	pcsc_card_t *card;
 
@@ -501,7 +501,7 @@ SCardReconnect(SCARDHANDLE arg, DWORD mode, DWORD prots, DWORD init,
 {
 	uccid_cmd_status_t ucs;
 	pcsc_card_t *card = arg;
-	int ret;
+	LONG ret;
 
 	if (card == NULL) {
 		return (SCARD_E_INVALID_HANDLE);

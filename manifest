@@ -12304,6 +12304,7 @@ f usr/share/man/man1m/bootadm.1m 0444 root bin
 f usr/share/man/man1m/busstat.1m 0444 root bin
 f usr/share/man/man1m/captoinfo.1m 0444 root bin
 f usr/share/man/man1m/catman.1m 0444 root bin
+f usr/share/man/man1m/ccidadm.1m 0444 root bin
 f usr/share/man/man1m/cfgadm.1m 0444 root bin
 f usr/share/man/man1m/cfgadm_fp.1m 0444 root bin
 f usr/share/man/man1m/cfgadm_pci.1m 0444 root bin

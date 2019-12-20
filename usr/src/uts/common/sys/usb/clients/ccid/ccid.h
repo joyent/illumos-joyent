@@ -227,7 +227,7 @@ typedef enum ccid_response_code {
 	CCID_RESPONSE_PARAMETERS	= 0x82, /* RDR_to_PC_Parameters */
 	CCID_RESPONSE_ESCAPE		= 0x83,	/* RDR_to_PC_Escape */
 	CCID_RESPONSE_DATA_CLOCK	= 0x84	/* RDR_to_PC_DataRateAnd */
-						/* Clock Frequency */
+						/* ClockFrequency */
 } __packed ccid_response_code_t;
 
 /*
