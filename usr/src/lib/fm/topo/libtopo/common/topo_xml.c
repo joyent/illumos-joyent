@@ -1346,12 +1346,12 @@ pad_process(topo_mod_t *mp, tf_rdata_t *rd, xmlNodePtr pxn, tnode_t *ptn,
 		*rpad = new;
 	}
 
-	if (new->tpad_dcnt > 0)
-		if (dependents_create(mp, rd->rd_finfo, new, pxn, ptn) < 0)
-			return (-1);
-
 	if (new->tpad_pgcnt > 0)
 		if (pgroups_create(mp, new, ptn) < 0)
+			return (-1);
+
+	if (new->tpad_dcnt > 0)
+		if (dependents_create(mp, rd->rd_finfo, new, pxn, ptn) < 0)
 			return (-1);
 
 	return (0);

@@ -68,6 +68,7 @@ extern "C" {
 #define	MOTHERBOARD	"motherboard"
 #define	NIU		"niu"
 #define	NIUFN		"niufn"
+#define	NVME		"nvme"
 #define	PCI_BUS		"pcibus"
 #define	PCI_DEVICE	"pcidev"
 #define	PCI_FUNCTION    "pcifn"
@@ -138,6 +139,7 @@ extern "C" {
 #define	TOPO_BINDING_ENCLOSURE	"enclosure"
 #define	TOPO_BINDING_SLOT	"slot"
 #define	TOPO_BINDING_PORT	"port"
+#define	TOPO_BINDING_PARENT_DEV	"parent-device"
 
 #define	TOPO_PGROUP_STORAGE	"storage"
 #define	TOPO_STORAGE_INITIATOR_PORT	"initiator-port"
@@ -289,6 +291,9 @@ extern "C" {
 #define	TOPO_PROP_UFM_SLOT_VERSION	"ufm-slot-version"
 #define	TOPO_PROP_UFM_SLOT_MODE		"ufm-slot-mode"
 #define	TOPO_PROP_UFM_SLOT_ACTIVE	"ufm-slot-active"
+
+#define	TOPO_PGROUP_NVME		"nvme-properties"
+#define	TOPO_PROP_NVME_VER		"nvme-version"
 
 #ifdef	__cplusplus
 }

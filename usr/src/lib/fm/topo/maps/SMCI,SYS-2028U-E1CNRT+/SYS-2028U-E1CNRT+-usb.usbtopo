@@ -1,0 +1,50 @@
+#
+# This file and its contents are supplied under the terms of the
+# Common Development and Distribution License ("CDDL"), version 1.0.
+# You may only use this file in accordance with the terms of version
+# 1.0 of the CDDL.
+#
+# A full copy of the text of the CDDL should have accompanied this
+# source.  A copy of the CDDL is also available via the Internet at
+# http://www.illumos.org/license/CDDL.
+#
+
+#
+# Copyright 2019 Joyent, Inc.
+#
+
+#
+# This file describes the USB topology for the SuperMicro
+# SYS-2028U-E1CNRT+ product.  While the system board contains headers for up
+# to 5 USB 3.0 ports, this particular plaform only wires up two of them.
+# Both ports are accessible from the rear of the chassis.
+#
+# For more information on the format see topo_usb_file.c.
+#
+
+enable-acpi-match
+port
+	label
+		Rear Upper USB
+	chassis
+	external
+	port-type
+		0x3
+	acpi-path
+		\_SB_.PC00.XHCI.RHUB.HS02
+	acpi-path
+		\_SB_.PC00.XHCI.RHUB.SS02
+end-port
+
+port
+	label
+		Rear Lower USB
+	chassis
+	external
+	port-type
+		0x3
+	acpi-path
+		\_SB_.PC00.XHCI.RHUB.HS01
+	acpi-path
+		\_SB_.PC00.XHCI.RHUB.SS01
+end-port
