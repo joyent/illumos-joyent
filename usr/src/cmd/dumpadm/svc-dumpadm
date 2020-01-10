@@ -21,7 +21,7 @@
 #
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 #
 
 . /lib/svc/share/smf_include.sh
@@ -107,16 +107,16 @@ else
 	exit $SMF_EXIT_ERR_CONFIG
 fi
 
-if [[ -f /var/crash/volatile/keyfile ]]; then
-	/usr/sbin/dumpadm -k /var/crash/volatile/keyfile || \
-	exit $SMT_EXIT_ERR_CONFIG
-fi
-
 if [ -r /etc/dumpadm.conf ]; then
 	. /etc/dumpadm.conf
 else
 	echo "WARNING: /etc/dumpadm.conf is missing or unreadable" >& 2
 	exit $SMF_EXIT_ERR_CONFIG
+fi
+
+if [[ -f $DUMPADM_SAVDIR/keyfile ]]; then
+	/usr/sbin/dumpadm -k $DUMPADM_SAVDIR/keyfile || \
+	exit $SMT_EXIT_ERR_CONFIG
 fi
 
 #
@@ -153,6 +153,7 @@ if [ "x$DUMPADM_ENABLE" != xno ]; then
 		    mksavedir && /usr/bin/savecore $DUMPADM_SAVDIR &
 		fi
 	else
+		keyarg=""
 		[[ -f "$DUMPADM_SAVDIR/keyfile" ]] && \
 			keyarg="-k $DUMPADM_SAVDIR/keyfile"
 
