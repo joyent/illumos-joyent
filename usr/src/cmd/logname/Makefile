@@ -10,23 +10,17 @@
 #
 
 #
-# Copyright 2020 <contributor>
+# Copyright 2019 Robert Mustacchi
 #
 
-#
-# MAPFILE HEADER START
-#
-# WARNING:  STOP NOW.  DO NOT MODIFY THIS FILE.
-# Object versioning must comply with the rules detailed in
-#
-#	usr/src/lib/README.mapfiles
-#
-# You should not be making modifications here until you've read the most current
-# copy of that file. If you need help, contact a gatekeeper for guidance.
-#
-# MAPFILE HEADER END
-#
+PROG =  logname
 
-$mapfile_version 2
+include ../Makefile.cmd
 
+all: $(PROG)
 
+install: all $(ROOTPROG)
+
+clean:
+
+include ../Makefile.targ
