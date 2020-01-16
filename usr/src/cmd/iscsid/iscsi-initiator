@@ -171,22 +171,25 @@ mount_iscsi() {
 }
 
 umount_iscsi () {
-	# In case any non-"zones" zpools reside on iscsi drives, export
+	# In case any non-system zpools reside on iscsi drives, export
 	# all of them now so that the system won't hang later in the shutdown
 	# sequence when those zpools need to be unmounted.
+	SYS_POOL=`svcprop -p config/zpool svc:/system/smartdc/init:default \
+	   2>/dev/null`
+	SYS_POOL=${SYS_POOL:-zones}
+
+	rc=0
 	zpools=$(zpool list -Ho name)
-	if [ -n $zpools ]; then
-		for pool in $zpools; do
-			if [ "$pool" == "zones" ]; then
-				continue
-			fi
-			zpool export $pool
-			rc=$?
-			if [ $rc -ne 0 ]; then
-				return $rc
-			fi
-		done
-	fi
+	for pool in $zpools; do
+		if [ "$pool" == $SYS_POOL ]; then
+			continue
+		fi
+		zpool export $pool
+		got=$?
+		if [ $got -ne 0 ]; then
+			echo "Exporting zpool $pool failed ($got)"
+		fi
+	done
 
 	#
 	# Generate iscsi mountp list from /etc/vfstab

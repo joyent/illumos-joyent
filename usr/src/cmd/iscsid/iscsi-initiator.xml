@@ -99,6 +99,12 @@ potential to specialize all the properties/methods.
         <service_fmri value='svc:/network/loopback' />
     </dependency>
 
+    <!--
+	We declare a dependency on the optional iscsi-target svc so that it
+	will not shutdown before the initiator svc. In this way we can use
+	targets on the same machine and not see a failure or hang when we're
+	exporting any zpools that might be using local targets.
+    -->
     <dependency
         name='iscsi-target'
         grouping='optional_all'
