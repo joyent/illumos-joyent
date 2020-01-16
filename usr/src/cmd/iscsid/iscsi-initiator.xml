@@ -23,6 +23,7 @@
  CDDL HEADER END
 
  Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ Copyright 2020 Joyent, Inc.
 
 	Service manifests for the iSCSI Initiator
 -->
@@ -98,6 +99,14 @@ potential to specialize all the properties/methods.
         <service_fmri value='svc:/network/loopback' />
     </dependency>
 
+    <dependency
+        name='iscsi-target'
+        grouping='optional_all'
+        restart_on='error'
+        type='service'>
+        <service_fmri value='svc:/network/iscsi/target' />
+    </dependency>
+
     <dependent
 	name='iscsi-initiator_multi-user'
 	grouping='optional_all'
@@ -136,7 +145,7 @@ potential to specialize all the properties/methods.
 			<method_credential
 			user='root'
 			group='root'
-			privileges='basic,sys_devices,sys_mount'
+			privileges='basic,sys_config,sys_devices,sys_mount'
 			/>
 		</method_context>
 	</exec_method>
