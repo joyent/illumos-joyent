@@ -178,7 +178,6 @@ umount_iscsi () {
 	   2>/dev/null`
 	SYS_POOL=${SYS_POOL:-zones}
 
-	rc=0
 	zpools=$(zpool list -Ho name)
 	for pool in $zpools; do
 		if [ "$pool" == $SYS_POOL ]; then
