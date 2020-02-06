@@ -3,7 +3,7 @@
  *
  * Copyright (c) 2015 Tycho Nightingale <tycho.nightingale@pluribusnetworks.com>
  * Copyright (c) 2015 Leon Dang
- * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
