@@ -56,7 +56,7 @@ POFILES = generic.po
 INS.liblink=	-$(RM) $@; $(SYMLINK) $(LIBLINKS)$(VERS) $@
 
 
-CPPFLAGS += 	-I$(SRC)/lib/krb5 \
+CPPFLAGS +=	-I$(SRC)/lib/krb5 \
 		-I$(SRC)/lib/krb5/kdb \
 		-I$(SRC)/lib/gss_mechs/mech_krb5/include \
 		-I$(SRC)/lib/gss_mechs/mech_krb5/krb5/os \

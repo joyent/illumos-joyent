@@ -22,7 +22,7 @@
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
 # Copyright (c) 2011, 2017 by Delphix. All rights reserved.
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 #
 
 LIBRARY= libzfs.a
@@ -61,7 +61,7 @@ include ../../Makefile.lib
 # libzfs must be installed in the root filesystem for mount(1M)
 include ../../Makefile.rootfs
 
-LIBS=	$(DYNLIB) $(LINTLIB)
+LIBS=	$(DYNLIB)
 
 SRCDIR =	../common
 
@@ -69,39 +69,28 @@ INCS += -I$(SRCDIR)
 INCS += -I../../../uts/common/fs/zfs
 INCS += -I../../../common/zfs
 INCS += -I../../libc/inc
+INCS += -I../../libzutil/common
 
 CSTD=	$(CSTD_GNU99)
 C99LMODE=	-Xc99=%all
 LDLIBS +=	-lc -lm -ldevid -lgen -lnvpair -luutil -lavl -lefi \
-	-ladm -lidmap -ltsol -lcryptoutil -lpkcs11 -lmd -lumem -lzfs_core \
-	-lcmdutils -ldevinfo
+	-lidmap -ltsol -lcryptoutil -lpkcs11 -lmd -lumem -lzfs_core \
+	-ldevinfo -lzutil
 CPPFLAGS +=	$(INCS) -D_LARGEFILE64_SOURCE=1 -D_REENTRANT
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 
 # not linted
 SMATCH=off
 
-# There's no lint library for zlib, so only include this when building
-$(DYNLIB) := LDLIBS +=	-lz
-
-LINTFLAGS +=	-erroff=E_STATIC_UNUSED
-LINTFLAGS64 +=	-erroff=E_STATIC_UNUSED
+LDLIBS +=	-lz
+NATIVE_LIBS += libz.so
 
 SRCS=	$(OBJS_COMMON:%.o=$(SRCDIR)/%.c)	\
 	$(OBJS_SHARED:%.o=$(SRC)/common/zfs/%.c)
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
-
-# lint complains about unused inline functions, even though
-# they are "inline", not "static inline", with "extern inline"
-# implementations and usage in libzpool.
-LINTFLAGS += -erroff=E_STATIC_UNUSED
-LINTFLAGS64 += -erroff=E_STATIC_UNUSED
 
 .KEEP_STATE:
 
 all: $(LIBS)
-
-lint: lintcheck
 
 pics/%.o: ../../../common/zfs/%.c
 	$(COMPILE.c) -o $@ $<

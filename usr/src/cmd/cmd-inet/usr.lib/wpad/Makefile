@@ -27,16 +27,14 @@ PROG =		wpad
 MANIFEST =	wpa.xml
 OBJS =		wpa_supplicant.o wpa.o wpa_enc.o eloop.o \
 		driver_wifi.o l2_packet.o
-SRCS = 		$(OBJS:%.o=%.c)
+SRCS =		$(OBJS:%.o=%.c)
 
 include	../../../Makefile.cmd
 
 ROOTMANIFESTDIR = $(ROOTSVCNETWORK)
 
-LDLIBS    += 	-ldladm -ldlpi
+LDLIBS +=	-ldladm -ldlpi
 all install := LDLIBS += -lsunw_crypto
-
-LINTFLAGS += 	-u
 
 SMOFF += all_func_returns
 
@@ -56,7 +54,5 @@ check:		$(CHKMANIFEST)
 
 clean:
 		$(RM) $(OBJS)
-
-lint:		lint_SRCS
 
 include ../../../Makefile.targ
