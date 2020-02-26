@@ -1222,7 +1222,9 @@ ASSYMDEP_OBJS=			\
 
 $(ASSYMDEP_OBJS:%=pics/%): assym.h
 
-GENASSYM_C = $(LIBCDIR)/$(MACH64)/genassym.c
+# assym.h build rules
+
+GENASSYM_C = genassym.c
 
 # derived C source and related explicit dependencies
 $(LIBCDIR)/port/gen/errlst.c + \

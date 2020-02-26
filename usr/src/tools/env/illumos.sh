@@ -24,9 +24,9 @@
 # Copyright 2015, OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright 2016 RackTop Systems.
 # Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
-# Copyright 2019, Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 #
-# - This file is sourced by "bldenv.sh" and "nightly.sh" and should not
+# - This file is sourced by "bldenv" and "nightly" and should not
 #   be executed directly.
 # - This script is only interpreted by ksh93 and explicitly allows the
 #   use of ksh93 language extensions.
@@ -117,6 +117,11 @@ export ENABLE_SMB_PRINTING=
 # these lines:
 #export BUILDPY2='#'
 #export BUILDPY3='#'
+
+# To disable building this workspace's tools in $SRC/tools with either Python2
+# or Python3 (but not both!), uncomment either of these lines:
+#export BUILDPY2TOOLS='#'
+#export BUILDPY3TOOLS='#'
 
 # Set console color scheme either by build type:
 #

@@ -24,6 +24,9 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2020 Joyent, Inc.
+ */
 
 #include <sys/types.h>
 #include <sys/inttypes.h>

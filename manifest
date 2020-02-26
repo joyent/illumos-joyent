@@ -619,6 +619,7 @@ f kernel/drv/amd64/aggr 0755 root sys
 f kernel/drv/amd64/ahci 0755 root sys
 f kernel/drv/amd64/amd8111s 0755 root sys
 f kernel/drv/amd64/amdf17nbdf 0755 root sys
+f kernel/drv/amd64/amdnbtemp 0755 root sys
 f kernel/drv/amd64/amr 0755 root sys
 f kernel/drv/amd64/arcmsr 0755 root sys
 f kernel/drv/amd64/arp 0755 root sys
@@ -1263,6 +1264,8 @@ f lib/amd64/libdevid.so.1 0755 root bin
 s lib/amd64/libdevid.so=libdevid.so.1
 f lib/amd64/libdevinfo.so.1 0755 root bin
 s lib/amd64/libdevinfo.so=libdevinfo.so.1
+f lib/amd64/libdhcpagent.so.1 0755 root bin
+s lib/amd64/libdhcpagent.so=libdhcpagent.so.1
 f lib/amd64/libdl.so.1 0755 root bin
 s lib/amd64/libdl.so=libdl.so.1
 f lib/amd64/libdladm.so.1 0755 root bin
@@ -1378,6 +1381,8 @@ f lib/amd64/libzfs.so.1 0755 root bin
 s lib/amd64/libzfs.so=libzfs.so.1
 s lib/amd64/libzfs_core.so.1=../../usr/lib/amd64/libzfs_core.so.1
 s lib/amd64/libzfs_core.so=../../usr/lib/amd64/libzfs_core.so
+f lib/amd64/libzutil.so.1 0755 root bin
+s lib/amd64/libzutil.so=libzutil.so.1
 f lib/amd64/nss_compat.so.1 0755 root bin
 f lib/amd64/nss_dns.so.1 0755 root bin
 f lib/amd64/nss_files.so.1 0755 root bin
@@ -1583,6 +1588,8 @@ f lib/libzfs.so.1 0755 root bin
 s lib/libzfs.so=libzfs.so.1
 s lib/libzfs_core.so.1=../usr/lib/libzfs_core.so
 s lib/libzfs_core.so=../usr/lib/libzfs_core.so
+f lib/libzutil.so.1 0755 root bin
+s lib/libzutil.so=libzutil.so.1
 d lib/mpxio 0755 root bin
 f lib/mpxio/stmsboot_util 0555 root bin
 f lib/nss_compat.so.1 0755 root bin
@@ -5429,6 +5436,8 @@ f usr/lib/amd64/libzonecfg.so.1 0755 root bin
 s usr/lib/amd64/libzonecfg.so=libzonecfg.so.1
 f usr/lib/amd64/libzpool.so.1 0755 root bin
 s usr/lib/amd64/libzpool.so=libzpool.so.1
+s usr/lib/amd64/libzutil.so.1=../../../lib/amd64/libzutil.so.1
+s usr/lib/amd64/libzutil.so=../../../lib/amd64/libzutil.so.1
 f usr/lib/amd64/lx_brand.so.1 0755 root sys
 f usr/lib/amd64/madv.so.1 0755 root bin
 f usr/lib/amd64/mpss.so.1 0755 root bin
@@ -6956,6 +6965,8 @@ f usr/lib/libzoneinfo.so.1 0755 root bin
 s usr/lib/libzoneinfo.so=libzoneinfo.so.1
 f usr/lib/libzpool.so.1 0755 root bin
 s usr/lib/libzpool.so=libzpool.so.1
+s usr/lib/libzutil.so.1=../../lib/libzutil.so.1
+s usr/lib/libzutil.so=../../lib/libzutil.so.1
 d usr/lib/link_audit 0755 root bin
 s usr/lib/link_audit/32=.
 s usr/lib/link_audit/64=amd64
@@ -10126,6 +10137,9 @@ f usr/lib/netsvc/yp/ypxfr_2perday 0555 root sys
 f usr/lib/netsvc/yp/ypxfrd 0555 root sys
 f usr/lib/newsyslog 0555 root sys
 d usr/lib/nfs 0755 root sys
+d usr/lib/nfs/dtrace 0755 root sys
+f usr/lib/nfs/dtrace/nfs-time.d 0555 root bin
+f usr/lib/nfs/dtrace/nfs-trace.d 0555 root bin
 f usr/lib/nfs/libmapid.so.1 0755 root bin
 s usr/lib/nfs/libmapid.so=libmapid.so.1
 f usr/lib/nfs/lockd 0555 root bin
@@ -17594,6 +17608,10 @@ s usr/share/man/man3proc/proc_arg_xgrab.3proc=proc_arg_grab.3proc
 s usr/share/man/man3proc/proc_arg_xpsinfo.3proc=proc_arg_psinfo.3proc
 f usr/share/man/man3proc/proc_content2str.3proc 0444 root bin
 s usr/share/man/man3proc/proc_dmodelname.3proc=proc_fltname.3proc
+f usr/share/man/man3proc/proc_fdinfo_misc.3proc 0444 root bin
+f usr/share/man/man3proc/proc_fdinfowalk.3proc 0444 root bin
+f usr/share/man/man3proc/proc_fdwalk.3proc 0444 root bin
+f usr/share/man/man3proc/proc_get_fdinfo.3proc 0444 root bin
 s usr/share/man/man3proc/proc_finistdio.3proc=proc_initstdio.3proc
 f usr/share/man/man3proc/proc_fltname.3proc 0444 root bin
 f usr/share/man/man3proc/proc_fltset2str.3proc 0444 root bin
@@ -19459,6 +19477,7 @@ f usr/share/man/man7d/ahci.7d 0444 root bin
 s usr/share/man/man7d/allkmem.7d=mem.7d
 f usr/share/man/man7d/amd8111s.7d 0444 root bin
 f usr/share/man/man7d/amdf17nbdf.7d 0444 root bin
+f usr/share/man/man7d/amdnbtemp.7d 0444 root bin
 f usr/share/man/man7d/amr.7d 0444 root bin
 f usr/share/man/man7d/arcmsr.7d 0444 root bin
 f usr/share/man/man7d/asy.7d 0444 root bin
@@ -20154,11 +20173,15 @@ f usr/share/man/man9f/ddi_dma_addr_bind_handle.9f 0444 root bin
 f usr/share/man/man9f/ddi_dma_alloc_handle.9f 0444 root bin
 f usr/share/man/man9f/ddi_dma_buf_bind_handle.9f 0444 root bin
 f usr/share/man/man9f/ddi_dma_burstsizes.9f 0444 root bin
+f usr/share/man/man9f/ddi_dma_cookie_iter.9f 0444 root bin
+s usr/share/man/man9f/ddi_dma_cookie_get.9f=ddi_dma_cookie_iter.9f
+s usr/share/man/man9f/ddi_dma_cookie_one.9f=ddi_dma_cookie_iter.9f
 f usr/share/man/man9f/ddi_dma_free_handle.9f 0444 root bin
 f usr/share/man/man9f/ddi_dma_getwin.9f 0444 root bin
 f usr/share/man/man9f/ddi_dma_mem_alloc.9f 0444 root bin
 f usr/share/man/man9f/ddi_dma_mem_free.9f 0444 root bin
-f usr/share/man/man9f/ddi_dma_nextcookie.9f 0444 root bin
+s usr/share/man/man9f/ddi_dma_ncookies.9f=ddi_dma_cookie_iter.9f
+s usr/share/man/man9f/ddi_dma_nextcookie.9f=ddi_dma_cookie_iter.9f
 f usr/share/man/man9f/ddi_dma_numwin.9f 0444 root bin
 f usr/share/man/man9f/ddi_dma_set_sbus64.9f 0444 root bin
 f usr/share/man/man9f/ddi_dma_sync.9f 0444 root bin

@@ -23,6 +23,7 @@
  * Copyright (c) 2016 by Delphix. All rights reserved.
  * Copyright 2017 RackTop Systems.
  * Copyright (c) 2017, Intel Corporation.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #include <assert.h>
@@ -34,7 +35,9 @@
 #include <sys/spa.h>
 #include <sys/fs/zfs.h>
 #include <sys/refcount.h>
+#include <sys/zfs_ioctl.h>
 #include <dlfcn.h>
+#include <libzutil.h>
 
 extern void nicenum(uint64_t num, char *buf, size_t);
 
@@ -46,13 +49,15 @@ static void
 show_vdev_stats(const char *desc, const char *ctype, nvlist_t *nv, int indent)
 {
 	vdev_stat_t *vs;
-	vdev_stat_t v0 = { 0 };
+	vdev_stat_t *v0 = { 0 };
 	uint64_t sec;
 	uint64_t is_log = 0;
 	nvlist_t **child;
 	uint_t c, children;
 	char used[6], avail[6];
 	char rops[6], wops[6], rbytes[6], wbytes[6], rerr[6], werr[6], cerr[6];
+
+	v0 = umem_zalloc(sizeof (*v0), UMEM_NOFAIL);
 
 	if (indent == 0 && desc != NULL) {
 		(void) printf("                           "
@@ -70,7 +75,7 @@ show_vdev_stats(const char *desc, const char *ctype, nvlist_t *nv, int indent)
 		    &bias);
 		if (nvlist_lookup_uint64_array(nv, ZPOOL_CONFIG_VDEV_STATS,
 		    (uint64_t **)&vs, &c) != 0)
-			vs = &v0;
+			vs = v0;
 
 		if (bias != NULL) {
 			(void) snprintf(bias_suffix, sizeof (bias_suffix),
@@ -103,6 +108,7 @@ show_vdev_stats(const char *desc, const char *ctype, nvlist_t *nv, int indent)
 		    vs->vs_space ? 6 : 0, vs->vs_space ? avail : "",
 		    rops, wops, rbytes, wbytes, rerr, werr, cerr);
 	}
+	umem_free(v0, sizeof (*v0));
 
 	if (nvlist_lookup_nvlist_array(nv, ctype, &child, &children) != 0)
 		return;
@@ -197,3 +203,56 @@ set_global_var(char *arg)
 
 	return (0);
 }
+
+static nvlist_t *
+refresh_config(void *unused, nvlist_t *tryconfig)
+{
+	return (spa_tryimport(tryconfig));
+}
+
+static int
+pool_active(void *unused, const char *name, uint64_t guid,
+    boolean_t *isactive)
+{
+	zfs_cmd_t *zcp;
+	nvlist_t *innvl;
+	char *packed = NULL;
+	size_t size = 0;
+	int fd, ret;
+
+	/*
+	 * Use ZFS_IOC_POOL_SYNC to confirm if a pool is active
+	 */
+
+	fd = open("/dev/zfs", O_RDWR);
+	if (fd < 0)
+		return (-1);
+
+	zcp = umem_zalloc(sizeof (zfs_cmd_t), UMEM_NOFAIL);
+
+	innvl = fnvlist_alloc();
+	fnvlist_add_boolean_value(innvl, "force", B_FALSE);
+
+	(void) strlcpy(zcp->zc_name, name, sizeof (zcp->zc_name));
+	packed = fnvlist_pack(innvl, &size);
+	zcp->zc_nvlist_src = (uint64_t)(uintptr_t)packed;
+	zcp->zc_nvlist_src_size = size;
+
+	ret = ioctl(fd, ZFS_IOC_POOL_SYNC, zcp);
+
+	fnvlist_pack_free(packed, size);
+	free((void *)(uintptr_t)zcp->zc_nvlist_dst);
+	nvlist_free(innvl);
+	umem_free(zcp, sizeof (zfs_cmd_t));
+
+	(void) close(fd);
+
+	*isactive = (ret == 0);
+
+	return (0);
+}
+
+const pool_config_ops_t libzpool_config_ops = {
+	.pco_refresh_config = refresh_config,
+	.pco_pool_active = pool_active,
+};

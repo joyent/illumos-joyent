@@ -15,7 +15,7 @@
 # Copyright 2019 Joyent, Inc.
 # Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
 # Copyright 2018 Nexenta Systems, Inc.
-# Copyright 2019 Peter Tribble
+# Copyright 2020 Peter Tribble
 #
 
 include		$(SRC)/Makefile.master
@@ -35,7 +35,6 @@ _MANFILES=	aac.7d		\
 		bge.7d		\
 		blkdev.7d	\
 		bnxe.7d		\
-		bscv.7d		\
 		ccid.7d		\
 		chxge.7d	\
 		console.7d	\
@@ -162,7 +161,6 @@ sparc_MANFILES=	audiocs.7d	\
 		grbeep.7d	\
 		mc-opl.7d	\
 		n2rng.7d	\
-		ncp.7d		\
 		ntwdt.7d	\
 		oplkmdrv.7d	\
 		oplmsu.7d	\
@@ -183,6 +181,7 @@ sparc_MANFILES=	audiocs.7d	\
 i386_MANFILES=	ahci.7d		\
 		amd8111s.7d	\
 		amdf17nbdf.7d	\
+		amdnbtemp.7d	\
 		amr.7d		\
 		arcmsr.7d	\
 		arn.7d		\
@@ -244,10 +243,8 @@ i386_MANFILES=	ahci.7d		\
 
 _MANLINKS=	1394.7d		\
 		allkmem.7d	\
-		bscbus.7d	\
 		fdc.7d		\
 		firewire.7d	\
-		i2bsc.7d	\
 		kmem.7d		\
 		lo0.7d		\
 		ticots.7d	\
@@ -259,9 +256,6 @@ sparc_MANLINKS=	drmach.7d
 
 MANFILES =	$(_MANFILES) $($(MACH)_MANFILES)
 MANLINKS =	$(_MANLINKS) $($(MACH)_MANLINKS)
-
-bscbus.7d	:= LINKSRC = bscv.7d
-i2bsc.7d	:= LINKSRC = bscv.7d
 
 drmach.7d	:= LINKSRC = dr.7d
 
