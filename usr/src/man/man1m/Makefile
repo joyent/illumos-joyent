@@ -11,7 +11,7 @@
 
 #
 # Copyright 2011, Richard Lowe
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 # Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 # Copyright 2016 Toomas Soome <tsoome@me.com>
@@ -170,6 +170,7 @@ _MANFILES=	6to4relay.1m		\
 		halt.1m			\
 		hextoalabel.1m		\
 		hostconfig.1m		\
+		hotplug.1m		\
 		id.1m			\
 		idmap.1m		\
 		idmapd.1m		\
@@ -490,6 +491,7 @@ _MANFILES=	6to4relay.1m		\
 		ttymon.1m		\
 		tunefs.1m		\
 		txzonemgr.1m		\
+		tzreload.1m		\
 		tzselect.1m		\
 		uadmin.1m		\
 		ucodeadm.1m		\
