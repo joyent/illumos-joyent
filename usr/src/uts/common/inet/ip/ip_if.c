@@ -1394,10 +1394,11 @@ ill_capability_wait(ill_t *ill)
 
 	while (ill->ill_capab_pending_cnt != 0 &&
 	    (ill->ill_state_flags & ILL_CONDEMNED) == 0) {
-		mutex_enter(&ill->ill_dlpi_capab_lock);
+		/* This may enable blocked callers of ill_capability_done(). */
 		ipsq_exit(ill->ill_phyint->phyint_ipsq);
-		cv_wait(&ill->ill_dlpi_capab_cv, &ill->ill_dlpi_capab_lock);
-		mutex_exit(&ill->ill_dlpi_capab_lock);
+		/* Pause a bit (1msec) before we re-enter the squeue. */
+		delay(drv_usectohz(1000000));
+
 		/*
 		 * If ipsq_enter() fails, someone set ILL_CONDEMNED
 		 * while we dropped the squeue. Indicate such to the caller.
@@ -1508,9 +1509,9 @@ ill_capability_id_ack(ill_t *ill, mblk_t *mp, dl_capability_sub_t *outers)
 
 	id_ic = (dl_capab_id_t *)(outers + 1);
 
+	inners = &id_ic->id_subcap;
 	if (outers->dl_length < sizeof (*id_ic) ||
-	    (inners = &id_ic->id_subcap,
-	    inners->dl_length > (outers->dl_length - sizeof (*inners)))) {
+	    inners->dl_length > (outers->dl_length - sizeof (*inners))) {
 		cmn_err(CE_WARN, "ill_capability_id_ack: malformed "
 		    "encapsulated capab type %d too long for mblk",
 		    inners->dl_cap);
@@ -3513,9 +3514,6 @@ ill_init_common(ill_t *ill, queue_t *q, boolean_t isv6, boolean_t is_loopback,
 	ill->ill_max_buf = ND_MAX_Q;
 	ill->ill_refcnt = 0;
 
-	cv_init(&ill->ill_dlpi_capab_cv, NULL, CV_DEFAULT, NULL);
-	mutex_init(&ill->ill_dlpi_capab_lock, NULL, MUTEX_DEFAULT, NULL);
-
 	return (0);
 }
 
@@ -4027,6 +4025,7 @@ ill_get_next_ifindex(uint_t index, boolean_t isv6, ip_stack_t *ipst)
 	phyint_t *phyi_initial;
 	uint_t   ifindex;
 
+	phyi_initial = NULL;
 	rw_enter(&ipst->ips_ill_g_lock, RW_READER);
 
 	if (index == 0) {
@@ -12935,6 +12934,7 @@ void
 ill_capability_done(ill_t *ill)
 {
 	ASSERT(ill->ill_capab_pending_cnt != 0);
+	ASSERT(IAM_WRITER_ILL(ill));
 
 	ill_dlpi_done(ill, DL_CAPABILITY_REQ);
 
@@ -12942,10 +12942,6 @@ ill_capability_done(ill_t *ill)
 	if (ill->ill_capab_pending_cnt == 0 &&
 	    ill->ill_dlpi_capab_state == IDCS_OK)
 		ill_capability_reset_alloc(ill);
-
-	mutex_enter(&ill->ill_dlpi_capab_lock);
-	cv_broadcast(&ill->ill_dlpi_capab_cv);
-	mutex_exit(&ill->ill_dlpi_capab_lock);
 }
 
 /*

@@ -27,7 +27,7 @@ include $(SRC)/cmd/Makefile.cmd
 $(TARGETDIR)/$(PROG) :=	FILEMODE = 0555
 
 CPPFLAGS = -D__EXTENSIONS__
-LDLIBS = -lsocket
+LDLIBS += -lsocket
 
 $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
@@ -40,5 +40,7 @@ clobber: clean
 
 clean:
 	-$(RM) $(OBJS)
+
+$(TARGETDIR)/$(PROG): $(TARGETDIR)
 
 include $(SRC)/test/zfs-tests/Makefile.com

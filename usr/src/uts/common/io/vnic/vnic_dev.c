@@ -22,6 +22,7 @@
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2018 Joyent, Inc.
  * Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/types.h>
@@ -198,7 +199,7 @@ vnic_unicast_add(vnic_t *vnic, vnic_mac_addr_type_t vnic_addr_type,
     uint8_t *mac_addr_arg, uint16_t flags, vnic_ioc_diag_t *diag,
     uint16_t vid, boolean_t req_hwgrp_flag)
 {
-	mac_diag_t mac_diag;
+	mac_diag_t mac_diag = MAC_DIAG_NONE;
 	uint16_t mac_flags = 0;
 	int err;
 	uint_t addr_len;
@@ -1060,7 +1061,7 @@ static int
 vnic_m_setprop(void *m_driver, const char *pr_name, mac_prop_id_t pr_num,
     uint_t pr_valsize, const void *pr_val)
 {
-	int 		err = 0;
+	int		err = 0;
 	vnic_t		*vn = m_driver;
 
 	switch (pr_num) {
@@ -1158,7 +1159,7 @@ vnic_m_getprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
     uint_t pr_valsize, void *pr_val)
 {
 	vnic_t		*vn = arg;
-	int 		ret = 0;
+	int		ret = 0;
 	boolean_t	out;
 
 	switch (pr_num) {

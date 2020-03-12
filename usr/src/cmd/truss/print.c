@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2017, Joyent, Inc. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -1610,6 +1610,8 @@ prt_pc5(private_t *pri, int raw, long val)
 void
 prt_psflags(private_t *pri, secflagset_t val)
 {
+	size_t len;
+	char *ptr;
 	char str[1024];
 
 	if (val == 0) {
@@ -1633,8 +1635,11 @@ prt_psflags(private_t *pri, secflagset_t val)
 		secflag_clear(&val, PROC_SEC_NOEXECSTACK);
 	}
 
-	if (val != 0)
-		(void) snprintf(str, sizeof (str), "%s|%#x", str, val);
+	if (val != 0) {
+		len = strlen(str);
+		ptr = str + len;
+		(void) snprintf(ptr, sizeof (str) - len, "|%#x", val);
+	}
 
 	outstring(pri, str + 1);
 }

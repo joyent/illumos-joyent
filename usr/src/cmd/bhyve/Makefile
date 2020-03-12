@@ -11,7 +11,7 @@
 
 #
 # Copyright 2014 Pluribus Networks Inc.
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 #
 
 PROG =		bhyve
@@ -44,6 +44,7 @@ SRCS =	acpi.c			\
 	mem.c			\
 	mevent.c		\
 	mptbl.c			\
+	net_utils.c		\
 	pci_ahci.c		\
 	pci_e82545.c		\
 	pci_emul.c		\
@@ -86,6 +87,15 @@ SRCS =	acpi.c			\
 	#ctl_scsi_all.c		\
 	#pci_virtio_scsi.c	\
 
+# The audio backend in FreeBSD is different than the one found in audio_oss.h
+	#audio.c		\
+	#hda_codec.c		\
+	#pci_hda.c		\
+
+# The bhyve generic net-backend stuff has been ignored by us at the moment
+# because SmartOS users prefer to use viona for its superior network perf.
+	#net_backends.c		\
+
 
 OBJS = $(SRCS:.c=.o)
 
@@ -115,9 +125,6 @@ CPPFLAGS =	-I$(COMPAT)/freebsd -I$(CONTRIB)/freebsd \
 		-I$(SRC)/lib/libdladm/common \
 		-DWITHOUT_CAPSICUM
 
-# Disable the crypto code until it is wired up
-CPPFLAGS +=	-DNO_OPENSSL
-
 pci_nvme.o := CERRWARN += -_gcc=-Wno-pointer-sign
 
 SMOFF += all_func_returns,leaks,no_if_block
@@ -125,9 +132,17 @@ SMOFF += all_func_returns,leaks,no_if_block
 # Force c99 for everything
 CSTD=		$(CSTD_GNU99)
 C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
 
-$(PROG) := LDLIBS += -lsocket -lnsl -ldlpi -ldladm -lmd -luuid -lvmmapi -lz
+$(PROG) := LDLIBS +=	\
+	-lsocket	\
+	-lnsl		\
+	-ldlpi		\
+	-ldladm		\
+	-lmd		\
+	-lsunw_crypto	\
+	-luuid		\
+	-lvmmapi	\
+	-lz
 $(ZHYVE_PROG) := LDLIBS += -lnvpair
 $(MEVENT_TEST_PROG) := LDLIBS += -lsocket
 
@@ -149,8 +164,6 @@ clean: $(SUBDIRS)
 
 clobber: clean $(SUBDIRS)
 	$(RM) $(CLOBBERFILES)
-
-lint:	lint_SRCS $(SUBDIRS)
 
 $(SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)

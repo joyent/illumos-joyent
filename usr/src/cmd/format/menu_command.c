@@ -1709,7 +1709,7 @@ c_label()
 			return (-1);
 		}
 		if (efi_write(cur_file, vtoc64) != 0) {
-			err_check(vtoc64);
+			efi_err_check(vtoc64);
 			err_print("Warning: error writing EFI.\n");
 			return (-1);
 		} else {
@@ -2097,6 +2097,12 @@ c_verify_efi()
 	fmt_print("bytes/sector	=  %d\n", cur_blksz);
 	fmt_print("sectors = %llu\n", cur_parts->etoc->efi_last_lba + 1);
 	fmt_print("accessible sectors = %llu\n",
+	    cur_parts->etoc->efi_last_u_lba -
+	    cur_parts->etoc->efi_first_u_lba -
+	    efi_reserved_sectors(cur_parts->etoc) + 1);
+	fmt_print("first usable sector = %llu\n",
+	    cur_parts->etoc->efi_first_u_lba);
+	fmt_print("last usable sector = %llu\n",
 	    cur_parts->etoc->efi_last_u_lba);
 
 	print_map(&tmp_pinfo);

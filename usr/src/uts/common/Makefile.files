@@ -25,7 +25,7 @@
 # Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
 # Copyright 2018 Nexenta Systems, Inc.
 # Copyright 2016 Garrett D'Amore <garrett@damore.org>
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 # Copyright 2016 OmniTI Computer Consulting, Inc.  All rights reserved.
 # Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
 #
@@ -1365,6 +1365,7 @@ ZFS_COMMON_OBJS +=		\
 	bplist.o		\
 	bpobj.o			\
 	bptree.o		\
+	btree.o			\
 	bqueue.o		\
 	cityhash.o		\
 	dbuf.o			\
@@ -1439,7 +1440,9 @@ ZFS_COMMON_OBJS +=		\
 	zap_leaf.o		\
 	zap_micro.o		\
 	zcp.o			\
+	zcp_change_key.o	\
 	zcp_get.o		\
+	zcp_set.o		\
 	zcp_global.o		\
 	zcp_iter.o		\
 	zcp_synctask.o		\
@@ -1816,6 +1819,8 @@ USB_IA_OBJS += usb_ia.o
 
 SCSA2USB_OBJS += scsa2usb.o usb_ms_bulkonly.o usb_ms_cbi.o
 
+CCID_OBJS += ccid.o atr.o
+
 IPF_OBJS += cfw.o ip_fil_solaris.o fil.o solaris.o ip_state.o ip_frag.o \
 	    ip_nat.o ip_proxy.o ip_auth.o ip_pool.o ip_htable.o ip_lookup.o \
 	    ip_log.o misc.o ip_compat.o ip_nat6.o drand48.o
@@ -1969,9 +1974,11 @@ CH_COM_OBJS =	ch_mac.o ch_subr.o cspi.o espi.o ixf1010.o mc3.o mc4.o mc5.o \
 #	Chelsio Terminator 4 10G NIC nexus driver module
 #
 CXGBE_FW_OBJS  =	t4_fw.o t4_cfg.o t5_cfg.o t5_fw.o t6_cfg.o t6_fw.o
-CXGBE_COM_OBJS =	t4_hw.o
+CXGBE_COM_OBJS =	t4_hw.o common.o
 CXGBE_NEX_OBJS =	t4_nexus.o t4_sge.o t4_mac.o t4_ioctl.o shared.o \
-			t4_l2t.o osdep.o
+			t4_l2t.o osdep.o cudbg_lib.o cudbg_wtp.o fastlz.o \
+			fastlz_api.o cudbg_common.o cudbg_flash_utils.o \
+			cudbg.o
 
 #
 #	Chelsio Terminator 4 10G NIC driver module
@@ -2311,3 +2318,9 @@ BNX_OBJS += \
 	bnx_lm_main.o \
 	bnx_lm_recv.o \
 	bnx_lm_send.o
+
+#
+# mlxcx(7D)
+#
+MLXCX_OBJS +=	mlxcx.o mlxcx_dma.o mlxcx_cmd.o mlxcx_intr.o mlxcx_gld.o \
+		mlxcx_ring.o

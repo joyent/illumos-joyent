@@ -20,9 +20,12 @@
  */
 
 /*
- * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2014, 2017 by Delphix. All rights reserved.
+ */
+
+/*
+ * Copyright 2019 Nexenta Systems, Inc.
+ * Copyright (c) 2014, 2016 by Delphix. All rights reserved.
  * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
  * Copyright 2017 Joyent, Inc.
  * Copyright 2017 RackTop Systems.
@@ -612,6 +615,7 @@ zfs_is_shared_smb(zfs_handle_t *zhp, char **where)
 
 static sa_handle_t (*_sa_init)(int);
 static sa_handle_t (*_sa_init_arg)(int, void *);
+static int (*_sa_service)(sa_handle_t);
 static void (*_sa_fini)(sa_handle_t);
 static sa_share_t (*_sa_find_share)(sa_handle_t, char *);
 static int (*_sa_enable_share)(sa_share_t, char *);
@@ -620,8 +624,7 @@ static char *(*_sa_errorstr)(int);
 static int (*_sa_parse_legacy_options)(sa_group_t, char *, char *);
 static boolean_t (*_sa_needs_refresh)(sa_handle_t *);
 static libzfs_handle_t *(*_sa_get_zfs_handle)(sa_handle_t);
-static int (*_sa_zfs_process_share)(sa_handle_t, sa_group_t, sa_share_t,
-    char *, char *, zprop_source_t, char *, char *, char *);
+static int (* _sa_get_zfs_share)(sa_handle_t, char *, zfs_handle_t *);
 static void (*_sa_update_sharetab_ts)(sa_handle_t);
 
 /*
@@ -654,6 +657,8 @@ _zfs_init_libshare(void)
 		_sa_init_arg = (sa_handle_t (*)(int, void *))dlsym(libshare,
 		    "sa_init_arg");
 		_sa_fini = (void (*)(sa_handle_t))dlsym(libshare, "sa_fini");
+		_sa_service = (int (*)(sa_handle_t))dlsym(libshare,
+		    "sa_service");
 		_sa_find_share = (sa_share_t (*)(sa_handle_t, char *))
 		    dlsym(libshare, "sa_find_share");
 		_sa_enable_share = (int (*)(sa_share_t, char *))dlsym(libshare,
@@ -667,9 +672,8 @@ _zfs_init_libshare(void)
 		    dlsym(libshare, "sa_needs_refresh");
 		_sa_get_zfs_handle = (libzfs_handle_t *(*)(sa_handle_t))
 		    dlsym(libshare, "sa_get_zfs_handle");
-		_sa_zfs_process_share = (int (*)(sa_handle_t, sa_group_t,
-		    sa_share_t, char *, char *, zprop_source_t, char *,
-		    char *, char *))dlsym(libshare, "sa_zfs_process_share");
+		_sa_get_zfs_share = (int (*)(sa_handle_t, char *,
+		    zfs_handle_t *)) dlsym(libshare, "sa_get_zfs_share");
 		_sa_update_sharetab_ts = (void (*)(sa_handle_t))
 		    dlsym(libshare, "sa_update_sharetab_ts");
 		if (_sa_init == NULL || _sa_init_arg == NULL ||
@@ -677,10 +681,11 @@ _zfs_init_libshare(void)
 		    _sa_enable_share == NULL || _sa_disable_share == NULL ||
 		    _sa_errorstr == NULL || _sa_parse_legacy_options == NULL ||
 		    _sa_needs_refresh == NULL || _sa_get_zfs_handle == NULL ||
-		    _sa_zfs_process_share == NULL ||
+		    _sa_get_zfs_share == NULL || _sa_service == NULL ||
 		    _sa_update_sharetab_ts == NULL) {
 			_sa_init = NULL;
 			_sa_init_arg = NULL;
+			_sa_service = NULL;
 			_sa_fini = NULL;
 			_sa_disable_share = NULL;
 			_sa_enable_share = NULL;
@@ -689,7 +694,7 @@ _zfs_init_libshare(void)
 			(void) dlclose(libshare);
 			_sa_needs_refresh = NULL;
 			_sa_get_zfs_handle = NULL;
-			_sa_zfs_process_share = NULL;
+			_sa_get_zfs_share = NULL;
 			_sa_update_sharetab_ts = NULL;
 		}
 	}
@@ -839,10 +844,24 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 	sa_share_t share;
 	zfs_share_proto_t *curr_proto;
 	zprop_source_t sourcetype;
+	int service = SA_INIT_ONE_SHARE_FROM_HANDLE;
 	int ret;
 
 	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL))
 		return (0);
+
+	/*
+	 * Function may be called in a loop from higher up stack, with libshare
+	 * initialized for multiple shares (SA_INIT_SHARE_API_SELECTIVE).
+	 * zfs_init_libshare_arg will refresh the handle's cache if necessary.
+	 * In this case we do not want to switch to per share initialization.
+	 * Specify SA_INIT_SHARE_API to do full refresh, if refresh required.
+	 */
+	if ((hdl->libzfs_sharehdl != NULL) && (_sa_service != NULL) &&
+	    (_sa_service(hdl->libzfs_sharehdl) ==
+	    SA_INIT_SHARE_API_SELECTIVE)) {
+		service = SA_INIT_SHARE_API;
+	}
 
 	for (curr_proto = proto; *curr_proto != PROTO_END; curr_proto++) {
 		/*
@@ -853,8 +872,7 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 		    ZFS_MAXPROPLEN, B_FALSE) != 0 ||
 		    strcmp(shareopts, "off") == 0)
 			continue;
-		ret = zfs_init_libshare_arg(hdl, SA_INIT_ONE_SHARE_FROM_HANDLE,
-		    zhp);
+		ret = zfs_init_libshare_arg(hdl, service, zhp);
 		if (ret != SA_OK) {
 			(void) zfs_error_fmt(hdl, EZFS_SHARENFSFAILED,
 			    dgettext(TEXT_DOMAIN, "cannot share '%s': %s"),
@@ -863,30 +881,17 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 			return (-1);
 		}
 
-		/*
-		 * If the 'zoned' property is set, then zfs_is_mountable()
-		 * will have already bailed out if we are in the global zone.
-		 * But local zones cannot be NFS servers, so we ignore it for
-		 * local zones as well.
-		 */
-		if (zfs_prop_get_int(zhp, ZFS_PROP_ZONED))
-			continue;
-
 		share = zfs_sa_find_share(hdl->libzfs_sharehdl, mountpoint);
 		if (share == NULL) {
 			/*
 			 * This may be a new file system that was just
-			 * created so isn't in the internal cache
-			 * (second time through). Rather than
-			 * reloading the entire configuration, we can
-			 * assume ZFS has done the checking and it is
-			 * safe to add this to the internal
-			 * configuration.
+			 * created so isn't in the internal cache.
+			 * Rather than reloading the entire configuration,
+			 * we can add just this one share to the cache.
 			 */
-			if (_sa_zfs_process_share(hdl->libzfs_sharehdl,
-			    NULL, NULL, mountpoint,
-			    proto_table[*curr_proto].p_name, sourcetype,
-			    shareopts, sourcestr, zhp->zfs_name) != SA_OK) {
+			if ((_sa_get_zfs_share == NULL) ||
+			    (_sa_get_zfs_share(hdl->libzfs_sharehdl, "zfs", zhp)
+			    != SA_OK)) {
 				(void) zfs_error_fmt(hdl,
 				    proto_table[*curr_proto].p_share_err,
 				    dgettext(TEXT_DOMAIN, "cannot share '%s'"),
@@ -948,6 +953,7 @@ unshare_one(libzfs_handle_t *hdl, const char *name, const char *mountpoint,
 	sa_share_t share;
 	int err;
 	char *mntpt;
+	int service = SA_INIT_ONE_SHARE_FROM_NAME;
 
 	/*
 	 * Mountpoint could get trashed if libshare calls getmntany
@@ -957,13 +963,20 @@ unshare_one(libzfs_handle_t *hdl, const char *name, const char *mountpoint,
 	mntpt = zfs_strdup(hdl, mountpoint);
 
 	/*
-	 * make sure libshare initialized, initialize everything because we
-	 * don't know what other unsharing may happen later. Functions up the
-	 * stack are allowed to initialize instead a subset of shares at the
-	 * time the set is known.
+	 * Function may be called in a loop from higher up stack, with libshare
+	 * initialized for multiple shares (SA_INIT_SHARE_API_SELECTIVE).
+	 * zfs_init_libshare_arg will refresh the handle's cache if necessary.
+	 * In this case we do not want to switch to per share initialization.
+	 * Specify SA_INIT_SHARE_API to do full refresh, if refresh required.
 	 */
-	if ((err = zfs_init_libshare_arg(hdl, SA_INIT_ONE_SHARE_FROM_NAME,
-	    (void *)name)) != SA_OK) {
+	if ((hdl->libzfs_sharehdl != NULL) && (_sa_service != NULL) &&
+	    (_sa_service(hdl->libzfs_sharehdl) ==
+	    SA_INIT_SHARE_API_SELECTIVE)) {
+		service = SA_INIT_SHARE_API;
+	}
+
+	err = zfs_init_libshare_arg(hdl, service, (void *)name);
+	if (err != SA_OK) {
 		free(mntpt);	/* don't need the copy anymore */
 		return (zfs_error_fmt(hdl, proto_table[proto].p_unshare_err,
 		    dgettext(TEXT_DOMAIN, "cannot unshare '%s': %s"),
@@ -1532,9 +1545,9 @@ zpool_enable_datasets(zpool_handle_t *zhp, const char *mntopts, int flags)
 		ret = ms.ms_mntstatus;
 
 	/*
-	 * Share all filesystems that need to be shared. This needs to be
-	 * a separate pass because libshare is not mt-safe, and so we need
-	 * to share serially.
+	 * Initialize libshare SA_INIT_SHARE_API_SELECTIVE here
+	 * to avoid unnecessary load/unload of the libshare API
+	 * per shared dataset downstream.
 	 */
 	sharearg.zhandle_arr = cb.cb_handles;
 	sharearg.zhandle_len = cb.cb_used;

@@ -83,6 +83,7 @@ SYMBOL_VERSION SUNWprivate {
 	topo_led_state_name;
 	topo_led_type_name;
 	topo_list_append;
+	topo_list_deepcopy;
 	topo_list_delete;
 	topo_method_invoke;
 	topo_method_register;
@@ -121,6 +122,7 @@ SYMBOL_VERSION SUNWprivate {
 	topo_mod_nvl2str;
 	topo_mod_pcidb;
 	topo_mod_pkgfmri;
+	topo_mod_product;
 	topo_mod_prominfo;
 	topo_mod_register;
 	topo_mod_setdebug;

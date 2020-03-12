@@ -1301,7 +1301,7 @@ static reg_list_t *reg_list_base = NULL;
 
 int _is_sun_reg(void *mech)
 {
-	reg_list_t *r, *prev;
+	reg_list_t *r, *prev = NULL;
 	int is_reg = 0;
 
 	LOCK_MUTEX(&reg_mutex);
@@ -1311,7 +1311,7 @@ int _is_sun_reg(void *mech)
 			continue;
 		}
 		is_reg = 1;
-		if (r == reg_list_base) {
+		if (prev == NULL) {
 			reg_list_base = reg_list_base->next;
 		} else {
 			prev->next = r->next;

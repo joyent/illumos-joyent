@@ -11,13 +11,13 @@
 
 #
 # Copyright 2011, Richard Lowe
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 # Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 # Copyright 2016 Toomas Soome <tsoome@me.com>
 # Copyright 2018 Nexenta Systems, Inc.
 # Copyright (c) 2017, Chris Fraire <cfraire@me.com>.
-# Copyright 2019 Peter Tribble
+# Copyright 2020 Peter Tribble
 # Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
@@ -60,8 +60,8 @@ _MANFILES=	6to4relay.1m		\
 		busstat.1m		\
 		captoinfo.1m		\
 		catman.1m		\
+		ccidadm.1m		\
 		cfgadm.1m		\
-		cfgadm_ac.1m		\
 		cfgadm_cardbus.1m	\
 		cfgadm_fp.1m		\
 		cfgadm_ib.1m		\
@@ -69,7 +69,6 @@ _MANFILES=	6to4relay.1m		\
 		cfgadm_sata.1m		\
 		cfgadm_sbd.1m		\
 		cfgadm_scsi.1m		\
-		cfgadm_sysctrl.1m	\
 		cfgadm_usb.1m		\
 		chat.1m			\
 		check-hostname.1m	\
@@ -171,6 +170,7 @@ _MANFILES=	6to4relay.1m		\
 		halt.1m			\
 		hextoalabel.1m		\
 		hostconfig.1m		\
+		hotplug.1m		\
 		id.1m			\
 		idmap.1m		\
 		idmapd.1m		\
@@ -491,6 +491,7 @@ _MANFILES=	6to4relay.1m		\
 		ttymon.1m		\
 		tunefs.1m		\
 		txzonemgr.1m		\
+		tzreload.1m		\
 		tzselect.1m		\
 		uadmin.1m		\
 		ucodeadm.1m		\

@@ -43,6 +43,7 @@
 #include <sys/vtoc.h>
 #include <sys/zfs_ioctl.h>
 #include <dlfcn.h>
+#include <libzutil.h>
 
 #include "zfs_namecheck.h"
 #include "zfs_prop.h"
@@ -3948,9 +3949,17 @@ char *
 zpool_vdev_name(libzfs_handle_t *hdl, zpool_handle_t *zhp, nvlist_t *nv,
     int name_flags)
 {
-	char *path, *env;
+	char *path, *type, *env;
 	uint64_t value;
 	char buf[64];
+
+	/*
+	 * vdev_name will be "root"/"root-0" for the root vdev, but it is the
+	 * zpool name that will be displayed to the user.
+	 */
+	verify(nvlist_lookup_string(nv, ZPOOL_CONFIG_TYPE, &type) == 0);
+	if (zhp != NULL && strcmp(type, "root") == 0)
+		return (zfs_strdup(hdl, zpool_get_name(zhp)));
 
 	env = getenv("ZPOOL_VDEV_NAME_PATH");
 	if (env && (strtoul(env, NULL, 0) > 0 ||
@@ -4069,7 +4078,7 @@ after_open:
 			return (tmp);
 		}
 	} else {
-		verify(nvlist_lookup_string(nv, ZPOOL_CONFIG_TYPE, &path) == 0);
+		path = type;
 
 		/*
 		 * If it's a raidz device, we need to stick in the parity level.
@@ -4302,77 +4311,40 @@ get_history(zpool_handle_t *zhp, char *buf, uint64_t *off, uint64_t *len)
 }
 
 /*
- * Process the buffer of nvlists, unpacking and storing each nvlist record
- * into 'records'.  'leftover' is set to the number of bytes that weren't
- * processed as there wasn't a complete record.
- */
-int
-zpool_history_unpack(char *buf, uint64_t bytes_read, uint64_t *leftover,
-    nvlist_t ***records, uint_t *numrecords)
-{
-	uint64_t reclen;
-	nvlist_t *nv;
-	int i;
-
-	while (bytes_read > sizeof (reclen)) {
-
-		/* get length of packed record (stored as little endian) */
-		for (i = 0, reclen = 0; i < sizeof (reclen); i++)
-			reclen += (uint64_t)(((uchar_t *)buf)[i]) << (8*i);
-
-		if (bytes_read < sizeof (reclen) + reclen)
-			break;
-
-		/* unpack record */
-		if (nvlist_unpack(buf + sizeof (reclen), reclen, &nv, 0) != 0)
-			return (ENOMEM);
-		bytes_read -= sizeof (reclen) + reclen;
-		buf += sizeof (reclen) + reclen;
-
-		/* add record to nvlist array */
-		(*numrecords)++;
-		if (ISP2(*numrecords + 1)) {
-			*records = realloc(*records,
-			    *numrecords * 2 * sizeof (nvlist_t *));
-		}
-		(*records)[*numrecords - 1] = nv;
-	}
-
-	*leftover = bytes_read;
-	return (0);
-}
-
-/*
  * Retrieve the command history of a pool.
  */
 int
-zpool_get_history(zpool_handle_t *zhp, nvlist_t **nvhisp)
+zpool_get_history(zpool_handle_t *zhp, nvlist_t **nvhisp, uint64_t *off,
+    boolean_t *eof)
 {
 	char *buf;
 	int buflen = 128 * 1024;
-	uint64_t off = 0;
 	nvlist_t **records = NULL;
 	uint_t numrecords = 0;
-	int err, i;
+	int err = 0, i;
+	uint64_t start = *off;
 
 	buf = malloc(buflen);
 	if (buf == NULL)
 		return (ENOMEM);
-	do {
+	/* process about 1MB a time */
+	while (*off - start < 1024 * 1024) {
 		uint64_t bytes_read = buflen;
 		uint64_t leftover;
 
-		if ((err = get_history(zhp, buf, &off, &bytes_read)) != 0)
+		if ((err = get_history(zhp, buf, off, &bytes_read)) != 0)
 			break;
 
 		/* if nothing else was read in, we're at EOF, just return */
-		if (!bytes_read)
+		if (!bytes_read) {
+			*eof = B_TRUE;
 			break;
+		}
 
 		if ((err = zpool_history_unpack(buf, bytes_read,
 		    &leftover, &records, &numrecords)) != 0)
 			break;
-		off -= leftover;
+		*off -= leftover;
 		if (leftover == bytes_read) {
 			/*
 			 * no progress made, because buffer is not big enough
@@ -4384,9 +4356,7 @@ zpool_get_history(zpool_handle_t *zhp, nvlist_t **nvhisp)
 			if (buf == NULL)
 				return (ENOMEM);
 		}
-
-		/* CONSTCOND */
-	} while (1);
+	}
 
 	free(buf);
 
@@ -4537,7 +4507,7 @@ zpool_label_disk(libzfs_handle_t *hdl, zpool_handle_t *zhp, const char *name,
 	char path[MAXPATHLEN];
 	struct dk_gpt *vtoc;
 	int fd;
-	size_t resv = EFI_MIN_RESV_SIZE;
+	size_t resv;
 	uint64_t slice_size;
 	diskaddr_t start_block;
 	char errbuf[1024];
@@ -4589,6 +4559,7 @@ zpool_label_disk(libzfs_handle_t *hdl, zpool_handle_t *zhp, const char *name,
 
 		return (zfs_error(hdl, EZFS_NOCAP, errbuf));
 	}
+	resv = efi_reserved_sectors(vtoc);
 
 	/*
 	 * Why we use V_USR: V_BACKUP confuses users, and is considered
@@ -4660,7 +4631,7 @@ zpool_label_disk(libzfs_handle_t *hdl, zpool_handle_t *zhp, const char *name,
 		 * ZFS is on slice 0 and slice 8 is reserved.
 		 */
 		slice_size = vtoc->efi_last_u_lba + 1;
-		slice_size -= EFI_MIN_RESV_SIZE;
+		slice_size -= resv;
 		slice_size -= start_block;
 		if (slice != NULL)
 			*slice = 0;

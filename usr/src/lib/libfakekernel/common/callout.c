@@ -46,7 +46,7 @@ timeout(void (*func)(void *), void *arg, clock_t delta)
 	bzero(&sev, sizeof (sev));
 	sev.sigev_notify = SIGEV_THREAD;
 	sev.sigev_value.sival_ptr = arg;
-	sev.sigev_notify_function = (sigev_notify_func_t)func;
+	sev.sigev_notify_function = (sigev_notify_func_t)(uintptr_t)func;
 	err = timer_create(CLOCK_REALTIME, &sev, &tid);
 	if (err != 0)
 		return (NULL);
@@ -66,7 +66,7 @@ timeout(void (*func)(void *), void *arg, clock_t delta)
 clock_t
 untimeout(timeout_id_t id_arg)
 {
-	struct itimerspec its;
+	struct itimerspec its, oits;
 	char *id_cp = id_arg;
 	clock_t delta;
 	timer_t tid;
@@ -79,11 +79,12 @@ untimeout(timeout_id_t id_arg)
 	tid = (int)(id_cp - timeout_base);
 
 	bzero(&its, sizeof (its));
-	rc = timer_settime(tid, 0, &its, &its);
+	bzero(&oits, sizeof (oits));
+	rc = timer_settime(tid, 0, &its, &oits);
 	if (rc != 0) {
 		delta = 0;
 	} else {
-		delta = TIMESTRUC_TO_TICK(&its.it_value);
+		delta = TIMESTRUC_TO_TICK(&oits.it_value);
 		if (delta < 0)
 			delta = 0;
 	}

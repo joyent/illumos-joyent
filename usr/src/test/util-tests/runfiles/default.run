@@ -13,7 +13,7 @@
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
 # Copyright 2014 Nexenta Systems, Inc. All rights reserved.
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 # Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
@@ -34,6 +34,13 @@ outputdir = /var/tmp/test_results
 [/opt/util-tests/tests/libsff/libsff]
 [/opt/util-tests/tests/libjedec_test]
 [/opt/util-tests/tests/smbios]
+
+#
+# The sleep tests require destructive DTrace. Therefore they must be run
+# as root.
+#
+[/opt/util-tests/tests/sleep/sleeptest]
+user = root
 
 [/opt/util-tests/tests/xargs_test]
 
@@ -68,3 +75,10 @@ tests = ['afl-fast', 'gcc-libstdc++', 'llvm-stdcxxabi']
 [/opt/util-tests/tests/ctf]
 pre = precheck
 tests = [ 'ctftest' ]
+
+[/opt/util-tests/tests/libcustr]
+tests = ['custr_remove', 'custr_trunc']
+
+[/opt/util-tests/tests/find/findtest]
+
+[/opt/util-tests/tests/mdb/mdbtest]

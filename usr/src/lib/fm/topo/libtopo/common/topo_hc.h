@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #ifndef _TOPO_HC_H
@@ -68,6 +68,7 @@ extern "C" {
 #define	MOTHERBOARD	"motherboard"
 #define	NIU		"niu"
 #define	NIUFN		"niufn"
+#define	NVME		"nvme"
 #define	PCI_BUS		"pcibus"
 #define	PCI_DEVICE	"pcidev"
 #define	PCI_FUNCTION    "pcifn"
@@ -138,6 +139,7 @@ extern "C" {
 #define	TOPO_BINDING_ENCLOSURE	"enclosure"
 #define	TOPO_BINDING_SLOT	"slot"
 #define	TOPO_BINDING_PORT	"port"
+#define	TOPO_BINDING_PARENT_DEV	"parent-device"
 
 #define	TOPO_PGROUP_STORAGE	"storage"
 #define	TOPO_STORAGE_INITIATOR_PORT	"initiator-port"
@@ -183,6 +185,7 @@ extern "C" {
 #define	TOPO_PROP_PORT_TYPE	"type"
 #define	TOPO_PROP_PORT_TYPE_SFF	"sff"
 #define	TOPO_PROP_PORT_TYPE_USB	"usb"
+#define	TOPO_PROP_PORT_TYPE_UNKNOWN	"unknown"
 
 #define	TOPO_PGROUP_TRANSCEIVER	"transceiver"
 #define	TOPO_PROP_TRANSCEIVER_TYPE	"type"
@@ -289,6 +292,22 @@ extern "C" {
 #define	TOPO_PROP_UFM_SLOT_VERSION	"ufm-slot-version"
 #define	TOPO_PROP_UFM_SLOT_MODE		"ufm-slot-mode"
 #define	TOPO_PROP_UFM_SLOT_ACTIVE	"ufm-slot-active"
+
+#define	TOPO_PGROUP_DATALINK		"datalink"
+#define	TOPO_PGROUP_DATALINK_PMAC	"primary-mac-address"
+#define	TOPO_PGROUP_DATALINK_LINK_SPEED		"link-speed"
+#define	TOPO_PGROUP_DATALINK_LINK_STATUS	"link-status"
+#define	TOPO_PGROUP_DATALINK_LINK_STATUS_UP	"up"
+#define	TOPO_PGROUP_DATALINK_LINK_STATUS_DOWN	"down"
+#define	TOPO_PGROUP_DATALINK_LINK_STATUS_UNKNOWN	"unknown"
+#define	TOPO_PGROUP_DATALINK_LINK_DUPLEX	"link-duplex"
+#define	TOPO_PGROUP_DATALINK_LINK_DUPLEX_FULL	"full"
+#define	TOPO_PGROUP_DATALINK_LINK_DUPLEX_HALF	"half"
+#define	TOPO_PGROUP_DATALINK_LINK_DUPLEX_UNKNOWN	"unknown"
+#define	TOPO_PGROUP_DATALINK_LINK_NAME		"link-name"
+
+#define	TOPO_PGROUP_NVME		"nvme-properties"
+#define	TOPO_PROP_NVME_VER		"nvme-version"
 
 #ifdef	__cplusplus
 }

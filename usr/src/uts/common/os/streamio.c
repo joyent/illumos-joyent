@@ -25,7 +25,7 @@
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2017 Joyent, Inc.
- * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/types.h>
@@ -78,6 +78,8 @@
 #include <sys/policy.h>
 #include <sys/dld.h>
 #include <sys/zone.h>
+#include <sys/limits.h>
+#include <sys/ptms.h>
 #include <sys/limits.h>
 #include <c2/audit.h>
 
@@ -228,6 +230,50 @@ push_mod(queue_t *qp, dev_t *devp, struct stdata *stp, const char *name,
 		stp->sd_anchorzone = anchor_zoneid;
 	}
 	mutex_exit(&stp->sd_lock);
+
+	return (0);
+}
+
+static int
+xpg4_fixup(queue_t *qp, dev_t *devp, struct stdata *stp, cred_t *crp)
+{
+	static const char *ptsmods[] = {
+	    "ptem", "ldterm", "ttcompat"
+	};
+	dev_t dummydev = *devp;
+	struct strioctl strioc;
+	zoneid_t zoneid;
+	int32_t rval;
+	uint_t i;
+
+	/*
+	 * Push modules required for the slave PTY to have terminal
+	 * semantics out of the box; this is required by XPG4v2.
+	 * These three modules are flagged as single-instance so that
+	 * the system will never end up with duplicate copies pushed
+	 * onto a stream.
+	 */
+
+	zoneid = crgetzoneid(crp);
+	for (i = 0; i < ARRAY_SIZE(ptsmods); i++) {
+		int error;
+
+		error = push_mod(qp, &dummydev, stp, ptsmods[i], 0,
+		    crp, zoneid);
+		if (error != 0)
+			return (error);
+	}
+
+	/*
+	 * Send PTSSTTY down the stream
+	 */
+
+	strioc.ic_cmd = PTSSTTY;
+	strioc.ic_timout = 0;
+	strioc.ic_len = 0;
+	strioc.ic_dp = NULL;
+
+	(void) strdoioctl(stp, &strioc, FNATIVE, K_TO_K, crp, &rval);
 
 	return (0);
 }
@@ -550,10 +596,15 @@ retryap:
 
 opendone:
 
+	if (error == 0 &&
+	    (stp->sd_flag & (STRISTTY|STRXPG4TTY)) == (STRISTTY|STRXPG4TTY)) {
+		error = xpg4_fixup(qp, devp, stp, crp);
+	}
+
 	/*
 	 * let specfs know that open failed part way through
 	 */
-	if (error) {
+	if (error != 0) {
 		mutex_enter(&stp->sd_lock);
 		stp->sd_flag |= STREOPENFAIL;
 		mutex_exit(&stp->sd_lock);
@@ -3613,29 +3664,39 @@ strioctl(struct vnode *vp, int cmd, intptr_t arg, int flag, int copyflag,
 		if (stp->sd_flag & STRHUP)
 			return (ENXIO);
 
-		if ((scp = kmem_alloc(sizeof (strcmd_t), KM_NOSLEEP)) == NULL)
-			return (ENOMEM);
+		if (copyflag == U_TO_K) {
+			if ((scp = kmem_alloc(sizeof (strcmd_t),
+			    KM_NOSLEEP)) == NULL) {
+				return (ENOMEM);
+			}
 
-		if (copyin((void *)arg, scp, sizeof (strcmd_t))) {
-			kmem_free(scp, sizeof (strcmd_t));
-			return (EFAULT);
+			if (copyin((void *)arg, scp, sizeof (strcmd_t))) {
+				kmem_free(scp, sizeof (strcmd_t));
+				return (EFAULT);
+			}
+		} else {
+			scp = (strcmd_t *)arg;
 		}
 
 		access = job_control_type(scp->sc_cmd);
 		mutex_enter(&stp->sd_lock);
 		if (access != -1 && (error = i_straccess(stp, access)) != 0) {
 			mutex_exit(&stp->sd_lock);
-			kmem_free(scp, sizeof (strcmd_t));
+			if (copyflag == U_TO_K)
+				kmem_free(scp, sizeof (strcmd_t));
 			return (error);
 		}
 		mutex_exit(&stp->sd_lock);
 
 		*rvalp = 0;
 		if ((error = strdocmd(stp, scp, crp)) == 0) {
-			if (copyout(scp, (void *)arg, sizeof (strcmd_t)))
+			if (copyflag == U_TO_K &&
+			    copyout(scp, (void *)arg, sizeof (strcmd_t))) {
 				error = EFAULT;
+			}
 		}
-		kmem_free(scp, sizeof (strcmd_t));
+		if (copyflag == U_TO_K)
+			kmem_free(scp, sizeof (strcmd_t));
 		return (error);
 
 	case I_NREAD:
@@ -6578,7 +6639,7 @@ strgetmsg(
 	mblk_t *savemp = NULL;
 	mblk_t *savemptail = NULL;
 	uint_t old_sd_flag;
-	int flg;
+	int flg = MSG_BAND;
 	int more = 0;
 	int error = 0;
 	char first = 1;
@@ -7144,7 +7205,7 @@ kstrgetmsg(
 	mblk_t *savemptail = NULL;
 	int flags;
 	uint_t old_sd_flag;
-	int flg;
+	int flg = MSG_BAND;
 	int more = 0;
 	int error = 0;
 	char first = 1;

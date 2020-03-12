@@ -21,7 +21,7 @@
 
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 #
 
 MYPROG =	svccfg
@@ -92,6 +92,11 @@ CLOBBERFILES += svccfg_lex.c svccfg_grammar.c svccfg_grammar.h \
 
 SVCCFG_EXTRA_LIBS = -lxml2 -lscf -ll -luutil -lumem -lmd5 -lnvpair
 $(NOT_NATIVE)SVCCFG_EXTRA_LIBS += -ltecla
+#
+# If no adjunct, then we'll already find /usr/lib via LDLIBS below.
+#
+$(NO_ADJUNCT_PROTO)NATIVE_LIBS += libxml2.so libl.so libumem.so \
+    libmd5.so libnvpair.so libc.so
 
 LIBSCF		= $(SRC)/lib/libscf
 LIBTECLA	= $(SRC)/lib/libtecla		# just for the header
@@ -102,6 +107,7 @@ lint := SVCCFG_EXTRA_LIBS = -lscf -ll -luutil -lumem -lmd5 -lnvpair
 
 LDLIBS += $(SVCCFG_EXTRA_LIBS)
 
+$(NATIVE_BUILD)NATIVE_LIBS += libl.so libumem.so libmd5.so libnvpair.so libc.so
 $(NATIVE_BUILD)CC =	$(NATIVECC)
 $(NATIVE_BUILD)LD =	$(NATIVELD)
 $(NATIVE_BUILD)CFLAGS =	$(NATIVE_CFLAGS)
@@ -111,7 +117,7 @@ $(NATIVE_BUILD)CPPFLAGS = \
 	-I$(LIBSCF)/inc \
 	-I$(LIBTECLA) \
 	-I$(LIBUUTIL)/common
-$(NATIVE_BUILD)LDFLAGS =
+$(NATIVE_BUILD)LDFLAGS = $(BDIRECT)
 $(NATIVE_BUILD)LDLIBS = \
 	-L$(LIBUUTIL)/native -R $(LIBUUTIL)/native \
 	-L$(LIBSCF)/native -R $(LIBSCF)/native \

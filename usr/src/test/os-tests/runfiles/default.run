@@ -26,6 +26,9 @@ outputdir = /var/tmp/test_results
 user = root
 tests = ['poll_test', 'epoll_test']
 
+[/opt/os-tests/tests/odirectory.32]
+[/opt/os-tests/tests/odirectory.64]
+
 [/opt/os-tests/tests/secflags]
 user = root
 tests = ['secflags_aslr',
@@ -87,3 +90,11 @@ tests = ['ldt', 'badseg']
 
 [/opt/os-tests/tests/imc_test]
 arch = i86pc
+
+#
+# Except atrparse all tests require special hardware (CCID YubiKey) to run,
+# hence they aren't included in the default runfile.
+#
+[/opt/os-tests/tests/uccid]
+arch = i86pc
+tests = ['atrparse']

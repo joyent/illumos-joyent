@@ -22,6 +22,8 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2020 Joyent, Inc.
+#
 
 LIBRARY = libfmd_snmp.a
 VERS = .1
@@ -40,7 +42,7 @@ include ../../../Makefile.lib
 include ../../Makefile.lib
 
 SRCS = $(LIBSRCS:%.c=../common/%.c)
-LIBS = $(DYNLIB) $(LINTLIB)
+LIBS = $(DYNLIB)
 
 SRCDIR =	../common
 
@@ -51,30 +53,17 @@ $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 CFLAGS += $(CCVERBOSE) $(C_BIGPICFLAGS)
 CFLAGS64 += $(CCVERBOSE) $(C_BIGPICFLAGS)
 
-# No lint libraries are delivered for Net-SNMP yet
-SNMPLIBS = -lnetsnmp -lnetsnmphelpers -lnetsnmpagent
-lint := SNMPLIBS=
+SNMPLIBS = -lnetsnmp -lnetsnmpagent -lnetsnmphelpers
+NATIVE_LIBS += libnetsnmp.so libnetsnmpagent.so
 
 LDLIBS += $(MACH_LDLIBS)
 LDLIBS += -lfmd_adm -luutil -lnvpair -ltopo
 LDLIBS += $(SNMPLIBS)
 LDLIBS += -lc
 
-LINTFLAGS = -msux $(C99LMODE)
-LINTFLAGS64 = -msux -m64 $(C99LMODE)
-
-# Net-SNMP's headers use do {} while (0) a lot
-LINTCHECKFLAGS += -erroff=E_CONSTANT_CONDITION
-
-$(LINTLIB) := SRCS = $(SRCDIR)/$(LINTSRC)
-$(LINTLIB) := LINTFLAGS = -nsvx
-$(LINTLIB) := LINTFLAGS64 = -nsvx -m64
-
 .KEEP_STATE:
 
 all: $(LIBS)
-
-lint: $(LINTLIB) lintcheck
 
 pics/%.o: ../$(MACH)/%.c
 	$(COMPILE.c) -o $@ $<

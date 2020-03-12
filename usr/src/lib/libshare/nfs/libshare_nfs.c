@@ -22,19 +22,19 @@
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
- * Copyright 2016 Nexenta Systems, Inc.
  * Copyright (c) 2014, 2016 by Delphix. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.
  */
 
 /*
  * NFS specific functions
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <zone.h>
 #include <errno.h>
 #include <locale.h>
 #include <signal.h>
@@ -175,8 +175,10 @@ struct option_defs optdefs[] = {
 	{SHOPT_UIDMAP, OPT_UIDMAP, OPT_TYPE_MAPPING},
 #define	OPT_GIDMAP	19
 	{SHOPT_GIDMAP, OPT_GIDMAP, OPT_TYPE_MAPPING},
+#define	OPT_NOHIDE	20
+	{SHOPT_NOHIDE, OPT_NOHIDE, OPT_TYPE_BOOLEAN},
 #ifdef VOLATILE_FH_TEST	/* XXX added for testing volatile fh's only */
-#define	OPT_VOLFH	20
+#define	OPT_VOLFH	21
 	{SHOPT_VOLFH, OPT_VOLFH},
 #endif /* VOLATILE_FH_TEST */
 	NULL
@@ -1027,6 +1029,14 @@ fill_export_from_optionset(struct exportdata *export, sa_optionset_t optionset)
 				export->ex_flags |= EX_NOACLFAB;
 			else
 				export->ex_flags &= ~EX_NOACLFAB;
+			break;
+		case OPT_NOHIDE:
+			if (value != NULL && (strcasecmp(value, "true") == 0 ||
+			    strcmp(value, "1") == 0))
+				export->ex_flags |= EX_NOHIDE;
+			else
+				export->ex_flags &= ~EX_NOHIDE;
+
 			break;
 		default:
 			/* have a syntactic error */
@@ -1896,12 +1906,7 @@ nfs_enable_share(sa_share_t share)
 				sa_free_attr_string(sectype);
 		}
 	}
-	/*
-	 * when we get here, we can do the exportfs system call and
-	 * initiate things. We probably want to enable the
-	 * svc:/network/nfs/server service first if it isn't running.
-	 */
-	/* check svc:/network/nfs/server status and start if needed */
+
 	/* now add the share to the internal tables */
 	printarg(path, &export);
 	/*
@@ -1911,52 +1916,17 @@ nfs_enable_share(sa_share_t share)
 	if (iszfs) {
 		struct exportfs_args ea;
 		share_t sh;
-		char *str;
-		priv_set_t *priv_effective;
-		int privileged;
 
-		/*
-		 * If we aren't a privileged user
-		 * and NFS server service isn't running
-		 * then print out an error message
-		 * and return EPERM
-		 */
+		ea.dname = path;
+		ea.uex = &export;
 
-		priv_effective = priv_allocset();
-		(void) getppriv(PRIV_EFFECTIVE, priv_effective);
-
-		privileged = (priv_isfullset(priv_effective) == B_TRUE);
-		priv_freeset(priv_effective);
-
-		if (!privileged &&
-		    (str = smf_get_state(NFS_SERVER_SVC)) != NULL) {
-			err = 0;
-			if (strcmp(str, SCF_STATE_STRING_ONLINE) != 0) {
-				(void) printf(dgettext(TEXT_DOMAIN,
-				    "NFS: Cannot share remote "
-				    "filesystem: %s\n"), path);
-				(void) printf(dgettext(TEXT_DOMAIN,
-				    "NFS: Service needs to be enabled "
-				    "by a privileged user\n"));
-				err = SA_SYSTEM_ERR;
-				errno = EPERM;
-			}
-			free(str);
+		(void) sa_sharetab_fill_zfs(share, &sh, "nfs");
+		err = sa_share_zfs(share, NULL, path, &sh, &ea, ZFS_SHARE_NFS);
+		if (err != SA_OK) {
+			errno = err;
+			err = -1;
 		}
-
-		if (err == 0) {
-			ea.dname = path;
-			ea.uex = &export;
-
-			(void) sa_sharetab_fill_zfs(share, &sh, "nfs");
-			err = sa_share_zfs(share, NULL, path, &sh,
-			    &ea, ZFS_SHARE_NFS);
-			if (err != SA_OK) {
-				errno = err;
-				err = -1;
-			}
-			sa_emptyshare(&sh);
-		}
+		sa_emptyshare(&sh);
 	} else {
 		err = exportfs(path, &export);
 	}
@@ -1964,20 +1934,7 @@ nfs_enable_share(sa_share_t share)
 	if (err < 0) {
 		err = SA_SYSTEM_ERR;
 		switch (errno) {
-		case EREMOTE:
-			(void) printf(dgettext(TEXT_DOMAIN,
-			    "NFS: Cannot share filesystems "
-			    "in non-global zones: %s\n"), path);
-			err = SA_NOT_SUPPORTED;
-			break;
 		case EPERM:
-			if (getzoneid() != GLOBAL_ZONEID) {
-				(void) printf(dgettext(TEXT_DOMAIN,
-				    "NFS: Cannot share file systems "
-				    "in non-global zones: %s\n"), path);
-				err = SA_NOT_SUPPORTED;
-				break;
-			}
 			err = SA_NO_PERMISSION;
 			break;
 		case EEXIST:
@@ -2089,9 +2046,6 @@ nfs_disable_share(sa_share_t share, char *path)
 		case EPERM:
 		case EACCES:
 			ret = SA_NO_PERMISSION;
-			if (getzoneid() != GLOBAL_ZONEID) {
-				ret = SA_NOT_SUPPORTED;
-			}
 			break;
 		case EINVAL:
 		case ENOENT:

@@ -52,6 +52,8 @@ SMB_POWERSUP_F_	smbios_powersup_flag_name	uint_t
 SMB_MOMC_	smbios_memdevice_op_capab_name	uint_t
 SMB_MDF_	smbios_memdevice_flag_name	uint_t
 SMB_PRC_	smbios_processor_core_flag_name	uint_t
+SMB_RV_ISA_	smbios_riscv_isa_name		uint64_t
+SMB_RV_PRIV_	smbios_riscv_priv_name		uint_t
 SMB_TYPE_	smbios_type_name		uint_t
 SMB_SLCH1_	smbios_slot_ch1_name		uint_t
 SMB_SLCH2_	smbios_slot_ch2_name		uint_t
@@ -60,6 +62,7 @@ SMB_SLCH2_	smbios_slot_ch2_name		uint_t
 desc_funcs='
 SMB_BBFL_	smbios_bboard_flag_desc		uint_t
 SMB_BBT_	smbios_bboard_type_desc		uint_t
+SMB_BDC_	smbios_battery_chem_desc	uint_t
 SMB_BIOSFL_	smbios_bios_flag_desc		uint64_t
 SMB_BIOSXB1_	smbios_bios_xb1_desc		uint_t
 SMB_BIOSXB2_	smbios_bios_xb2_desc		uint_t
@@ -97,13 +100,19 @@ SMB_MDR_	smbios_memdevice_rank_desc	uint_t
 SMB_MTECH_	smbios_memdevice_memtech_desc	uint_t
 SMB_MOMC_	smbios_memdevice_op_capab_desc	uint_t
 SMB_OBT_	smbios_onboard_type_desc	uint_t
+SMB_PDI_	smbios_pointdev_iface_desc	uint_t
+SMB_PDT_	smbios_pointdev_type_desc	uint_t
 SMB_POC_	smbios_port_conn_desc		uint_t
 SMB_POT_	smbios_port_type_desc		uint_t
 SMB_PRC_	smbios_processor_core_flag_desc	uint_t
 SMB_PRF_	smbios_processor_family_desc	uint_t
+SMB_PROCINFO_T	smbios_processor_info_type_desc	uint_t
 SMB_PRS_	smbios_processor_status_desc	uint_t
 SMB_PRT_	smbios_processor_type_desc	uint_t
 SMB_PRU_	smbios_processor_upgrade_desc	uint_t
+SMB_RV_ISA_	smbios_riscv_isa_desc		uint64_t
+SMB_RV_PRIV_	smbios_riscv_priv_desc		uint_t
+SMB_RV_WIDTH_	smbios_riscv_width_desc		uint_t
 SMB_SLCH1_	smbios_slot_ch1_desc		uint_t
 SMB_SLCH2_	smbios_slot_ch2_desc		uint_t
 SMB_SLL_	smbios_slot_length_desc		uint_t

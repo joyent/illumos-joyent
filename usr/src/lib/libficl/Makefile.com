@@ -12,7 +12,7 @@
 #
 # Copyright 2016 Toomas Soome <tsoome@me.com>
 #
-# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 
 LIBRARY=libficl-sys.a
 MAJOR = 4
@@ -26,8 +26,7 @@ OBJECTS= dictionary.o system.o fileaccess.o float.o double.o prefix.o search.o \
 
 include $(SRC)/lib/Makefile.lib
 
-LIBS=	$(DYNLIB) $(LINTLIB)
-
+LIBS=	$(DYNLIB)
 FICLDIR=	$(SRC)/common/ficl
 LZ4=		$(SRC)/common/lz4
 CSTD=	$(CSTD_GNU99)
@@ -42,7 +41,8 @@ CFLAGS64 += $(C_BIGPICFLAGS64)
 # for time being, till gcc 4.4.4 will be replaced.
 pics/vm.o := CERRWARN += -_gcc=-Wno-clobbered
 
-LDLIBS +=	-luuid -lz -lc -lm -lumem
+LDLIBS +=	-lumem -luuid -lz -lc -lm
+NATIVE_LIBS +=	libz.so
 
 HEADERS= $(FICLDIR)/ficl.h $(FICLDIR)/ficltokens.h ../ficllocal.h \
 	$(FICLDIR)/ficlplatform/unix.h $(PNGLITE)/pnglite.h
@@ -70,8 +70,6 @@ pics/%.o:	$(LZ4)/%.c $(HEADERS)
 pics/%.o:	$(PNGLITE)/%.c $(HEADERS)
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-$(LINTLIB) := SRCS=	../$(LINTSRC)
 
 all: $(LIBS)
 

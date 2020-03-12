@@ -26,7 +26,7 @@
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
 # Copyright 2018 Nexenta Systems, Inc.
 # Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 # Copyright 2019 Peter Tribble.
 #
 
@@ -132,7 +132,6 @@ $(sparc_ONLY)dir path=usr/platform/SUNW,Netra-CP3010/include
 $(sparc_ONLY)dir path=usr/platform/SUNW,Netra-T12 group=sys
 $(sparc_ONLY)dir path=usr/platform/SUNW,Netra-T4 group=sys
 $(sparc_ONLY)dir path=usr/platform/SUNW,SPARC-Enterprise group=sys
-$(sparc_ONLY)dir path=usr/platform/SUNW,Serverblade1 group=sys
 $(sparc_ONLY)dir path=usr/platform/SUNW,Sun-Blade-100 group=sys
 $(sparc_ONLY)dir path=usr/platform/SUNW,Sun-Blade-1000 group=sys
 $(sparc_ONLY)dir path=usr/platform/SUNW,Sun-Blade-1500 group=sys
@@ -1171,6 +1170,7 @@ file path=usr/include/sys/lc_core.h
 file path=usr/include/sys/ldterm.h
 file path=usr/include/sys/lgrp.h
 file path=usr/include/sys/lgrp_user.h
+file path=usr/include/sys/limits.h
 file path=usr/include/sys/link.h
 file path=usr/include/sys/linker_set.h
 file path=usr/include/sys/list.h
@@ -1967,8 +1967,6 @@ $(sparc_ONLY)link path=usr/platform/SUNW,Netra-T12/include \
 $(sparc_ONLY)link path=usr/platform/SUNW,Netra-T4/include \
     target=../sun4u/include
 $(sparc_ONLY)link path=usr/platform/SUNW,SPARC-Enterprise/include \
-    target=../sun4u/include
-$(sparc_ONLY)link path=usr/platform/SUNW,Serverblade1/include \
     target=../sun4u/include
 $(sparc_ONLY)link path=usr/platform/SUNW,Sun-Blade-100/include \
     target=../sun4u/include

@@ -675,7 +675,12 @@ efi_readkey_ex(EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL *coninex)
 				}
 			}
 		}
-
+		/*
+		 * The shift state and/or toggle state may not be valid,
+		 * but we still can have ScanCode or UnicodeChar.
+		 */
+		if (kp->ScanCode == 0 && kp->UnicodeChar == 0)
+			return (false);
 		keybuf_inschar(kp);
 		return (true);
 	}

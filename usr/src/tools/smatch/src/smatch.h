@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
+#include <float.h>
 #include <sys/time.h>
 #include <sqlite3.h>
 #include "lib.h"
@@ -37,6 +38,9 @@ typedef struct {
 	union {
 		long long value;
 		unsigned long long uvalue;
+		float fvalue;
+		double dvalue;
+		long double ldvalue;
 	};
 } sval_t;
 
@@ -99,6 +103,12 @@ struct constraint {
 	int id;
 };
 DECLARE_PTR_LIST(constraint_list, struct constraint);
+
+struct alloc_info {
+	const char *fn;
+	int size_param, nr;
+};
+extern struct alloc_info *alloc_funcs;
 
 struct bit_info {
 	unsigned long long set;
@@ -206,6 +216,7 @@ extern int final_pass;
 extern struct symbol *cur_func_sym;
 extern int option_debug;
 extern int local_debug;
+extern int debug_db;
 bool debug_implied(void);
 extern int option_info;
 extern int option_spammy;
@@ -240,7 +251,10 @@ extern const char *progname;
  * sm_msg(): other message (please avoid using this)
  */
 
-#define sm_printf(msg...) do { if (final_pass || option_debug || local_debug) fprintf(sm_outfd, msg); } while (0)
+#define sm_printf(msg...) do {						\
+	if (final_pass || option_debug || local_debug || debug_db)	\
+		fprintf(sm_outfd, msg);					\
+} while (0)
 
 static inline void sm_prefix(void)
 {
@@ -254,7 +268,7 @@ extern bool __silence_warnings_for_stmt;
 #define sm_print_msg(type, msg...) \
 do {                                                           \
 	print_implied_debug_msg();                             \
-	if (!final_pass && !option_debug && !local_debug)      \
+	if (!final_pass && !option_debug && !local_debug && !debug_db)	  \
 		break;                                         \
 	if (__silence_warnings_for_stmt && !option_debug && !local_debug) \
 		break;					       \
@@ -277,12 +291,6 @@ do {                                                           \
 
 #define sm_msg(msg...) do { sm_print_msg(0, msg); } while (0)
 
-#define local_debug(msg...)					\
-do {								\
-	if (local_debug)					\
-		sm_msg(msg);					\
-} while (0)
-
 extern char *implied_debug_msg;
 static inline void print_implied_debug_msg(void)
 {
@@ -297,6 +305,7 @@ static inline void print_implied_debug_msg(void)
 }
 
 #define sm_debug(msg...) do { if (option_debug) sm_printf(msg); } while (0)
+#define db_debug(msg...) do { if (option_debug || debug_db) sm_printf(msg); } while (0)
 
 #define sm_info(msg...) do {					\
 	if (option_debug || (option_info && final_pass)) {	\
@@ -395,6 +404,7 @@ int sym_name_is(const char *name, struct expression *expr);
 int get_const_value(struct expression *expr, sval_t *sval);
 int get_value(struct expression *expr, sval_t *val);
 int get_implied_value(struct expression *expr, sval_t *val);
+int get_implied_value_fast(struct expression *expr, sval_t *sval);
 int get_implied_min(struct expression *expr, sval_t *sval);
 int get_implied_max(struct expression *expr, sval_t *val);
 int get_hard_max(struct expression *expr, sval_t *sval);
@@ -438,6 +448,7 @@ struct statement *get_prev_statement(void);
 struct expression *get_last_expr_from_expression_stmt(struct expression *expr);
 int get_param_num_from_sym(struct symbol *sym);
 int get_param_num(struct expression *expr);
+struct symbol *get_param_sym_from_num(int num);
 int ms_since(struct timeval *start);
 int parent_is_gone_var_sym(const char *name, struct symbol *sym);
 int parent_is_gone(struct expression *expr);
@@ -806,8 +817,6 @@ enum info_type {
 	RETURN_VALUE	= 1005,
 	DEREFERENCE	= 1006,
 	RANGE_CAP	= 1007,
-	LOCK_HELD	= 1008,
-	LOCK_RELEASED	= 1009,
 	ABSOLUTE_LIMITS	= 1010,
 	PARAM_ADD	= 1012,
 	PARAM_FREED	= 1013,
@@ -837,6 +846,7 @@ enum info_type {
 	NOSPEC_WB	= 1036,
 	STMT_CNT	= 1037,
 	TERMINATED	= 1038,
+	FRESH_ALLOC	= 1044,
 
 	/* put random temporary stuff in the 7000-7999 range for testing */
 	USER_DATA	= 8017,
@@ -845,6 +855,10 @@ enum info_type {
 	NO_OVERFLOW_SIMPLE = 8019,
 	LOCKED		= 8020,
 	UNLOCKED	= 8021,
+	HALF_LOCKED	= 9022,
+	LOCK_RESTORED	= 9023,
+	KNOWN_LOCKED	= 9024,
+	KNOWN_UNLOCKED 	= 9025,
 	SET_FS		= 8022,
 	ATOMIC_INC	= 8023,
 	ATOMIC_DEC	= 8024,
@@ -887,6 +901,7 @@ const char *get_param_name(struct sm_state *sm);
 const char *get_mtag_name_var_sym(const char *state_name, struct symbol *sym);
 const char *get_mtag_name_expr(struct expression *expr);
 char *get_data_info_name(struct expression *expr);
+char *sm_to_arg_name(struct expression *expr, struct sm_state *sm);
 int is_recursive_member(const char *param_name);
 
 char *escape_newlines(const char *str);
@@ -897,7 +912,7 @@ do {										\
 	char sql_txt[1024];							\
 										\
 	sqlite3_snprintf(sizeof(sql_txt), sql_txt, sql);			\
-	sm_debug("debug: %s\n", sql_txt);					\
+	db_debug("debug: %s\n", sql_txt);					\
 	sql_exec(db, call_back, data, sql_txt);					\
 } while (0)
 
@@ -931,7 +946,7 @@ do {										\
 			      ignore ? "or ignore " : "", #table);		\
 		p += snprintf(p, buf + sizeof(buf) - p, values);		\
 		p += snprintf(p, buf + sizeof(buf) - p, ");");			\
-		sm_debug("mem-db: %s\n", buf);					\
+		db_debug("mem-db: %s\n", buf);					\
 		rc = sqlite3_exec(_db, buf, NULL, NULL, &err);			\
 		if (rc != SQLITE_OK) {						\
 			sm_ierror("SQL error #2: %s", err);			\
@@ -1007,7 +1022,6 @@ extern char *bin_dir;
 extern char *data_dir;
 extern int option_no_data;
 extern int option_full_path;
-extern int option_param_mapper;
 extern int option_call_tree;
 extern int num_checks;
 
@@ -1062,6 +1076,7 @@ void __add_return_to_param_mapping(struct expression *assign, const char *return
 char *map_call_to_param_name_sym(struct expression *expr, struct symbol **sym);
 
 /* smatch_comparison.c */
+extern int comparison_id;
 #define UNKNOWN_COMPARISON 0
 #define IMPOSSIBLE_COMPARISON -1
 struct compare_data {
@@ -1117,8 +1132,11 @@ sval_t *sval_alloc(sval_t sval);
 sval_t *sval_alloc_permanent(sval_t sval);
 sval_t sval_blank(struct expression *expr);
 sval_t sval_type_val(struct symbol *type, long long val);
+sval_t sval_type_fval(struct symbol *type, long double fval);
 sval_t sval_from_val(struct expression *expr, long long val);
+sval_t sval_from_fval(struct expression *expr, long double fval);
 int sval_is_ptr(sval_t sval);
+bool sval_is_fp(sval_t sval);
 int sval_unsigned(sval_t sval);
 int sval_signed(sval_t sval);
 int sval_bits(sval_t sval);
@@ -1169,6 +1187,10 @@ int has_inc_dec(struct expression *expr);
 struct smatch_state *get_stored_condition(struct expression *expr);
 struct expression_list *get_conditions(struct expression *expr);
 struct sm_state *stored_condition_implication_hook(struct expression *expr,
+			struct state_list **true_stack,
+			struct state_list **false_stack);
+/* smatch_parsed_conditions.c */
+struct sm_state *parsed_condition_implication_hook(struct expression *expr,
 			struct state_list **true_stack,
 			struct state_list **false_stack);
 
@@ -1235,6 +1257,7 @@ int get_offset_from_container_of(struct expression *expr);
 char *get_container_name(struct expression *container, struct expression *expr);
 
 /* smatch_mtag.c */
+mtag_t str_to_mtag(const char *str);
 int get_string_mtag(struct expression *expr, mtag_t *tag);
 int get_toplevel_mtag(struct symbol *sym, mtag_t *tag);
 int create_mtag_alias(mtag_t tag, struct expression *expr, mtag_t *new);
@@ -1264,12 +1287,22 @@ bool is_nul_terminated(struct expression *expr);
 /* check_kernel.c  */
 bool is_ignored_kernel_data(const char *name);
 
+bool is_fresh_alloc_var_sym(const char *var, struct symbol *sym);
+bool is_fresh_alloc(struct expression *expr);
 static inline bool type_is_ptr(struct symbol *type)
 {
 	return type &&
 	       (type->type == SYM_PTR ||
 		type->type == SYM_ARRAY ||
 		type->type == SYM_FN);
+}
+
+static inline bool type_is_fp(struct symbol *type)
+{
+	return type &&
+	       (type == &float_ctype ||
+		type == &double_ctype ||
+		type == &ldouble_ctype);
 }
 
 static inline int type_bits(struct symbol *type)
@@ -1313,9 +1346,52 @@ static inline int sval_positive_bits(sval_t sval)
 /*
  * Returns -1 if one is smaller, 0 if they are the same and 1 if two is larger.
  */
+
+static inline int fp_cmp(sval_t one, sval_t two)
+{
+	struct symbol *type;
+
+	if (sval_is_fp(one) && sval_is_fp(two))
+		type = type_bits(one.type) > type_bits(two.type) ? one.type : two.type;
+	else if (sval_is_fp(one))
+		type = one.type;
+	else
+		type = two.type;
+
+	one = sval_cast(type, one);
+	two = sval_cast(type, two);
+
+	if (one.type == &float_ctype) {
+		if (one.fvalue < two.fvalue)
+			return -1;
+		if (one.fvalue == two.fvalue)
+			return 0;
+		return 1;
+	}
+	if (one.type == &double_ctype) {
+		if (one.dvalue < two.dvalue)
+			return -1;
+		if (one.dvalue == two.dvalue)
+			return 0;
+		return 1;
+	}
+	if (one.type == &ldouble_ctype) {
+		if (one.ldvalue < two.ldvalue)
+			return -1;
+		if (one.ldvalue == two.ldvalue)
+			return 0;
+		return 1;
+	}
+	sm_perror("bad type in fp_cmp(): %s", type_to_str(type));
+	return 1;
+}
+
 static inline int sval_cmp(sval_t one, sval_t two)
 {
 	struct symbol *type;
+
+	if (sval_is_fp(one) || sval_is_fp(two))
+		return fp_cmp(one, two);
 
 	type = one.type;
 	if (sval_positive_bits(two) > sval_positive_bits(one))

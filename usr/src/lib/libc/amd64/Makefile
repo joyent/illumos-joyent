@@ -24,7 +24,7 @@
 # Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright 2013 Garrett D'Amore <garrett@damore.org>
 # Copyright 2018 Nexenta Systems, Inc.
-# Copyright (c) 2019, Joyent, Inc.
+# Copyright 2019 Joyent, Inc.
 # Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
@@ -1222,7 +1222,9 @@ ASSYMDEP_OBJS=			\
 
 $(ASSYMDEP_OBJS:%=pics/%): assym.h
 
-GENASSYM_C = $(LIBCDIR)/$(MACH64)/genassym.c
+# assym.h build rules
+
+GENASSYM_C = genassym.c
 
 # derived C source and related explicit dependencies
 $(LIBCDIR)/port/gen/errlst.c + \

@@ -216,12 +216,12 @@ vdev_queue_offset_compare(const void *x1, const void *x2)
 	const zio_t *z1 = (const zio_t *)x1;
 	const zio_t *z2 = (const zio_t *)x2;
 
-	int cmp = AVL_CMP(z1->io_offset, z2->io_offset);
+	int cmp = TREE_CMP(z1->io_offset, z2->io_offset);
 
 	if (likely(cmp))
 		return (cmp);
 
-	return (AVL_PCMP(z1, z2));
+	return (TREE_PCMP(z1, z2));
 }
 
 static inline avl_tree_t *
@@ -248,12 +248,12 @@ vdev_queue_timestamp_compare(const void *x1, const void *x2)
 	const zio_t *z1 = (const zio_t *)x1;
 	const zio_t *z2 = (const zio_t *)x2;
 
-	int cmp = AVL_CMP(z1->io_timestamp, z2->io_timestamp);
+	int cmp = TREE_CMP(z1->io_timestamp, z2->io_timestamp);
 
 	if (likely(cmp))
 		return (cmp);
 
-	return (AVL_PCMP(z1, z2));
+	return (TREE_PCMP(z1, z2));
 }
 
 void
@@ -839,6 +839,7 @@ vdev_queue_io_done(zio_t *zio)
 
 	vdev_queue_pending_remove(vq, zio);
 
+	zio->io_delta = gethrtime() - zio->io_timestamp;
 	vq->vq_io_complete_ts = gethrtime();
 
 	while ((nio = vdev_queue_io_to_issue(vq)) != NULL) {

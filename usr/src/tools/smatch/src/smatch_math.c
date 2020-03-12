@@ -1398,6 +1398,9 @@ static bool get_rl_sval(struct expression *expr, int implied, int *recurse_cnt, 
 	case EXPR_VALUE:
 		sval = sval_from_val(expr, expr->value);
 		break;
+	case EXPR_FVALUE:
+		sval = sval_from_fval(expr, expr->fvalue);
+		break;
 	case EXPR_PREOP:
 		handle_preop_rl(expr, implied, recurse_cnt, &rl, &sval);
 		break;
@@ -1601,6 +1604,26 @@ int get_implied_value(struct expression *expr, sval_t *sval)
 	    !rl_to_sval(rl, sval))
 		return 0;
 	return 1;
+}
+
+int get_implied_value_fast(struct expression *expr, sval_t *sval)
+{
+	struct range_list *rl;
+	static int recurse;
+	int ret = 0;
+
+	if (recurse)
+		return 0;
+
+	recurse = 1;
+	set_fast_math_only();
+	if (get_rl_helper(expr, RL_IMPLIED, &rl) &&
+	    rl_to_sval(rl, sval))
+		ret = 1;
+	clear_fast_math_only();
+	recurse = 0;
+
+	return ret;
 }
 
 int get_implied_min(struct expression *expr, sval_t *sval)

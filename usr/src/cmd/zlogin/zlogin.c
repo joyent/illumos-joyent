@@ -22,9 +22,9 @@
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2013 DEY Storage Systems, Inc.
  * Copyright (c) 2014 Gary Mills
- * Copyright 2016 Joyent, Inc.
  * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -833,8 +833,8 @@ process_output(int in_fd, int out_fd)
 	cc = read(in_fd, ibuf, ZLOGIN_BUFSIZ);
 	if (cc == -1 && (errno != EINTR || dead))
 		return (-1);
-	if (cc == 0)	/* EOF */
-		return (-1);
+	if (cc == 0)
+		return (-1);	/* EOF */
 	if (cc == -1)	/* The read was interrupted. */
 		return (0);
 
@@ -854,10 +854,10 @@ process_output(int in_fd, int out_fd)
 /*
  * This is the main I/O loop, and is shared across all zlogin modes.
  * Parameters:
- * 	stdin_fd:  The fd representing 'stdin' for the slave side; input to
+ *	stdin_fd:  The fd representing 'stdin' for the slave side; input to
  *		   the zone will be written here.
  *
- * 	appin_fd:  The fd representing the other end of the 'stdin' pipe (when
+ *	appin_fd:  The fd representing the other end of the 'stdin' pipe (when
  *		   we're running non-interactive); used in process_raw_input
  *		   to ensure we don't fill up the application's stdin pipe.
  *
@@ -930,6 +930,9 @@ doio(int stdin_fd, int appin_fd, int stdout_fd, int stderr_fd, int sig_fd,
 
 		/* event from master side stderr */
 		if (pollfds[1].revents) {
+			if (pollfds[1].revents & POLLHUP)
+				break;
+
 			if (pollfds[1].revents &
 			    (POLLIN | POLLRDNORM | POLLRDBAND | POLLPRI)) {
 				if (process_output(stderr_fd, STDERR_FILENO)
@@ -943,6 +946,9 @@ doio(int stdin_fd, int appin_fd, int stdout_fd, int stderr_fd, int sig_fd,
 
 		/* event from master side stdout */
 		if (pollfds[0].revents) {
+			if (pollfds[0].revents & POLLHUP)
+				break;
+
 			if (pollfds[0].revents &
 			    (POLLIN | POLLRDNORM | POLLRDBAND | POLLPRI)) {
 				if (process_output(stdout_fd, STDOUT_FILENO)

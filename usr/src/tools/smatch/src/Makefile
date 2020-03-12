@@ -1,4 +1,4 @@
-VERSION=0.6.1-rc1-il-2
+VERSION=0.6.1-rc1-il-4
 
 ########################################################################
 # The following variables can be overwritten from the command line
@@ -95,7 +95,7 @@ all:
 # common flags/options/...
 
 cflags = -fno-strict-aliasing
-cflags += -Wall -Wwrite-strings -Wno-switch
+cflags += -Wall -Wwrite-strings -Wno-switch -Wno-psabi
 
 GCC_BASE := $(shell $(CC) --print-file-name=)
 cflags += -DGCC_BASE=\"$(GCC_BASE)\"
@@ -226,6 +226,7 @@ SMATCH_OBJS += smatch_extra.o
 SMATCH_OBJS += smatch_files.o
 SMATCH_OBJS += smatch_flow.o
 SMATCH_OBJS += smatch_fn_arg_link.o
+SMATCH_OBJS += smatch_fresh_alloc.o
 SMATCH_OBJS += smatch_function_hooks.o
 SMATCH_OBJS += smatch_function_info.o
 SMATCH_OBJS += smatch_function_ptrs.o
@@ -254,6 +255,7 @@ SMATCH_OBJS += smatch_param_set.o
 SMATCH_OBJS += smatch_param_to_mtag_data.o
 SMATCH_OBJS += smatch_param_used.o
 SMATCH_OBJS += smatch_parse_call_math.o
+SMATCH_OBJS += smatch_parsed_conditions.o
 SMATCH_OBJS += smatch_passes_array_size.o
 SMATCH_OBJS += smatch_project.o
 SMATCH_OBJS += smatch_ranges.o

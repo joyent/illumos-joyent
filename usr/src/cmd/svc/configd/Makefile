@@ -24,7 +24,7 @@
 #
 # Copyright 2015 RackTop Systems.
 #
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 #
 
 MYPROG = svc.configd
@@ -78,14 +78,15 @@ SCRIPTFILE	= restore_repository
 ROOTSCRIPTFILE	= $(ROOTCMDDIR)/$(SCRIPTFILE)
 
 #
-# Native variant (used in ../seed)
+# Native variant (used in ../seed).
 #
+$(NATIVE_BUILD)NATIVE_LIBS += libumem.so libc.so
 $(NATIVE_BUILD)CC =	$(NATIVECC)
 $(NATIVE_BUILD)LD =	$(NATIVELD)
 $(NATIVE_BUILD)CFLAGS =	$(NATIVE_CFLAGS)
 $(NATIVE_BUILD)CPPFLAGS = $(MYCPPFLAGS) -I$(LIBUUTIL)/common -I$(LIBSCF)/inc
 $(NATIVE_BUILD)CPPFLAGS += -DNATIVE_BUILD
-$(NATIVE_BUILD)LDFLAGS =
+$(NATIVE_BUILD)LDFLAGS = $(BDIRECT)
 $(NATIVE_BUILD)LDLIBS = -L$(ADJUNCT_PROTO)/usr/lib -R$(ADJUNCT_PROTO)/usr/lib \
 			-L$(LIBUUTIL)/native -R $(LIBUUTIL)/native $(MYLDLIBS)
 

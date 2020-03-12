@@ -83,12 +83,14 @@ typedef void	vdev_remap_cb_t(uint64_t inner_offset, vdev_t *vd,
     uint64_t offset, uint64_t size, void *arg);
 typedef void	vdev_remap_func_t(vdev_t *vd, uint64_t offset, uint64_t size,
     vdev_remap_cb_t callback, void *arg);
+typedef int	vdev_dumpio_func_t(vdev_t *vd, caddr_t data, size_t size,
+    uint64_t offset, uint64_t origoffset, boolean_t doread, boolean_t isdump);
 /*
  * Given a target vdev, translates the logical range "in" to the physical
  * range "res"
  */
-typedef void vdev_xlation_func_t(vdev_t *cvd, const range_seg_t *in,
-    range_seg_t *res);
+typedef void vdev_xlation_func_t(vdev_t *cvd, const range_seg64_t *in,
+    range_seg64_t *res);
 
 typedef struct vdev_ops {
 	vdev_open_func_t		*vdev_op_open;
@@ -106,6 +108,7 @@ typedef struct vdev_ops {
 	 * Used when initializing vdevs. Isn't used by leaf ops.
 	 */
 	vdev_xlation_func_t		*vdev_op_xlate;
+	vdev_dumpio_func_t		*vdev_op_dumpio;
 	char				vdev_op_type[16];
 	boolean_t			vdev_op_leaf;
 } vdev_ops_t;
@@ -227,6 +230,7 @@ struct vdev {
 	vdev_t		**vdev_child;	/* array of children		*/
 	uint64_t	vdev_children;	/* number of children		*/
 	vdev_stat_t	vdev_stat;	/* virtual device statistics	*/
+	vdev_stat_ex_t	vdev_stat_ex;	/* extended statistics		*/
 	boolean_t	vdev_expanding;	/* expand the vdev?		*/
 	boolean_t	vdev_reopening;	/* reopen in progress?		*/
 	boolean_t	vdev_nonrot;	/* true if solid state		*/
@@ -517,8 +521,8 @@ extern vdev_ops_t vdev_indirect_ops;
 /*
  * Common size functions
  */
-extern void vdev_default_xlate(vdev_t *vd, const range_seg_t *in,
-    range_seg_t *out);
+extern void vdev_default_xlate(vdev_t *vd, const range_seg64_t *in,
+    range_seg64_t *out);
 extern uint64_t vdev_default_asize(vdev_t *vd, uint64_t psize);
 extern uint64_t vdev_get_min_asize(vdev_t *vd);
 extern void vdev_set_min_asize(vdev_t *vd);

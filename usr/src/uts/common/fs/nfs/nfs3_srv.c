@@ -20,13 +20,14 @@
  */
 
 /*
- * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.
  * Copyright (c) 1994, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 /* Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T */
 /* All Rights Reserved */
+
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -68,12 +69,17 @@
 #include <inet/ip6.h>
 
 /*
+ * Zone global variables of NFSv3 server
+ */
+typedef struct nfs3_srv {
+	writeverf3	write3verf;
+} nfs3_srv_t;
+
+/*
  * These are the interface routines for the server side of the
  * Network File System.  See the NFS version 3 protocol specification
  * for a description of this interface.
  */
-
-static writeverf3 write3verf;
 
 static int	sattr3_to_vattr(sattr3 *, struct vattr *);
 static int	vattr_to_fattr3(struct vattr *, fattr3 *);
@@ -86,6 +92,15 @@ extern int nfs_loaned_buffers;
 
 u_longlong_t nfs3_srv_caller_id;
 
+static nfs3_srv_t *
+nfs3_get_srv(void)
+{
+	nfs_globals_t *ng = nfs_srv_getzg();
+	nfs3_srv_t *srv = ng->nfs3_srv;
+	ASSERT(srv != NULL);
+	return (srv);
+}
+
 /* ARGSUSED */
 void
 rfs3_getattr(GETATTR3args *args, GETATTR3res *resp, struct exportinfo *exi,
@@ -97,8 +112,9 @@ rfs3_getattr(GETATTR3args *args, GETATTR3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->object, exi);
 
-	DTRACE_NFSV3_4(op__getattr__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, GETATTR3args *, args);
+	DTRACE_NFSV3_5(op__getattr__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    GETATTR3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -119,8 +135,9 @@ rfs3_getattr(GETATTR3args *args, GETATTR3res *resp, struct exportinfo *exi,
 			goto out;
 		resp->status = NFS3_OK;
 
-		DTRACE_NFSV3_4(op__getattr__done, struct svc_req *, req,
-		    cred_t *, cr, vnode_t *, vp, GETATTR3res *, resp);
+		DTRACE_NFSV3_5(op__getattr__done, struct svc_req *, req,
+		    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+		    GETATTR3res *, resp);
 
 		VN_RELE(vp);
 
@@ -134,8 +151,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 
-	DTRACE_NFSV3_4(op__getattr__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, GETATTR3res *, resp);
+	DTRACE_NFSV3_5(op__getattr__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    GETATTR3res *, resp);
 
 	if (vp != NULL)
 		VN_RELE(vp);
@@ -168,8 +186,9 @@ rfs3_setattr(SETATTR3args *args, SETATTR3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->object, exi);
 
-	DTRACE_NFSV3_4(op__setattr__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, SETATTR3args *, args);
+	DTRACE_NFSV3_5(op__setattr__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    SETATTR3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -330,8 +349,9 @@ rfs3_setattr(SETATTR3args *args, SETATTR3res *resp, struct exportinfo *exi,
 	resp->status = NFS3_OK;
 	vattr_to_wcc_data(bvap, avap, &resp->resok.obj_wcc);
 
-	DTRACE_NFSV3_4(op__setattr__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, SETATTR3res *, resp);
+	DTRACE_NFSV3_5(op__setattr__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    SETATTR3res *, resp);
 
 	VN_RELE(vp);
 
@@ -344,8 +364,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__setattr__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, SETATTR3res *, resp);
+	DTRACE_NFSV3_5(op__setattr__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    SETATTR3res *, resp);
 
 	if (vp != NULL) {
 		if (in_crit)
@@ -382,21 +403,27 @@ rfs3_lookup(LOOKUP3args *args, LOOKUP3res *resp, struct exportinfo *exi,
 
 	dvap = NULL;
 
+	if (exi != NULL)
+		exi_hold(exi);
+
 	/*
 	 * Allow lookups from the root - the default
 	 * location of the public filehandle.
 	 */
 	if (exi != NULL && (exi->exi_export.ex_flags & EX_PUBLIC)) {
-		dvp = rootdir;
+		ASSERT3U(exi->exi_zoneid, ==, curzone->zone_id);
+		dvp = ZONE_ROOTVP();
 		VN_HOLD(dvp);
 
-		DTRACE_NFSV3_4(op__lookup__start, struct svc_req *, req,
-		    cred_t *, cr, vnode_t *, dvp, LOOKUP3args *, args);
+		DTRACE_NFSV3_5(op__lookup__start, struct svc_req *, req,
+		    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+		    LOOKUP3args *, args);
 	} else {
 		dvp = nfs3_fhtovp(&args->what.dir, exi);
 
-		DTRACE_NFSV3_4(op__lookup__start, struct svc_req *, req,
-		    cred_t *, cr, vnode_t *, dvp, LOOKUP3args *, args);
+		DTRACE_NFSV3_5(op__lookup__start, struct svc_req *, req,
+		    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+		    LOOKUP3args *, args);
 
 		if (dvp == NULL) {
 			error = ESTALE;
@@ -418,10 +445,22 @@ rfs3_lookup(LOOKUP3args *args, LOOKUP3res *resp, struct exportinfo *exi,
 	}
 
 	fhp = &args->what.dir;
+	ASSERT3U(curzone->zone_id, ==, exi->exi_zoneid); /* exi is non-NULL */
 	if (strcmp(args->what.name, "..") == 0 &&
 	    EQFID(&exi->exi_fid, FH3TOFIDP(fhp))) {
-		resp->status = NFS3ERR_NOENT;
-		goto out1;
+		if ((exi->exi_export.ex_flags & EX_NOHIDE) &&
+		    ((dvp->v_flag & VROOT) || VN_IS_CURZONEROOT(dvp))) {
+			/*
+			 * special case for ".." and 'nohide'exported root
+			 */
+			if (rfs_climb_crossmnt(&dvp, &exi, cr) != 0) {
+				resp->status = NFS3ERR_ACCES;
+				goto out1;
+			}
+		} else {
+			resp->status = NFS3ERR_NOENT;
+			goto out1;
+		}
 	}
 
 	ca = (struct sockaddr *)svc_getrpccaller(req->rq_xprt)->buf;
@@ -439,10 +478,13 @@ rfs3_lookup(LOOKUP3args *args, LOOKUP3res *resp, struct exportinfo *exi,
 	 */
 	if (PUBLIC_FH3(&args->what.dir)) {
 		publicfh_flag = TRUE;
+
+		exi_rele(exi);
+		exi = NULL;
+
 		error = rfs_publicfh_mclookup(name, dvp, cr, &vp,
 		    &exi, &sec);
-		if (error && exi != NULL)
-			exi_rele(exi); /* See comment below Re: publicfh_flag */
+
 		/*
 		 * Since WebNFS may bypass MOUNT, we need to ensure this
 		 * request didn't come from an unlabeled admin_low client.
@@ -464,8 +506,6 @@ rfs3_lookup(LOOKUP3args *args, LOOKUP3res *resp, struct exportinfo *exi,
 			if (tp == NULL || tp->tpc_tp.tp_doi !=
 			    l_admin_low->tsl_doi || tp->tpc_tp.host_type !=
 			    SUN_CIPSO) {
-				if (exi != NULL)
-					exi_rele(exi);
 				VN_RELE(vp);
 				error = EACCES;
 			}
@@ -480,6 +520,12 @@ rfs3_lookup(LOOKUP3args *args, LOOKUP3res *resp, struct exportinfo *exi,
 	if (name != args->what.name)
 		kmem_free(name, MAXPATHLEN + 1);
 
+	if (error == 0 && vn_ismntpt(vp)) {
+		error = rfs_cross_mnt(&vp, &exi);
+		if (error)
+			VN_RELE(vp);
+	}
+
 	if (is_system_labeled() && error == 0) {
 		bslabel_t *clabel = req->rq_label;
 
@@ -490,8 +536,6 @@ rfs3_lookup(LOOKUP3args *args, LOOKUP3res *resp, struct exportinfo *exi,
 		if (!blequal(&l_admin_low->tsl_label, clabel)) {
 			if (!do_rfs_label_check(clabel, dvp,
 			    DOMINANCE_CHECK, exi)) {
-				if (publicfh_flag && exi != NULL)
-					exi_rele(exi);
 				VN_RELE(vp);
 				error = EACCES;
 			}
@@ -511,15 +555,6 @@ rfs3_lookup(LOOKUP3args *args, LOOKUP3res *resp, struct exportinfo *exi,
 		if (!error && publicfh_flag && !chk_clnt_sec(exi, req))
 			auth_weak = TRUE;
 	}
-
-	/*
-	 * If publicfh_flag is true then we have called rfs_publicfh_mclookup
-	 * and have obtained a new exportinfo in exi which needs to be
-	 * released. Note that the original exportinfo pointed to by exi
-	 * will be released by the caller, common_dispatch.
-	 */
-	if (publicfh_flag)
-		exi_rele(exi);
 
 	if (error) {
 		VN_RELE(vp);
@@ -543,9 +578,11 @@ rfs3_lookup(LOOKUP3args *args, LOOKUP3res *resp, struct exportinfo *exi,
 	if (auth_weak)
 		resp->status = (enum nfsstat3)WNFSERR_CLNT_FLAVOR;
 
-	DTRACE_NFSV3_4(op__lookup__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, LOOKUP3res *, resp);
+	DTRACE_NFSV3_5(op__lookup__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    LOOKUP3res *, resp);
 	VN_RELE(dvp);
+	exi_rele(exi);
 
 	return;
 
@@ -556,8 +593,12 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__lookup__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, LOOKUP3res *, resp);
+	DTRACE_NFSV3_5(op__lookup__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    LOOKUP3res *, resp);
+
+	if (exi != NULL)
+		exi_rele(exi);
 
 	if (dvp != NULL)
 		VN_RELE(dvp);
@@ -590,8 +631,9 @@ rfs3_access(ACCESS3args *args, ACCESS3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->object, exi);
 
-	DTRACE_NFSV3_4(op__access__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, ACCESS3args *, args);
+	DTRACE_NFSV3_5(op__access__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    ACCESS3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -701,8 +743,9 @@ rfs3_access(ACCESS3args *args, ACCESS3res *resp, struct exportinfo *exi,
 	resp->status = NFS3_OK;
 	vattr_to_post_op_attr(vap, &resp->resok.obj_attributes);
 
-	DTRACE_NFSV3_4(op__access__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, ACCESS3res *, resp);
+	DTRACE_NFSV3_5(op__access__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    ACCESS3res *, resp);
 
 	VN_RELE(vp);
 
@@ -714,8 +757,9 @@ out:
 		resp->status = NFS3ERR_JUKEBOX;
 	} else
 		resp->status = puterrno3(error);
-	DTRACE_NFSV3_4(op__access__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, ACCESS3res *, resp);
+	DTRACE_NFSV3_5(op__access__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    ACCESS3res *, resp);
 	if (vp != NULL)
 		VN_RELE(vp);
 	vattr_to_post_op_attr(vap, &resp->resfail.obj_attributes);
@@ -748,8 +792,9 @@ rfs3_readlink(READLINK3args *args, READLINK3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->symlink, exi);
 
-	DTRACE_NFSV3_4(op__readlink__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READLINK3args *, args);
+	DTRACE_NFSV3_5(op__readlink__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READLINK3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -798,10 +843,11 @@ rfs3_readlink(READLINK3args *args, READLINK3res *resp, struct exportinfo *exi,
 	if (is_referral) {
 		char *s;
 		size_t strsz;
+		kstat_named_t *stat = exi->exi_ne->ne_globals->svstat[NFS_V3];
 
 		/* Get an artificial symlink based on a referral */
 		s = build_symlink(vp, cr, &strsz);
-		global_svstat_ptr[3][NFS_REFERLINKS].value.ui64++;
+		stat[NFS_REFERLINKS].value.ui64++;
 		DTRACE_PROBE2(nfs3serv__func__referral__reflink,
 		    vnode_t *, vp, char *, s);
 		if (s == NULL)
@@ -869,8 +915,9 @@ rfs3_readlink(READLINK3args *args, READLINK3res *resp, struct exportinfo *exi,
 	vattr_to_post_op_attr(vap, &resp->resok.symlink_attributes);
 	resp->resok.data = name;
 
-	DTRACE_NFSV3_4(op__readlink__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READLINK3res *, resp);
+	DTRACE_NFSV3_5(op__readlink__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READLINK3res *, resp);
 	VN_RELE(vp);
 
 	if (name != data)
@@ -885,8 +932,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__readlink__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READLINK3res *, resp);
+	DTRACE_NFSV3_5(op__readlink__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READLINK3res *, resp);
 	if (vp != NULL)
 		VN_RELE(vp);
 	vattr_to_post_op_attr(vap, &resp->resfail.symlink_attributes);
@@ -936,8 +984,10 @@ rfs3_read(READ3args *args, READ3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->file, exi);
 
-	DTRACE_NFSV3_4(op__read__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READ3args *, args);
+	DTRACE_NFSV3_5(op__read__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READ3args *, args);
+
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -1192,8 +1242,9 @@ doio_read:
 	}
 
 done:
-	DTRACE_NFSV3_4(op__read__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READ3res *, resp);
+	DTRACE_NFSV3_5(op__read__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READ3res *, resp);
 
 	VN_RELE(vp);
 
@@ -1209,8 +1260,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__read__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READ3res *, resp);
+	DTRACE_NFSV3_5(op__read__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READ3res *, resp);
 
 	if (vp != NULL) {
 		if (need_rwunlock)
@@ -1255,6 +1307,7 @@ void
 rfs3_write(WRITE3args *args, WRITE3res *resp, struct exportinfo *exi,
     struct svc_req *req, cred_t *cr, bool_t ro)
 {
+	nfs3_srv_t *ns;
 	int error;
 	vnode_t *vp;
 	struct vattr *bvap = NULL;
@@ -1275,13 +1328,17 @@ rfs3_write(WRITE3args *args, WRITE3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->file, exi);
 
-	DTRACE_NFSV3_4(op__write__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, WRITE3args *, args);
+	DTRACE_NFSV3_5(op__write__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    WRITE3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
 		goto err;
 	}
+
+	ASSERT3U(curzone->zone_id, ==, exi->exi_zoneid); /* exi is non-NULL. */
+	ns = nfs3_get_srv();
 
 	if (is_system_labeled()) {
 		bslabel_t *clabel = req->rq_label;
@@ -1370,7 +1427,7 @@ rfs3_write(WRITE3args *args, WRITE3res *resp, struct exportinfo *exi,
 		vattr_to_wcc_data(bvap, avap, &resp->resok.file_wcc);
 		resp->resok.count = 0;
 		resp->resok.committed = args->stable;
-		resp->resok.verf = write3verf;
+		resp->resok.verf = ns->write3verf;
 		goto out;
 	}
 
@@ -1472,7 +1529,7 @@ rfs3_write(WRITE3args *args, WRITE3res *resp, struct exportinfo *exi,
 	vattr_to_wcc_data(bvap, avap, &resp->resok.file_wcc);
 	resp->resok.count = args->count - uio.uio_resid;
 	resp->resok.committed = args->stable;
-	resp->resok.verf = write3verf;
+	resp->resok.verf = ns->write3verf;
 	goto out;
 
 err:
@@ -1484,8 +1541,9 @@ err:
 err1:
 	vattr_to_wcc_data(bvap, avap, &resp->resfail.file_wcc);
 out:
-	DTRACE_NFSV3_4(op__write__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, WRITE3res *, resp);
+	DTRACE_NFSV3_5(op__write__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    WRITE3res *, resp);
 
 	if (vp != NULL) {
 		if (rwlock_ret != -1)
@@ -1530,8 +1588,9 @@ rfs3_create(CREATE3args *args, CREATE3res *resp, struct exportinfo *exi,
 
 	dvp = nfs3_fhtovp(&args->where.dir, exi);
 
-	DTRACE_NFSV3_4(op__create__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, CREATE3args *, args);
+	DTRACE_NFSV3_5(op__create__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    CREATE3args *, args);
 
 	if (dvp == NULL) {
 		error = ESTALE;
@@ -1830,8 +1889,9 @@ tryagain:
 	vattr_to_post_op_attr(vap, &resp->resok.obj_attributes);
 	vattr_to_wcc_data(dbvap, davap, &resp->resok.dir_wcc);
 
-	DTRACE_NFSV3_4(op__create__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, CREATE3res *, resp);
+	DTRACE_NFSV3_5(op__create__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    CREATE3res *, resp);
 
 	VN_RELE(dvp);
 	return;
@@ -1843,8 +1903,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__create__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, CREATE3res *, resp);
+	DTRACE_NFSV3_5(op__create__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    CREATE3res *, resp);
 
 	if (name != NULL && name != args->where.name)
 		kmem_free(name, MAXPATHLEN + 1);
@@ -1887,8 +1948,9 @@ rfs3_mkdir(MKDIR3args *args, MKDIR3res *resp, struct exportinfo *exi,
 
 	dvp = nfs3_fhtovp(&args->where.dir, exi);
 
-	DTRACE_NFSV3_4(op__mkdir__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, MKDIR3args *, args);
+	DTRACE_NFSV3_5(op__mkdir__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    MKDIR3args *, args);
 
 	if (dvp == NULL) {
 		error = ESTALE;
@@ -1987,8 +2049,9 @@ rfs3_mkdir(MKDIR3args *args, MKDIR3res *resp, struct exportinfo *exi,
 	vattr_to_post_op_attr(vap, &resp->resok.obj_attributes);
 	vattr_to_wcc_data(dbvap, davap, &resp->resok.dir_wcc);
 
-	DTRACE_NFSV3_4(op__mkdir__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, MKDIR3res *, resp);
+	DTRACE_NFSV3_5(op__mkdir__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    MKDIR3res *, resp);
 	VN_RELE(dvp);
 
 	return;
@@ -2000,8 +2063,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__mkdir__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, MKDIR3res *, resp);
+	DTRACE_NFSV3_5(op__mkdir__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    MKDIR3res *, resp);
 	if (dvp != NULL)
 		VN_RELE(dvp);
 	vattr_to_wcc_data(dbvap, davap, &resp->resfail.dir_wcc);
@@ -2036,8 +2100,9 @@ rfs3_symlink(SYMLINK3args *args, SYMLINK3res *resp, struct exportinfo *exi,
 
 	dvp = nfs3_fhtovp(&args->where.dir, exi);
 
-	DTRACE_NFSV3_4(op__symlink__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, SYMLINK3args *, args);
+	DTRACE_NFSV3_5(op__symlink__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    SYMLINK3args *, args);
 
 	if (dvp == NULL) {
 		error = ESTALE;
@@ -2174,8 +2239,9 @@ out:
 	if (symdata != NULL && symdata != args->symlink.symlink_data)
 		kmem_free(symdata, MAXPATHLEN + 1);
 
-	DTRACE_NFSV3_4(op__symlink__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, SYMLINK3res *, resp);
+	DTRACE_NFSV3_5(op__symlink__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    SYMLINK3res *, resp);
 
 	if (dvp != NULL)
 		VN_RELE(dvp);
@@ -2212,8 +2278,9 @@ rfs3_mknod(MKNOD3args *args, MKNOD3res *resp, struct exportinfo *exi,
 
 	dvp = nfs3_fhtovp(&args->where.dir, exi);
 
-	DTRACE_NFSV3_4(op__mknod__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, MKNOD3args *, args);
+	DTRACE_NFSV3_5(op__mknod__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    MKNOD3args *, args);
 
 	if (dvp == NULL) {
 		error = ESTALE;
@@ -2359,8 +2426,9 @@ rfs3_mknod(MKNOD3args *args, MKNOD3res *resp, struct exportinfo *exi,
 
 	vattr_to_post_op_attr(vap, &resp->resok.obj_attributes);
 	vattr_to_wcc_data(dbvap, davap, &resp->resok.dir_wcc);
-	DTRACE_NFSV3_4(op__mknod__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, MKNOD3res *, resp);
+	DTRACE_NFSV3_5(op__mknod__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    MKNOD3res *, resp);
 	VN_RELE(dvp);
 	return;
 
@@ -2371,8 +2439,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__mknod__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, dvp, MKNOD3res *, resp);
+	DTRACE_NFSV3_5(op__mknod__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, dvp, struct exportinfo *, exi,
+	    MKNOD3res *, resp);
 	if (dvp != NULL)
 		VN_RELE(dvp);
 	vattr_to_wcc_data(dbvap, davap, &resp->resfail.dir_wcc);
@@ -2404,8 +2473,9 @@ rfs3_remove(REMOVE3args *args, REMOVE3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->object.dir, exi);
 
-	DTRACE_NFSV3_4(op__remove__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, REMOVE3args *, args);
+	DTRACE_NFSV3_5(op__remove__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    REMOVE3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -2513,8 +2583,9 @@ err:
 err1:
 	vattr_to_wcc_data(bvap, avap, &resp->resfail.dir_wcc);
 out:
-	DTRACE_NFSV3_4(op__remove__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, REMOVE3res *, resp);
+	DTRACE_NFSV3_5(op__remove__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    REMOVE3res *, resp);
 
 	if (name != NULL && name != args->object.name)
 		kmem_free(name, MAXPATHLEN + 1);
@@ -2548,8 +2619,9 @@ rfs3_rmdir(RMDIR3args *args, RMDIR3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->object.dir, exi);
 
-	DTRACE_NFSV3_4(op__rmdir__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, RMDIR3args *, args);
+	DTRACE_NFSV3_5(op__rmdir__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    RMDIR3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -2605,7 +2677,8 @@ rfs3_rmdir(RMDIR3args *args, RMDIR3res *resp, struct exportinfo *exi,
 		goto err1;
 	}
 
-	error = VOP_RMDIR(vp, name, rootdir, cr, NULL, 0);
+	ASSERT3U(exi->exi_zoneid, ==, curzone->zone_id);
+	error = VOP_RMDIR(vp, name, ZONE_ROOTVP(), cr, NULL, 0);
 
 	if (name != args->object.name)
 		kmem_free(name, MAXPATHLEN + 1);
@@ -2643,8 +2716,9 @@ err:
 err1:
 	vattr_to_wcc_data(bvap, avap, &resp->resfail.dir_wcc);
 out:
-	DTRACE_NFSV3_4(op__rmdir__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, RMDIR3res *, resp);
+	DTRACE_NFSV3_5(op__rmdir__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    RMDIR3res *, resp);
 	if (vp != NULL)
 		VN_RELE(vp);
 
@@ -2689,8 +2763,9 @@ rfs3_rename(RENAME3args *args, RENAME3res *resp, struct exportinfo *exi,
 
 	fvp = nfs3_fhtovp(&args->from.dir, exi);
 
-	DTRACE_NFSV3_4(op__rename__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, fvp, RENAME3args *, args);
+	DTRACE_NFSV3_5(op__rename__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, fvp, struct exportinfo *, exi,
+	    RENAME3args *, args);
 
 	if (fvp == NULL) {
 		error = ESTALE;
@@ -2807,10 +2882,10 @@ rfs3_rename(RENAME3args *args, RENAME3res *resp, struct exportinfo *exi,
 	}
 
 	/*
-	 * Check for renaming over a delegated file.  Check rfs4_deleg_policy
+	 * Check for renaming over a delegated file.  Check nfs4_deleg_policy
 	 * first to avoid VOP_LOOKUP if possible.
 	 */
-	if (rfs4_deleg_policy != SRV_NEVER_DELEGATE &&
+	if (nfs4_get_deleg_policy() != SRV_NEVER_DELEGATE &&
 	    VOP_LOOKUP(tvp, toname, &targvp, NULL, 0, NULL, cr,
 	    NULL, NULL, NULL) == 0) {
 
@@ -2874,8 +2949,9 @@ out:
 	if (toname != NULL && toname != args->to.name)
 		kmem_free(toname, MAXPATHLEN + 1);
 
-	DTRACE_NFSV3_4(op__rename__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, fvp, RENAME3res *, resp);
+	DTRACE_NFSV3_5(op__rename__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, fvp, struct exportinfo *, exi,
+	    RENAME3res *, resp);
 	if (fvp != NULL)
 		VN_RELE(fvp);
 	if (tvp != NULL)
@@ -2915,8 +2991,9 @@ rfs3_link(LINK3args *args, LINK3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->file, exi);
 
-	DTRACE_NFSV3_4(op__link__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, LINK3args *, args);
+	DTRACE_NFSV3_5(op__link__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    LINK3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -3028,8 +3105,9 @@ rfs3_link(LINK3args *args, LINK3res *resp, struct exportinfo *exi,
 	vattr_to_post_op_attr(vap, &resp->resok.file_attributes);
 	vattr_to_wcc_data(bvap, avap, &resp->resok.linkdir_wcc);
 
-	DTRACE_NFSV3_4(op__link__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, LINK3res *, resp);
+	DTRACE_NFSV3_5(op__link__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    LINK3res *, resp);
 
 	VN_RELE(vp);
 
@@ -3045,8 +3123,9 @@ out1:
 	if (name != NULL && name != args->link.name)
 		kmem_free(name, MAXPATHLEN + 1);
 
-	DTRACE_NFSV3_4(op__link__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, LINK3res *, resp);
+	DTRACE_NFSV3_5(op__link__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    LINK3res *, resp);
 
 	if (vp != NULL)
 		VN_RELE(vp);
@@ -3114,8 +3193,9 @@ rfs3_readdir(READDIR3args *args, READDIR3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->dir, exi);
 
-	DTRACE_NFSV3_4(op__readdir__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READDIR3args *, args);
+	DTRACE_NFSV3_5(op__readdir__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READDIR3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -3279,8 +3359,9 @@ rfs3_readdir(READDIR3args *args, READDIR3res *resp, struct exportinfo *exi,
 	resp->resok.count = args->count;
 	resp->resok.freecount = count;
 
-	DTRACE_NFSV3_4(op__readdir__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READDIR3res *, resp);
+	DTRACE_NFSV3_5(op__readdir__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READDIR3res *, resp);
 
 	VN_RELE(vp);
 
@@ -3293,14 +3374,16 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__readdir__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READDIR3res *, resp);
+	vattr_to_post_op_attr(vap, &resp->resfail.dir_attributes);
+
+	DTRACE_NFSV3_5(op__readdir__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READDIR3res *, resp);
 
 	if (vp != NULL) {
 		VOP_RWUNLOCK(vp, V_WRITELOCK_FALSE, NULL);
 		VN_RELE(vp);
 	}
-	vattr_to_post_op_attr(vap, &resp->resfail.dir_attributes);
 }
 
 void *
@@ -3385,8 +3468,9 @@ rfs3_readdirplus(READDIRPLUS3args *args, READDIRPLUS3res *resp,
 
 	vp = nfs3_fhtovp(&args->dir, exi);
 
-	DTRACE_NFSV3_4(op__readdirplus__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READDIRPLUS3args *, args);
+	DTRACE_NFSV3_5(op__readdirplus__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READDIRPLUS3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -3609,13 +3693,18 @@ good:
 		if (vn_is_nfs_reparse(nvp, cr))
 			nvap->va_type = VLNK;
 
-		vattr_to_post_op_attr(nvap, &infop[i].attr);
-
-		error = makefh3(&infop[i].fh.handle, nvp, exi);
-		if (!error)
-			infop[i].fh.handle_follows = TRUE;
-		else
+		if (vn_ismntpt(nvp)) {
+			infop[i].attr.attributes = FALSE;
 			infop[i].fh.handle_follows = FALSE;
+		} else {
+			vattr_to_post_op_attr(nvap, &infop[i].attr);
+
+			error = makefh3(&infop[i].fh.handle, nvp, exi);
+			if (!error)
+				infop[i].fh.handle_follows = TRUE;
+			else
+				infop[i].fh.handle_follows = FALSE;
+		}
 
 		VN_RELE(nvp);
 		dp = nextdp(dp);
@@ -3653,6 +3742,8 @@ good:
 #endif
 
 	kmem_free(namlen, args->dircount);
+	if (ndata != data)
+		kmem_free(data, args->dircount);
 
 	resp->status = NFS3_OK;
 	vattr_to_post_op_attr(vap, &resp->resok.dir_attributes);
@@ -3663,11 +3754,9 @@ good:
 	resp->resok.count = args->dircount - ret;
 	resp->resok.maxcount = args->maxcount;
 
-	DTRACE_NFSV3_4(op__readdirplus__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READDIRPLUS3res *, resp);
-	if (ndata != data)
-		kmem_free(data, args->dircount);
-
+	DTRACE_NFSV3_5(op__readdirplus__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READDIRPLUS3res *, resp);
 
 	VN_RELE(vp);
 
@@ -3681,8 +3770,11 @@ out:
 		resp->status = puterrno3(error);
 	}
 out1:
-	DTRACE_NFSV3_4(op__readdirplus__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, READDIRPLUS3res *, resp);
+	vattr_to_post_op_attr(vap, &resp->resfail.dir_attributes);
+
+	DTRACE_NFSV3_5(op__readdirplus__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    READDIRPLUS3res *, resp);
 
 	if (vp != NULL) {
 		VOP_RWUNLOCK(vp, V_WRITELOCK_FALSE, NULL);
@@ -3691,8 +3783,6 @@ out1:
 
 	if (namlen != NULL)
 		kmem_free(namlen, args->dircount);
-
-	vattr_to_post_op_attr(vap, &resp->resfail.dir_attributes);
 }
 
 void *
@@ -3728,8 +3818,9 @@ rfs3_fsstat(FSSTAT3args *args, FSSTAT3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->fsroot, exi);
 
-	DTRACE_NFSV3_4(op__fsstat__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, FSSTAT3args *, args);
+	DTRACE_NFSV3_5(op__fsstat__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    FSSTAT3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -3779,8 +3870,9 @@ rfs3_fsstat(FSSTAT3args *args, FSSTAT3res *resp, struct exportinfo *exi,
 	resp->resok.afiles = (size3)sb.f_favail;
 	resp->resok.invarsec = 0;
 
-	DTRACE_NFSV3_4(op__fsstat__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, FSSTAT3res *, resp);
+	DTRACE_NFSV3_5(op__fsstat__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    FSSTAT3res *, resp);
 	VN_RELE(vp);
 
 	return;
@@ -3792,8 +3884,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__fsstat__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, FSSTAT3res *, resp);
+	DTRACE_NFSV3_5(op__fsstat__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    FSSTAT3res *, resp);
 
 	if (vp != NULL)
 		VN_RELE(vp);
@@ -3821,8 +3914,9 @@ rfs3_fsinfo(FSINFO3args *args, FSINFO3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->fsroot, exi);
 
-	DTRACE_NFSV3_4(op__fsinfo__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, FSINFO3args *, args);
+	DTRACE_NFSV3_5(op__fsinfo__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    FSINFO3args *, args);
 
 	if (vp == NULL) {
 		if (curthread->t_flag & T_WOULDBLOCK) {
@@ -3896,16 +3990,18 @@ rfs3_fsinfo(FSINFO3args *args, FSINFO3res *resp, struct exportinfo *exi,
 	resp->resok.properties = FSF3_LINK | FSF3_SYMLINK |
 	    FSF3_HOMOGENEOUS | FSF3_CANSETTIME;
 
-	DTRACE_NFSV3_4(op__fsinfo__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, FSINFO3res *, resp);
+	DTRACE_NFSV3_5(op__fsinfo__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    FSINFO3res *, resp);
 
 	VN_RELE(vp);
 
 	return;
 
 out:
-	DTRACE_NFSV3_4(op__fsinfo__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, NULL, FSINFO3res *, resp);
+	DTRACE_NFSV3_5(op__fsinfo__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, NULL, struct exportinfo *, exi,
+	    FSINFO3res *, resp);
 	if (vp != NULL)
 		VN_RELE(vp);
 }
@@ -3931,8 +4027,9 @@ rfs3_pathconf(PATHCONF3args *args, PATHCONF3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->object, exi);
 
-	DTRACE_NFSV3_4(op__pathconf__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, PATHCONF3args *, args);
+	DTRACE_NFSV3_5(op__pathconf__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    PATHCONF3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
@@ -3988,8 +4085,9 @@ rfs3_pathconf(PATHCONF3args *args, PATHCONF3res *resp, struct exportinfo *exi,
 	vattr_to_post_op_attr(vap, &resp->resok.obj_attributes);
 	resp->resok.info.case_insensitive = FALSE;
 	resp->resok.info.case_preserving = TRUE;
-	DTRACE_NFSV3_4(op__pathconf__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, PATHCONF3res *, resp);
+	DTRACE_NFSV3_5(op__pathconf__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    PATHCONF3res *, resp);
 	VN_RELE(vp);
 	return;
 
@@ -4000,8 +4098,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__pathconf__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, PATHCONF3res *, resp);
+	DTRACE_NFSV3_5(op__pathconf__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    PATHCONF3res *, resp);
 	if (vp != NULL)
 		VN_RELE(vp);
 	vattr_to_post_op_attr(vap, &resp->resfail.obj_attributes);
@@ -4018,6 +4117,7 @@ void
 rfs3_commit(COMMIT3args *args, COMMIT3res *resp, struct exportinfo *exi,
     struct svc_req *req, cred_t *cr, bool_t ro)
 {
+	nfs3_srv_t *ns;
 	int error;
 	vnode_t *vp;
 	struct vattr *bvap;
@@ -4030,14 +4130,17 @@ rfs3_commit(COMMIT3args *args, COMMIT3res *resp, struct exportinfo *exi,
 
 	vp = nfs3_fhtovp(&args->file, exi);
 
-	DTRACE_NFSV3_4(op__commit__start, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, COMMIT3args *, args);
+	DTRACE_NFSV3_5(op__commit__start, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    COMMIT3args *, args);
 
 	if (vp == NULL) {
 		error = ESTALE;
 		goto out;
 	}
 
+	ASSERT3U(curzone->zone_id, ==, exi->exi_zoneid); /* exi is non-NULL. */
+	ns = nfs3_get_srv();
 	bva.va_mask = AT_ALL;
 	error = VOP_GETATTR(vp, &bva, 0, cr, NULL);
 
@@ -4090,10 +4193,11 @@ rfs3_commit(COMMIT3args *args, COMMIT3res *resp, struct exportinfo *exi,
 
 	resp->status = NFS3_OK;
 	vattr_to_wcc_data(bvap, avap, &resp->resok.file_wcc);
-	resp->resok.verf = write3verf;
+	resp->resok.verf = ns->write3verf;
 
-	DTRACE_NFSV3_4(op__commit__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, COMMIT3res *, resp);
+	DTRACE_NFSV3_5(op__commit__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    COMMIT3res *, resp);
 
 	VN_RELE(vp);
 
@@ -4106,8 +4210,9 @@ out:
 	} else
 		resp->status = puterrno3(error);
 out1:
-	DTRACE_NFSV3_4(op__commit__done, struct svc_req *, req,
-	    cred_t *, cr, vnode_t *, vp, COMMIT3res *, resp);
+	DTRACE_NFSV3_5(op__commit__done, struct svc_req *, req,
+	    cred_t *, cr, vnode_t *, vp, struct exportinfo *, exi,
+	    COMMIT3res *, resp);
 
 	if (vp != NULL)
 		VN_RELE(vp);
@@ -4185,7 +4290,7 @@ sattr3_to_vattr(sattr3 *sap, struct vattr *vap)
 	return (0);
 }
 
-static ftype3 vt_to_nf3[] = {
+static const ftype3 vt_to_nf3[] = {
 	0, NF3REG, NF3DIR, NF3BLK, NF3CHR, NF3LNK, NF3FIFO, 0, 0, NF3SOCK, 0
 };
 
@@ -4267,19 +4372,38 @@ vattr_to_post_op_attr(struct vattr *vap, post_op_attr *poap)
 static void
 vattr_to_wcc_data(struct vattr *bvap, struct vattr *avap, wcc_data *wccp)
 {
-
 	vattr_to_pre_op_attr(bvap, &wccp->before);
 	vattr_to_post_op_attr(avap, &wccp->after);
 }
 
-void
-rfs3_srvrinit(void)
+static int
+rdma_setup_read_data3(READ3args *args, READ3resok *rok)
 {
+	struct clist	*wcl;
+	int		wlist_len;
+	count3		count = rok->count;
+
+	wcl = args->wlist;
+	if (rdma_setup_read_chunks(wcl, count, &wlist_len) == FALSE)
+		return (FALSE);
+
+	wcl = args->wlist;
+	rok->wlist_len = wlist_len;
+	rok->wlist = wcl;
+	return (TRUE);
+}
+
+void
+rfs3_srv_zone_init(nfs_globals_t *ng)
+{
+	nfs3_srv_t *ns;
 	struct rfs3_verf_overlay {
 		uint_t id; /* a "unique" identifier */
 		int ts; /* a unique timestamp */
 	} *verfp;
 	timestruc_t now;
+
+	ns = kmem_zalloc(sizeof (*ns), KM_SLEEP);
 
 	/*
 	 * The following algorithm attempts to find a unique verifier
@@ -4304,37 +4428,34 @@ rfs3_srvrinit(void)
 	 * We ASSERT that this constant logic expression is
 	 * always true because in the past, it wasn't.
 	 */
-	ASSERT(sizeof (*verfp) <= sizeof (write3verf));
+	ASSERT(sizeof (*verfp) <= sizeof (ns->write3verf));
 #endif
 
 	gethrestime(&now);
-	verfp = (struct rfs3_verf_overlay *)&write3verf;
+	verfp = (struct rfs3_verf_overlay *)&ns->write3verf;
 	verfp->ts = (int)now.tv_sec;
 	verfp->id = zone_get_hostid(NULL);
 
 	if (verfp->id == 0)
 		verfp->id = (uint_t)now.tv_nsec;
 
-	nfs3_srv_caller_id = fs_new_caller_id();
-
+	ng->nfs3_srv = ns;
 }
 
-static int
-rdma_setup_read_data3(READ3args *args, READ3resok *rok)
+void
+rfs3_srv_zone_fini(nfs_globals_t *ng)
 {
-	struct clist	*wcl;
-	int		wlist_len;
-	count3		count = rok->count;
+	nfs3_srv_t *ns = ng->nfs3_srv;
 
-	wcl = args->wlist;
-	if (rdma_setup_read_chunks(wcl, count, &wlist_len) == FALSE) {
-		return (FALSE);
-	}
+	ng->nfs3_srv = NULL;
 
-	wcl = args->wlist;
-	rok->wlist_len = wlist_len;
-	rok->wlist = wcl;
-	return (TRUE);
+	kmem_free(ns, sizeof (*ns));
+}
+
+void
+rfs3_srvrinit(void)
+{
+	nfs3_srv_caller_id = fs_new_caller_id();
 }
 
 void
