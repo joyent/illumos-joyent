@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2011 NetApp, Inc.
  * All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,7 +39,6 @@
  * http://www.illumos.org/license/CDDL.
  *
  * Copyright 2014 Pluribus Networks Inc.
- * Copyright 2020 Joyent, Inc.
  */
 
 #include <sys/cdefs.h>
@@ -69,12 +69,12 @@ __FBSDID("$FreeBSD$");
 #include "block_if.h"
 
 #define	VTBLK_BSIZE	512
-#define VTBLK_RINGSZ	128
+#define	VTBLK_RINGSZ	128
 
 _Static_assert(VTBLK_RINGSZ <= BLOCKIF_RING_MAX, "Each ring entry must be able to queue a request");
 
-#define VTBLK_S_OK	0
-#define VTBLK_S_IOERR	1
+#define	VTBLK_S_OK	0
+#define	VTBLK_S_IOERR	1
 #define	VTBLK_S_UNSUPP	2
 
 #define	VTBLK_BLK_ID_BYTES	20 + 1
@@ -91,14 +91,13 @@ _Static_assert(VTBLK_RINGSZ <= BLOCKIF_RING_MAX, "Each ring entry must be able t
 #define	VTBLK_F_WCE		(1 << 9)	/* Legacy alias for FLUSH */
 #define	VTBLK_F_TOPOLOGY	(1 << 10)	/* Topology information is available */
 #define	VTBLK_F_CONFIG_WCE	(1 << 11)	/* Writeback mode available in config */
-#define	VTBLK_F_MQ		(1 << 12)	/* Multi-Queue */
 #define	VTBLK_F_DISCARD		(1 << 13)	/* Trim blocks */
 #define	VTBLK_F_WRITE_ZEROES	(1 << 14)	/* Write zeros */
 
 /*
  * Host capabilities
  */
-#define VTBLK_S_HOSTCAPS      \
+#define	VTBLK_S_HOSTCAPS      \
   ( VTBLK_F_SEG_MAX  |						    \
     VTBLK_F_BLK_SIZE |						    \
     VTBLK_F_FLUSH    |						    \
@@ -137,8 +136,7 @@ struct vtblk_config {
 		uint32_t opt_io_size;
 	} vbc_topology;
 	uint8_t		vbc_writeback;
-	uint8_t		unused0[1];
-	uint16_t	num_queues;
+	uint8_t		unused0[3];
 	uint32_t	max_discard_sectors;
 	uint32_t	max_discard_seg;
 	uint32_t	discard_sector_alignment;
@@ -154,13 +152,13 @@ struct vtblk_config {
 struct virtio_blk_hdr {
 #define	VBH_OP_READ		0
 #define	VBH_OP_WRITE		1
-#define VBH_OP_SCSI_CMD		2
-#define VBH_OP_SCSI_CMD_OUT	3
+#define	VBH_OP_SCSI_CMD		2
+#define	VBH_OP_SCSI_CMD_OUT	3
 #define	VBH_OP_FLUSH		4
 #define	VBH_OP_FLUSH_OUT	5
 #define	VBH_OP_IDENT		8
 #define	VBH_OP_DISCARD		11
-#define VBH_OP_WRITE_ZEROES	13
+#define	VBH_OP_WRITE_ZEROES	13
 
 #define	VBH_FLAG_BARRIER	0x80000000	/* OR'ed into vbh_type */
 	uint32_t	vbh_type;
@@ -172,8 +170,8 @@ struct virtio_blk_hdr {
  * Debug printf
  */
 static int pci_vtblk_debug;
-#define DPRINTF(params) if (pci_vtblk_debug) printf params
-#define WPRINTF(params) printf params
+#define	DPRINTF(params) if (pci_vtblk_debug) printf params
+#define	WPRINTF(params) printf params
 
 struct pci_vtblk_ioreq {
 	struct blockif_req		io_req;
