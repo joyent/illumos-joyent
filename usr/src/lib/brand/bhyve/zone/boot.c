@@ -228,6 +228,7 @@ add_disk(char *disk, char *path, char *slotconf, size_t slotconf_len)
 	const char *model = "virtio-blk";
 	uint_t pcibus = 0, pcidev = 0, pcifn = 0;
 	const char *slotstr;
+	const char *nodelstr = "";
 	boolean_t isboot;
 
 	isboot = is_env_true("device", disk, "boot");
@@ -262,6 +263,8 @@ add_disk(char *disk, char *path, char *slotconf, size_t slotconf_len)
 
 	if (is_env_string("device", disk, "model", "virtio")) {
 		model = "virtio-blk";
+		if (is_env_string("device", disk, "nodelete", "true"))
+			nodelstr = ",nodelete";
 	} else if (is_env_string("device", disk, "model", "ahci")) {
 		if (is_env_string("device", disk, "media", "cdrom")) {
 			model = "ahci-cd";
@@ -273,8 +276,8 @@ add_disk(char *disk, char *path, char *slotconf, size_t slotconf_len)
 		return (-1);
 	}
 
-	if (snprintf(slotconf, slotconf_len, "%u:%u:%u,%s,%s",
-	    pcibus, pcidev, pcifn, model, path) >= slotconf_len) {
+	if (snprintf(slotconf, slotconf_len, "%u:%u:%u,%s,%s%s",
+	    pcibus, pcidev, pcifn, model, path, nodelstr) >= slotconf_len) {
 		(void) printf("Error: disk path '%s' too long\n", path);
 		return (-1);
 	}
