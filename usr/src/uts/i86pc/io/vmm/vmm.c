@@ -38,7 +38,7 @@
  * http://www.illumos.org/license/CDDL.
  *
  * Copyright 2015 Pluribus Networks Inc.
- * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  * Copyright 2020 Oxide Computer Company
  */
 
@@ -196,6 +196,7 @@ struct vm {
 	uint16_t	threads;		/* (o) num of threads/core */
 	uint16_t	maxcpus;		/* (o) max pluggable cpus */
 	uint64_t	boot_tsc_offset;	/* (i) TSC offset at VM boot */
+	size_t		arc_resv;
 
 	struct ioport_config ioports;		/* (o) ioport handling */
 };
@@ -287,6 +288,9 @@ static int vcpu_vector_sipi(struct vm *vm, int vcpuid, uint8_t vector);
 #ifndef __FreeBSD__
 static void vm_clear_memseg(struct vm *, int);
 
+extern int arc_virt_machine_reserve(size_t);
+extern void arc_virt_machine_release(size_t);
+
 /* Flags for vtc_status */
 #define	VTCS_FPU_RESTORED	1 /* guest FPU restored, host FPU saved */
 #define	VTCS_FPU_CTX_CRITICAL	2 /* in ctx where FPU restore cannot be lazy */
@@ -296,6 +300,7 @@ typedef struct vm_thread_ctx {
 	int		vtc_vcpuid;
 	uint_t		vtc_status;
 } vm_thread_ctx_t;
+
 #endif /* __FreeBSD__ */
 
 #ifdef KTR
@@ -645,6 +650,12 @@ vm_cleanup(struct vm *vm, bool destroy)
 
 		VMSPACE_FREE(vm->vmspace);
 		vm->vmspace = NULL;
+
+#ifndef __FreeBSD__
+		arc_virt_machine_release(vm->arc_resv >> PAGE_SHIFT);
+		vm->arc_resv = 0;
+#endif
+
 	}
 #ifndef __FreeBSD__
 	else {
@@ -3721,3 +3732,17 @@ vm_ioport_unhook(struct vm *vm, void **cookie)
 
 	*cookie = NULL;
 }
+
+int
+vm_arc_resv(struct vm *vm, uint64_t len)
+{
+	int err = 0;
+
+	err = arc_virt_machine_reserve((size_t)(len >> PAGE_SHIFT));
+	if (err != 0)
+		return (err);
+
+	vm->arc_resv += len;
+	return (0);
+}
+#endif /* __FreeBSD__ */
