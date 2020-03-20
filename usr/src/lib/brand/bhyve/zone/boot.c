@@ -263,7 +263,15 @@ add_disk(char *disk, char *path, char *slotconf, size_t slotconf_len)
 
 	if (is_env_string("device", disk, "model", "virtio")) {
 		model = "virtio-blk";
-		if (is_env_string("device", disk, "nodelete", "true"))
+		/*
+		 * bhyve's blockif code refers to the UNMAP/DISCARD/TRIM
+		 * feature as 'delete' and so 'nodelete' is used by
+		 * bhyve to disable the feature. We use 'trim' for
+		 * interfaces we expose to the operator as that seems to
+		 * be the most familiar name for the operation (and less
+		 * likely to cause confusion).
+		 */
+		if (is_env_string("device", disk, "notrim", "true"))
 			nodelstr = ",nodelete";
 	} else if (is_env_string("device", disk, "model", "ahci")) {
 		if (is_env_string("device", disk, "media", "cdrom")) {
