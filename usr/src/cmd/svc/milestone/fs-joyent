@@ -104,7 +104,7 @@ if [ $? -ne 0 ]; then
     fi
 
     for pool in $pools; do
-        zpool import -f $pool
+        zpool import -f $pool || continue
 
         is_encr="$(zfs get -Hpo value encryption $pool)"
 
@@ -118,6 +118,11 @@ if [ $? -ne 0 ]; then
             [[ "$is_encr" != "off" ]] && kbmadm set-syspool $pool
         fi
     done
+
+    if [[ -z "${SYS_POOL}" ]]; then
+        echo "No system pool found!" | tee -a /dev/console >&2
+        exit $SMF_EXIT_ERR_FATAL
+    fi
 
     svccfg -s svc:/system/smartdc/init setprop \
         config/zpool=${SYS_ZPOOL}
