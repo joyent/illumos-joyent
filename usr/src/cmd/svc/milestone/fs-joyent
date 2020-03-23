@@ -119,11 +119,6 @@ if [ $? -ne 0 ]; then
         fi
     done
 
-    if [[ -z "${SYS_POOL}" ]]; then
-        echo "No system pool found!" | tee -a /dev/console >&2
-        exit $SMF_EXIT_ERR_FATAL
-    fi
-
     svccfg -s svc:/system/smartdc/init setprop \
         config/zpool=${SYS_ZPOOL}
     svccfg -s svc:/system/smartdc/init:default refresh
