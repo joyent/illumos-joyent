@@ -444,9 +444,10 @@ logstream_init(zlog_t *zlogp)
 		lfp->lf_fd = -1;
 		if (custr_alloc_buf(&lfp->lf_cus, lfp->lf_buf,
 		    sizeof (lfp->lf_buf)) != 0) {
-			zerror(zlogp, B_FALSE, "failed to allocate custr_t "
-			    "for log file");
-			goto fail;
+			(void) fprintf(stderr, "failed to allocate custr_t for "
+			    "log file\n");
+			(void) fflush(stderr);
+			abort();
 		}
 	}
 
@@ -457,9 +458,10 @@ logstream_init(zlog_t *zlogp)
 		    sizeof (lsp->ls_buf)) != 0 ||
 		    custr_alloc_buf(&lsp->ls_cusobuf, lsp->ls_obuf,
 		    sizeof (lsp->ls_obuf)) != 0) {
-			zerror(zlogp, B_FALSE, "failed to allocate custr_t "
-			    "for log stream");
-			goto fail;
+			(void) fprintf(stderr, "failed to allocate custr_t for "
+			    "log stream\n");
+			(void) fflush(stderr);
+			abort();
 		}
 	}
 
@@ -498,16 +500,6 @@ logstream_init(zlog_t *zlogp)
 	(void) sigset(SIGHUP, logstream_sighandler);
 	(void) sigset(SIGUSR1, logstream_sighandler);
 	return;
-
-fail:
-	for (i = 0; i < ARRAY_SIZE(logfiles); i++) {
-		custr_free(logfiles[i].lf_cus);
-	}
-
-	for (i = 0; i < ARRAY_SIZE(streams); i++) {
-		custr_free(streams[i].ls_cusbuf);
-		custr_free(streams[i].ls_cusobuf);
-	}
 }
 
 /*
@@ -593,8 +585,7 @@ rotate_log(logfile_t *lfp)
  * sbuf to json.
  *
  *   sbuf, slen		Source buffer and the number of bytes in it to process
- *   dbuf, dlen		Destination buffer and its size.  On return, the result
- *			is always null terminated.
+ *   dest		Destination custr_t containing escaped JSON.
  *   scntp		On return, *scntp stores number of scnt bytes consumed
  *   flushp		If non-NULL, line-buffered mode is enabled.  Processing
  *			will stop at the first newline or when obuf is full and
@@ -607,10 +598,9 @@ rotate_log(logfile_t *lfp)
  * readers to interpret non-ASCII data.
  */
 static void
-escape_json(const char *sbuf, size_t slen, custr_t *dest, size_t dest_max,
-    size_t *scntp, boolean_t *flushp)
+escape_json(const char *sbuf, size_t slen, custr_t *dest, size_t *scntp,
+    boolean_t *flushp)
 {
-	size_t i;
 	char c;
 	const char *save_sbuf = sbuf;
 	const char *sbuf_end = sbuf + slen - 1;
@@ -619,6 +609,7 @@ escape_json(const char *sbuf, size_t slen, custr_t *dest, size_t dest_max,
 	int len;
 
 	if (slen == 0) {
+		*scntp = 0;
 		return;
 	}
 
@@ -626,8 +617,7 @@ escape_json(const char *sbuf, size_t slen, custr_t *dest, size_t dest_max,
 		*flushp = B_FALSE;
 	}
 
-	i = 0;
-	while (i < (dest_max - 1) && sbuf <= sbuf_end) {
+	while (sbuf <= sbuf_end) {
 		c = sbuf[0];
 
 		switch (c) {
@@ -675,8 +665,6 @@ escape_json(const char *sbuf, size_t slen, custr_t *dest, size_t dest_max,
 			break;
 		}
 
-		len = strlen(append);
-
 		if (custr_append(dest, append) != 0) {
 			VERIFY3S(errno, ==, EOVERFLOW);
 			if (flushp != NULL) {
@@ -685,7 +673,6 @@ escape_json(const char *sbuf, size_t slen, custr_t *dest, size_t dest_max,
 			break;
 		}
 
-		i += len;
 		sbuf++;
 
 		if (flushp != NULL && *flushp) {
@@ -696,11 +683,6 @@ escape_json(const char *sbuf, size_t slen, custr_t *dest, size_t dest_max,
 	*scntp = sbuf - save_sbuf;
 
 	VERIFY3U(*scntp, <=, slen);
-
-	/* Buffer is too full to append "\\n" + NUL. Force a flush. */
-	if (flushp != NULL && custr_len(dest) + 3 >= dest_max) {
-		*flushp = B_TRUE;
-	}
 }
 
 /*
@@ -766,8 +748,9 @@ add_bunyan_preamble(custr_t *cus)
 }
 
 /*
- * Convert the json pairs into a json object.  A "time" element is added to
- * every object.  Returns the number of bytes that would have been written to
+ * Convert the json pairs into a json object. The properties required for
+ * bunyan-formatted json objects are added to every object.
+ * Returns the number of bytes that would have been written to
  * buf if bufsz had buf been sufficiently large (excluding the terminating null
  * byte).  Like snprintf().
  */
@@ -869,8 +852,8 @@ logstream_write(int ls, char *buf, int len)
 	buffered = !!(lsp->ls_flags & LS_LINE_BUFFERED);
 
 	do {
-		escape_json(buf, len, lsp->ls_cusbuf, sizeof (lsp->ls_buf),
-		    &scnt, buffered ? &newline : NULL);
+		escape_json(buf, len, lsp->ls_cusbuf, &scnt,
+		    buffered ? &newline : NULL);
 
 		buf += scnt;
 		len -= scnt;
