@@ -588,7 +588,7 @@ rotate_log(logfile_t *lfp)
  *   dest		Destination custr_t containing escaped JSON.
  *   scntp		On return, *scntp stores number of scnt bytes consumed
  *   flushp		If non-NULL, line-buffered mode is enabled.  Processing
- *			will stop at the first newline or when obuf is full and
+ *			will stop at the first newline or when dest is full and
  *			*flushp will be set to B_TRUE.
  *
  * This function makes no attempt to handle wide characters properly because
