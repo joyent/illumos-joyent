@@ -497,7 +497,6 @@ logstream_init(zlog_t *zlogp)
 	 */
 	(void) sigset(SIGHUP, logstream_sighandler);
 	(void) sigset(SIGUSR1, logstream_sighandler);
-	return;
 }
 
 /*
