@@ -446,7 +446,6 @@ logstream_init(zlog_t *zlogp)
 		    sizeof (lfp->lf_buf)) != 0) {
 			(void) fprintf(stderr, "failed to allocate custr_t for "
 			    "log file\n");
-			(void) fflush(stderr);
 			abort();
 		}
 	}
@@ -460,7 +459,6 @@ logstream_init(zlog_t *zlogp)
 		    sizeof (lsp->ls_obuf)) != 0) {
 			(void) fprintf(stderr, "failed to allocate custr_t for "
 			    "log stream\n");
-			(void) fflush(stderr);
 			abort();
 		}
 	}
