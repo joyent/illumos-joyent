@@ -52,7 +52,6 @@ log_must mkdir -p "$TESTDIR/mntpt"
 
 # 2. Start watching the directory with inotify(5).
 watch_dir inotify $TESTDIR/mntpt > $TESTDIR/watch_dir.log &
-watch_dir_pid=$!
 
 # 3. Create a filesystem
 log_must zfs create $TESTPOOL/$TESTFS1
@@ -69,7 +68,7 @@ log_must rmdir $TESTDIR/mntpt
 
 # 7. Verify the watcher saw the directory removal. This ensures that the watcher
 # was watching the directory we are interested in.
-log_must pwait $watch_dir_pid
+wait
 log_must grep -q DELETE_SELF $TESTDIR/watch_dir.log
 
 log_pass "'zfs mount' should not get EBUSY due to inotify(5) watching a directory"
