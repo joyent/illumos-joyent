@@ -270,12 +270,13 @@ EOF
 
             if [[ -n "$DISKS" ]]; then
                 echo "DISKS=\"$DISKS\"" >> $zprofile
+		echo "export DISKS" >> $zprofile
             else
                 msg="echo Please set \$DISKS appropriate before running zfstest"
                 echo $msg >> $zprofile
             fi
 
-            chown ztest /zones/global/ztest/.profile
+            chown ztest $zprofile
         fi
     fi
     if [[ ! -f /opt/tools/etc/sudoers.d/ztest ]]; then
