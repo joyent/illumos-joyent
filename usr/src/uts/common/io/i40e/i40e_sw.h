@@ -477,8 +477,9 @@ typedef struct i40e_rx_data {
  * duplicate that information.
  */
 typedef struct i40e_uaddr {
-	uint8_t iua_mac[ETHERADDRL];
-	int	iua_vsi;
+	uint8_t		iua_mac[ETHERADDRL];
+	uint16_t	iua_vid;
+	int		iua_vsi;
 } i40e_uaddr_t;
 
 typedef struct i40e_maddr {

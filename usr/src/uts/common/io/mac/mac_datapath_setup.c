@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2018 Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -2452,11 +2452,16 @@ mac_rx_srs_group_setup(mac_client_impl_t *mcip, flow_entry_t *flent,
 
 			switch (ring->mr_state) {
 			case MR_INUSE:
-			case MR_FREE:
+			case MR_FREE: {
+				boolean_t hw_vlan;
+
 				if (ring->mr_srs != NULL)
 					break;
 				if (ring->mr_state != MR_INUSE)
 					(void) mac_start_ring(ring);
+
+				hw_vlan = MAC_GROUP_HW_VLAN(rx_group) ||
+				    MAC_GROUP_HW_MACVLAN(rx_group);
 
 				/*
 				 * If a client requires SW VLAN
@@ -2464,8 +2469,8 @@ mac_rx_srs_group_setup(mac_client_impl_t *mcip, flow_entry_t *flent,
 				 * then we don't create any HW ring
 				 * SRSes.
 				 */
-				if ((!MAC_GROUP_HW_VLAN(rx_group) &&
-				    vid != VLAN_ID_NONE) || no_unicast)
+				if ((!hw_vlan && vid != VLAN_ID_NONE) ||
+				    no_unicast)
 					break;
 
 				/*
@@ -2480,6 +2485,7 @@ mac_rx_srs_group_setup(mac_client_impl_t *mcip, flow_entry_t *flent,
 				    fanout_type | link_type,
 				    mac_rx_deliver, mcip, NULL, ring);
 				break;
+			}
 			default:
 				cmn_err(CE_PANIC,
 				    "srs_setup: mcip = %p "
@@ -3105,6 +3111,9 @@ mac_datapath_setup(mac_client_impl_t *mcip, flow_entry_t *flent,
 	 * SRSes over the default group.
 	 */
 	if (rgroup != NULL) {
+		boolean_t hw_vlan = MAC_GROUP_HW_VLAN(rgroup) ||
+		    MAC_GROUP_HW_MACVLAN(rgroup);
+
 		if (rgroup != default_rgroup) {
 			if (default_rgroup->mrg_state ==
 			    MAC_GROUP_STATE_RESERVED) {
@@ -3141,8 +3150,7 @@ mac_datapath_setup(mac_client_impl_t *mcip, flow_entry_t *flent,
 		 * classification.
 		 */
 		if (rgroup->mrg_state == MAC_GROUP_STATE_RESERVED &&
-		    ((!MAC_GROUP_HW_VLAN(rgroup) && vid != VLAN_ID_NONE) ||
-		    no_unicast)) {
+		    ((!hw_vlan && vid != VLAN_ID_NONE) || no_unicast)) {
 			mac_rx_switch_grp_to_sw(rgroup);
 		}
 

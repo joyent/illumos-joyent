@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef	_SYS_MAC_PROVIDER_H
@@ -443,6 +443,10 @@ typedef	int	(*mac_add_mac_addr_t)(void *, const uint8_t *);
 typedef	int	(*mac_rem_mac_addr_t)(void *, const uint8_t *);
 typedef int	(*mac_add_vlan_filter_t)(mac_group_driver_t, uint16_t);
 typedef int	(*mac_rem_vlan_filter_t)(mac_group_driver_t, uint16_t);
+typedef	int	(*mac_add_mv_filter_t)(mac_group_driver_t, const uint8_t *,
+    uint16_t);
+typedef	int	(*mac_rem_mv_filter_t)(mac_group_driver_t, const uint8_t *,
+    uint16_t);
 
 struct mac_group_info_s {
 	mac_group_driver_t	mgi_driver;	/* Driver reference */
@@ -451,11 +455,35 @@ struct mac_group_info_s {
 	uint_t			mgi_count;	/* Count of rings */
 	mac_intr_t		mgi_intr;	/* Optional per-group intr */
 
-	/* Only used for Rx groups */
+	/*
+	 * The following six callbacks apply only to Rx groups. There
+	 * are four different possible states for these callbacks.
+	 *
+	 * 1. None of them are set because the driver doesn't
+	 *    implement MAC_VIRT_LEVEL1.
+	 *
+	 * 2. Only the mgi_{add,rem}mac callbacks are set because the
+	 *    driver only supports unicast address HW filtering/steering.
+	 *
+	 * 3. Both the mgi_{add,rem}mac and mgi_{add,rem}vlan callback
+	 *    pairs are set. This driver supports both unicast address
+	 *    filtering/steering as well as VLAN filtering/steering.
+	 *    However, these filters are programmed separately and
+	 *    thus there are two separate callbacks.
+	 *
+	 * 4. Only the mgi_{add,rem}_macvlan callbacks are set. This
+	 *    driver supports exact match filtering/steering on
+	 *    {MAC,VLAN} tuples. When a driver supports this type of
+	 *    API we prefer it over the separate unicast + VLAN API.
+	 *    When these callbacks are set the other callbacks should
+	 *    be NULL.
+	 */
 	mac_add_mac_addr_t	mgi_addmac;	/* Add a MAC address */
 	mac_rem_mac_addr_t	mgi_remmac;	/* Remove a MAC address */
 	mac_add_vlan_filter_t	mgi_addvlan;	/* Add a VLAN filter */
 	mac_rem_vlan_filter_t	mgi_remvlan;	/* Remove a VLAN filter */
+	mac_add_mv_filter_t	mgi_add_macvlan; /* Add {MAC,VLAN} filter */
+	mac_rem_mv_filter_t	mgi_rem_macvlan; /* Remove {MAC,VLAN} filter */
 };
 
 /*

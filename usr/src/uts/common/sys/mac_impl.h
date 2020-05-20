@@ -264,6 +264,11 @@ typedef struct mac_grp_client {
 	((g)->mrg_info.mgi_addvlan != NULL) &&		\
 	((g)->mrg_info.mgi_remvlan != NULL))
 
+#define	MAC_GROUP_HW_MACVLAN(g)				\
+	(((g) != NULL) &&				\
+	((g)->mrg_info.mgi_add_macvlan != NULL) &&	\
+	((g)->mrg_info.mgi_rem_macvlan != NULL))
+
 /*
  * Common ring group data structure for ring control and management.
  * The entire structure is SL protected.
@@ -732,6 +737,8 @@ extern int mac_group_addmac(mac_group_t *, const uint8_t *);
 extern int mac_group_remmac(mac_group_t *, const uint8_t *);
 extern int mac_group_addvlan(mac_group_t *, uint16_t);
 extern int mac_group_remvlan(mac_group_t *, uint16_t);
+extern int mac_group_add_macvlan(mac_group_t *, const uint8_t *, uint16_t);
+extern int mac_group_rem_macvlan(mac_group_t *, const uint8_t *, uint16_t);
 extern int mac_rx_group_add_flow(mac_client_impl_t *, flow_entry_t *,
     mac_group_t *);
 extern mblk_t *mac_hwring_tx(mac_ring_handle_t, mblk_t *);

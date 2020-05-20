@@ -4408,8 +4408,10 @@ mac_init_rings(mac_impl_t *mip, mac_ring_type_t rtype)
 		 * MAC addresses.
 		 */
 		if (rtype == MAC_RING_TYPE_RX &&
-		    (group_info.mgi_addmac == NULL ||
-		    group_info.mgi_remmac == NULL)) {
+		    ((group_info.mgi_addmac == NULL ||
+		    group_info.mgi_remmac == NULL) &&
+		    (group_info.mgi_add_macvlan == NULL &&
+		    group_info.mgi_rem_macvlan == NULL))) {
 			DTRACE_PROBE1(mac__init__rings__no__mac__filter,
 			    char *, mip->mi_name);
 			err = EINVAL;
@@ -4713,6 +4715,28 @@ mac_group_remmac(mac_group_t *group, const uint8_t *addr)
 	VERIFY3P(group->mrg_info.mgi_remmac, !=, NULL);
 
 	return (group->mrg_info.mgi_remmac(group->mrg_info.mgi_driver, addr));
+}
+
+int
+mac_group_add_macvlan(mac_group_t *group, const uint8_t *addr, uint16_t vid)
+{
+	mac_group_info_t *info = &group->mrg_info;
+
+	ASSERT3S(group->mrg_type, ==, MAC_RING_TYPE_RX);
+	ASSERT3P(info->mgi_add_macvlan, !=, NULL);
+
+	return (info->mgi_add_macvlan(info->mgi_driver, addr, vid));
+}
+
+int
+mac_group_rem_macvlan(mac_group_t *group, const uint8_t *addr, uint16_t vid)
+{
+	mac_group_info_t *info = &group->mrg_info;
+
+	ASSERT3S(group->mrg_type, ==, MAC_RING_TYPE_RX);
+	ASSERT3P(info->mgi_rem_macvlan, !=, NULL);
+
+	return (info->mgi_rem_macvlan(info->mgi_driver, addr, vid));
 }
 
 /*
@@ -5452,6 +5476,12 @@ mac_add_macaddr_vlan(mac_impl_t *mip, mac_group_t *group, uint8_t *addr,
 			goto bail;
 
 		hw_vlan = B_TRUE;
+	} else if (MAC_GROUP_HW_MACVLAN(group) &&
+	    map->ma_type != MAC_ADDRESS_TYPE_UNICAST_PROMISC) {
+		if ((err = mac_group_add_macvlan(group, addr, vid)) != 0)
+			goto bail;
+
+		hw_mac = B_TRUE;
 	}
 
 	VERIFY3S(map->ma_nusers, >=, 0);
@@ -5473,7 +5503,7 @@ mac_add_macaddr_vlan(mac_impl_t *mip, mac_group_t *group, uint8_t *addr,
 	/*
 	 * Activate this MAC address by adding it to the reserved group.
 	 */
-	if (group != NULL) {
+	if (group != NULL && !MAC_GROUP_HW_MACVLAN(group)) {
 		err = mac_group_addmac(group, (const uint8_t *)addr);
 
 		/*
@@ -5543,7 +5573,7 @@ mac_add_macaddr_vlan(mac_impl_t *mip, mac_group_t *group, uint8_t *addr,
 	map->ma_nusers = 0;
 
 bail:
-	if (hw_vlan) {
+	if (hw_vlan && !MAC_GROUP_HW_MACVLAN(group)) {
 		int err2 = mac_group_remvlan(group, vid);
 
 		if (err2 != 0) {
@@ -5581,10 +5611,19 @@ mac_remove_macaddr_vlan(mac_address_t *map, uint16_t vid)
 		VERIFY3P(mvp, !=, NULL);
 	}
 
+	/*
+	 * Try to remove the HW filter first. If that fails then
+	 * leave the MAC state alone.
+	 */
 	if (MAC_GROUP_HW_VLAN(group) &&
 	    map->ma_type == MAC_ADDRESS_TYPE_UNICAST_CLASSIFIED &&
-	    ((err = mac_group_remvlan(group, vid)) != 0))
+	    ((err = mac_group_remvlan(group, vid)) != 0)) {
 		return (err);
+	} else if (MAC_GROUP_HW_MACVLAN(group) &&
+	    map->ma_type == MAC_ADDRESS_TYPE_UNICAST_CLASSIFIED &&
+	    ((err = mac_group_rem_macvlan(group, map->ma_addr, vid)) != 0)) {
+		return (err);
+	}
 
 	if (mvp != NULL)
 		mac_rem_vlan(map, mvp);
@@ -5613,7 +5652,8 @@ mac_remove_macaddr_vlan(mac_address_t *map, uint16_t vid)
 		if (group == NULL)
 			return (0);
 
-		if ((err = mac_group_remmac(group, map->ma_addr)) != 0) {
+		if (!MAC_GROUP_HW_MACVLAN(group) &&
+		    (err = mac_group_remmac(group, map->ma_addr)) != 0) {
 			if (vid == VLAN_ID_NONE)
 				map->ma_untagged = B_TRUE;
 			else
@@ -5712,19 +5752,37 @@ mac_update_macaddr(mac_address_t *map, uint8_t *mac_addr)
 		/*
 		 * Need to replace the MAC address associated with a group.
 		 */
-		err = mac_group_remmac(map->ma_group, map->ma_addr);
+		if (MAC_GROUP_HW_MACVLAN(map->ma_group)) {
+			err = mac_group_rem_macvlan(map->ma_group, map->ma_addr,
+			    MAC_VLAN_UNTAGGED);
+		} else {
+			err = mac_group_remmac(map->ma_group, map->ma_addr);
+		}
+
 		if (err != 0)
 			return (err);
 
-		err = mac_group_addmac(map->ma_group, mac_addr);
+		if (MAC_GROUP_HW_MACVLAN(map->ma_group)) {
+			err = mac_group_add_macvlan(map->ma_group, mac_addr,
+			    MAC_VLAN_UNTAGGED);
+		} else {
+			err = mac_group_addmac(map->ma_group, mac_addr);
+		}
 
 		/*
 		 * Failure hints hardware error. The MAC layer needs to
 		 * have error notification facility to handle this.
 		 * Now, simply try to restore the value.
 		 */
-		if (err != 0)
-			(void) mac_group_addmac(map->ma_group, map->ma_addr);
+		if (err != 0) {
+			if (MAC_GROUP_HW_MACVLAN(map->ma_group)) {
+				(void) mac_group_add_macvlan(map->ma_group,
+				    map->ma_addr, MAC_VLAN_UNTAGGED);
+			} else {
+				(void) mac_group_addmac(map->ma_group,
+				    map->ma_addr);
+			}
+		}
 
 		break;
 	case MAC_ADDRESS_TYPE_UNICAST_PROMISC:

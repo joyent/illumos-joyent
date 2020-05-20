@@ -11,7 +11,7 @@
 
 /*
  * Copyright 2015 OmniTI Computer Consulting, Inc. All rights reserved.
- * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  * Copyright 2017 Tegile Systems, Inc.  All rights reserved.
  */
 
@@ -37,13 +37,15 @@ char *i40e_priv_props[] = {
 };
 
 static int
-i40e_group_remove_mac(void *arg, const uint8_t *mac_addr)
+i40e_group_remove_macvlan(mac_group_driver_t gdriver, const uint8_t *mac_addr,
+    uint16_t vid)
 {
-	i40e_rx_group_t *rxg = arg;
+	i40e_rx_group_t *rxg = (i40e_rx_group_t *)gdriver;
 	i40e_t *i40e = rxg->irg_i40e;
 	struct i40e_aqc_remove_macvlan_element_data filt;
 	struct i40e_hw *hw = &i40e->i40e_hw_space;
-	int ret, i, last;
+	int ret;
+	uint_t i, last;
 	i40e_uaddr_t *iua;
 
 	if (I40E_IS_MULTICAST(mac_addr))
@@ -56,9 +58,13 @@ i40e_group_remove_mac(void *arg, const uint8_t *mac_addr)
 		goto done;
 	}
 
+	vid = (vid == MAC_VLAN_UNTAGGED ? 0 : vid);
+
 	for (i = 0; i < i40e->i40e_resources.ifr_nmacfilt_used; i++) {
-		if (bcmp(mac_addr, i40e->i40e_uaddrs[i].iua_mac,
-		    ETHERADDRL) == 0)
+		iua = &i40e->i40e_uaddrs[i];
+
+		if (bcmp(mac_addr, iua->iua_mac, ETHERADDRL) == 0 &&
+		    vid == iua->iua_vid)
 			break;
 	}
 
@@ -67,20 +73,19 @@ i40e_group_remove_mac(void *arg, const uint8_t *mac_addr)
 		goto done;
 	}
 
-	iua = &i40e->i40e_uaddrs[i];
 	ASSERT(i40e->i40e_resources.ifr_nmacfilt_used > 0);
 
 	bzero(&filt, sizeof (filt));
 	bcopy(mac_addr, filt.mac_addr, ETHERADDRL);
-	filt.flags = I40E_AQC_MACVLAN_DEL_PERFECT_MATCH |
-	    I40E_AQC_MACVLAN_DEL_IGNORE_VLAN;
+	filt.vlan_tag = vid;
+	filt.flags = I40E_AQC_MACVLAN_DEL_PERFECT_MATCH;
 
 	if (i40e_aq_remove_macvlan(hw, iua->iua_vsi, &filt, 1, NULL) !=
 	    I40E_SUCCESS) {
-		i40e_error(i40e, "failed to remove mac address "
-		    "%2x:%2x:%2x:%2x:%2x:%2x from unicast filter: %d",
+		i40e_error(i40e, "failed to remove {MAC,VLAN} filter "
+		    "{%2x:%2x:%2x:%2x:%2x:%2x,%u}: %d",
 		    mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3],
-		    mac_addr[4], mac_addr[5], filt.error_code);
+		    mac_addr[4], mac_addr[5], vid, filt.error_code);
 		ret = EIO;
 		goto done;
 	}
@@ -106,12 +111,13 @@ done:
 }
 
 static int
-i40e_group_add_mac(void *arg, const uint8_t *mac_addr)
+i40e_group_add_macvlan(mac_group_driver_t gdriver, const uint8_t *mac_addr,
+    uint16_t vid)
 {
-	i40e_rx_group_t	*rxg = arg;
+	i40e_rx_group_t	*rxg = (i40e_rx_group_t *)gdriver;
 	i40e_t		*i40e = rxg->irg_i40e;
 	struct i40e_hw	*hw = &i40e->i40e_hw_space;
-	int		i, ret;
+	int		ret;
 	i40e_uaddr_t	*iua;
 	struct i40e_aqc_add_macvlan_element_data filt;
 
@@ -130,25 +136,28 @@ i40e_group_add_mac(void *arg, const uint8_t *mac_addr)
 		goto done;
 	}
 
-	for (i = 0; i < i40e->i40e_resources.ifr_nmacfilt_used; i++) {
-		if (bcmp(mac_addr, i40e->i40e_uaddrs[i].iua_mac,
-		    ETHERADDRL) == 0) {
+	for (uint_t i = 0; i < i40e->i40e_resources.ifr_nmacfilt_used; i++) {
+		iua = &i40e->i40e_uaddrs[i];
+
+		if (bcmp(mac_addr, iua->iua_mac, ETHERADDRL) == 0 &&
+		    vid == iua->iua_vid) {
 			ret = EEXIST;
 			goto done;
 		}
 	}
 
+	vid = (vid == MAC_VLAN_UNTAGGED) ? 0 : vid;
 	bzero(&filt, sizeof (filt));
 	bcopy(mac_addr, filt.mac_addr, ETHERADDRL);
-	filt.flags = I40E_AQC_MACVLAN_ADD_PERFECT_MATCH	|
-	    I40E_AQC_MACVLAN_ADD_IGNORE_VLAN;
+	filt.vlan_tag = vid;
+	filt.flags = I40E_AQC_MACVLAN_ADD_PERFECT_MATCH;
 
 	if ((ret = i40e_aq_add_macvlan(hw, rxg->irg_vsi_seid, &filt, 1,
 	    NULL)) != I40E_SUCCESS) {
-		i40e_error(i40e, "failed to add mac address "
-		    "%2x:%2x:%2x:%2x:%2x:%2x to unicast filter: %d",
+		i40e_error(i40e, "failed to add {MAC,VLAN} filter "
+		    "{%2x:%2x:%2x:%2x:%2x:%2x,%u}: %d",
 		    mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3],
-		    mac_addr[4], mac_addr[5], ret);
+		    mac_addr[4], mac_addr[5], vid, ret);
 		ret = EIO;
 		goto done;
 	}
@@ -156,6 +165,7 @@ i40e_group_add_mac(void *arg, const uint8_t *mac_addr)
 	iua = &i40e->i40e_uaddrs[i40e->i40e_resources.ifr_nmacfilt_used];
 	bcopy(mac_addr, iua->iua_mac, ETHERADDRL);
 	iua->iua_vsi = rxg->irg_vsi_seid;
+	iua->iua_vid = vid;
 	i40e->i40e_resources.ifr_nmacfilt_used++;
 	ASSERT(i40e->i40e_resources.ifr_nmacfilt_used <=
 	    i40e->i40e_resources.ifr_nmacfilt);
@@ -562,8 +572,12 @@ i40e_fill_rx_group(void *arg, mac_ring_type_t rtype, const int index,
 	infop->mgi_driver = (mac_group_driver_t)rxg;
 	infop->mgi_start = NULL;
 	infop->mgi_stop = NULL;
-	infop->mgi_addmac = i40e_group_add_mac;
-	infop->mgi_remmac = i40e_group_remove_mac;
+	infop->mgi_addmac = NULL;
+	infop->mgi_remmac = NULL;
+	infop->mgi_addvlan = NULL;
+	infop->mgi_remvlan = NULL;
+	infop->mgi_add_macvlan = i40e_group_add_macvlan;
+	infop->mgi_rem_macvlan = i40e_group_remove_macvlan;
 
 	ASSERT(i40e->i40e_num_rx_groups <= I40E_GROUP_MAX);
 	infop->mgi_count = i40e->i40e_num_trqpairs_per_vsi;
