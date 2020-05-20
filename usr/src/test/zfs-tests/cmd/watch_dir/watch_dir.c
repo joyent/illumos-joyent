@@ -36,7 +36,7 @@ fail_usage(void)
 #define	MAX_PES 8
 
 void
-watch_port(char *path)
+watch_port(const char *path)
 {
 	int port;
 	struct file_obj fobj = {0};
@@ -73,7 +73,7 @@ watch_port(char *path)
 }
 
 void
-watch_inotify(char *path)
+watch_inotify(const char *path)
 {
 	int in, wd;
 	struct inotify_event ev;
@@ -131,7 +131,7 @@ watch_inotify(char *path)
 int
 main(int argc, char **argv)
 {
-	char *watcher, *path;
+	const char *watcher, *path;
 
 	if (argc != 3) {
 		fail_usage();
