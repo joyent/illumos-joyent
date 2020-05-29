@@ -46,13 +46,13 @@ watch_port(const char *path)
 		exit(1);
 	}
 
-	fobj.fo_name = path;
+	fobj.fo_name = (char *)path;
 	for (;;) {
 		timespec_t ts = {300, 0};
 		port_event_t pe;
 
 		if (port_associate(port, PORT_SOURCE_FILE, (uintptr_t)&fobj,
-		    0, path) != 0) {
+		    0, (char *)path) != 0) {
 			perror("port_associate");
 			exit(1);
 		}
