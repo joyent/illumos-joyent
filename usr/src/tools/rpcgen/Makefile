@@ -10,33 +10,28 @@
 #
 
 #
-# Copyright 2018 Joyent, Inc.
+# Copyright 2020 Toomas Soome <tsoome@me.com>
 #
 
-include ../Makefile.lib
-include ../Makefile.rootfs
+CMDDIR=		$(SRC)/cmd/rpcgen
 
-$(BUILD64)SUBDIRS += $(MACH64)
-
-HDRS =		libvmm.h
-HDRDIR =	.
-CHECKHDRS =	$(HDRS:%.h=%.check)
-
-all:=		TARGET= all
-install:=	TARGET= install
-clean:=		TARGET= clean
-clobber:=	TARGET= clobber
+include		../Makefile.tools
+include		$(CMDDIR)/Makefile.common
 
 .KEEP_STATE:
 
-all install clean clobber: $(SUBDIRS)
+all:		$(PROG)
 
-install_h:	$(ROOTHDRS)
-check:		$(CHECKHDRS)
+install:	all .WAIT $(ROOTONBLDMACHPROG)
 
-$(SUBDIRS): FRC
-	cd $@; pwd; $(MAKE) $(TARGET)
+clean:
+		$(RM) $(PROG) $(OBJS)
 
-FRC:
+$(PROG):	$(OBJS)
+		$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
+		$(POST_PROCESS)
 
-include ../Makefile.targ
+%.o:		$(CMDDIR)/%.c
+		$(COMPILE.c) -o $@ $<
+
+include		../Makefile.targ
