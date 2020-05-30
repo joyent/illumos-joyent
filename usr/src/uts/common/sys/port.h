@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #ifndef	_SYS_PORT_H
@@ -36,6 +36,7 @@ extern "C" {
 #endif
 
 #include <sys/types.h>
+#include <sys/stdint.h>
 
 /* port sources */
 #define	PORT_SOURCE_AIO		1
@@ -45,6 +46,7 @@ extern "C" {
 #define	PORT_SOURCE_ALERT	5
 #define	PORT_SOURCE_MQ		6
 #define	PORT_SOURCE_FILE	7
+#define	PORT_SOURCE_DEVICE	8
 
 typedef struct port_event {
 	int		portev_events;	/* event data is source specific */
@@ -68,6 +70,11 @@ typedef struct file_obj {
 	char		*fo_name;	/* Null terminated file name */
 } file_obj_t;
 
+typedef struct dev_obj {
+	int32_t		do_version;	/* device object version */
+	int32_t		do_fd;		/* file descriptor of device minor */
+} dev_obj_t;
+
 #if defined(_SYSCALL32)
 
 typedef struct file_obj32 {
@@ -88,7 +95,7 @@ typedef struct port_event32 {
 
 typedef	struct	port_notify32 {
 	int		portnfy_port;	/* bind request(s) to port */
-	caddr32_t 	portnfy_user;	/* user defined */
+	caddr32_t	portnfy_user;	/* user defined */
 } port_notify32_t;
 
 #endif /* _SYSCALL32 */
@@ -137,6 +144,14 @@ typedef	struct	port_notify32 {
  */
 #define	FILE_EXCEPTION		(UNMOUNTED|FILE_DELETE|FILE_RENAME_TO \
 				|FILE_RENAME_FROM|MOUNTEDOVER)
+
+
+/*
+ * PORT_SOURCE_DEVICE - version
+ */
+#define	PORT_DEVICE_VERSION_1		1
+#define	PORT_DEVICE_VERSION_DEFAULT	PORT_DEVICE_VERSION_1
+
 
 #ifdef	__cplusplus
 }

@@ -23,14 +23,16 @@
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2019, Joyent, Inc.
+ */
 
 #ifndef	_SYS_PORT_KERNEL_H
 #define	_SYS_PORT_KERNEL_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/vnode.h>
 #include <sys/list.h>
+#include <sys/sunddi.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -52,7 +54,7 @@ extern "C" {
 typedef	struct	port_kevent {
 	kmutex_t	portkev_lock;	/* used by PORT_SOURCE_FD source */
 	int	portkev_source;		/* event: source */
-	int	portkev_events; 	/* event: data */
+	int	portkev_events;		/* event: data */
 	int	portkev_flags;		/* internal flags */
 	pid_t	portkev_pid;		/* pid of process using this struct */
 	long	portkev_object;		/* event: object */
@@ -152,6 +154,7 @@ int	port_associate_ksource(int, int, struct port_source **,
     void (*)(void *, int, pid_t, int), void *arg,
     int (*)(port_kevent_t *, int, int, uintptr_t, void *));
 int	port_dissociate_ksource(int, int, struct port_source *);
+port_source_t *port_getsrc(struct port *, int);
 
 /* event management */
 int	port_alloc_event(int, int, int, port_kevent_t **);
@@ -166,11 +169,44 @@ int	port_associate_fd(struct port *, int, uintptr_t, int, void *);
 int	port_dissociate_fd(struct port *, uintptr_t);
 int	port_associate_fop(struct port *, int, uintptr_t, int, void *);
 int	port_dissociate_fop(struct port *, uintptr_t);
+int	port_associate_dev(struct port *, int, uintptr_t, int, void *);
+int	port_dissociate_dev(struct port *, uintptr_t);
 
 /* misc functions */
 void	port_free_event_local(port_kevent_t *, int counter);
 int	port_alloc_event_local(struct port *, int, int, port_kevent_t **);
 void	port_close_pfd(struct portfd *);
+
+/* PORT_SOURCE_DEVICE interfaces */
+typedef struct port_dev {
+	list_node_t	pd_list;
+	kmutex_t	pd_lock;
+	uintptr_t	pd_object;
+	dev_info_t	*pd_dip;
+	vnode_t		*pd_vp;
+	struct port	*pd_port;
+	port_kevent_t	*pd_kev;
+	pid_t		pd_pid;
+	int		pd_events;
+	void		*pd_data;
+	struct port_dev_ops *pd_ops;
+} port_dev_t;
+
+typedef struct port_dev_ops {
+	int pd_version;
+	int (*pd_port_dev_fill)(port_dev_t *);
+	void (*pd_port_dev_free)(port_dev_t *);
+	int (*pd_port_associate)(port_dev_t *, int, void *);
+	void (*pd_port_dissociate)(port_dev_t *);
+	int (*pd_port_callback)(port_dev_t *, int *, pid_t, int,
+	    port_kevent_t *);
+} port_dev_ops_t;
+
+int	portfs_register_dev(dev_info_t *, const port_dev_ops_t *);
+void	portfs_unregister_dev(dev_info_t *);
+void	port_dev_send_event(port_dev_t *, int);
+
+void	port_dev_init(void);
 
 #endif	/* _KERNEL */
 

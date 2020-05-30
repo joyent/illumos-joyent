@@ -1,9 +1,10 @@
 '\" te
 .\" Copyright (c) 2007, Sun Microsystems, Inc. All Rights Reserved.
+.\" Copyright 2019 Joyent, Inc.
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH PORT_ASSOCIATE 3C "April 9, 2016"
+.TH PORT_ASSOCIATE 3C "September 26, 2019*"
 .SH NAME
 port_associate, port_dissociate \- associate or dissociate the object with the
 port
@@ -35,11 +36,12 @@ a port.
 .sp
 .LP
 The objects that can be associated with a port by way of the
-\fBport_associate()\fR function are objects of type \fBPORT_SOURCE_FD\fR and
-\fBPORT_SOURCE_FILE\fR. Objects of other types have type-specific association
-mechanisms. A \fBport_notify_t\fR structure, defined in \fB<port.h>\fR, is used
-to specify the event port and an application-defined cookie to associate with
-these event sources. See \fBport_create\fR(3C) and \fBsignal.h\fR(3HEAD).
+\fBport_associate()\fR function are objects of type \fBPORT_SOURCE_FD\fR,
+\fBPORT_SOURCE_FILE\fR, and \fBPORT_SOURCE_DEVICE\fR. Objects of other types
+have type-specific association mechanisms. A \fBport_notify_t\fR structure,
+defined in \fB<port.h>\fR, is used to specify the event port and an
+application-defined cookie to associate with these event sources. See
+\fBport_create\fR(3C) and \fBsignal.h\fR(3HEAD).
 .sp
 .LP
 The \fBport_notify_t\fR structure contains the following members:
@@ -149,6 +151,33 @@ owner of the association closes the port .
 .LP
 On NFS file systems, events from only the client side (local)
 access/modifications to files or directories will be delivered.
+.sp
+.LP
+Objects of type \fBPORT_SOURCE_DEVICE\fR are a pointer to the structure
+\fBdev_obj_t\fR defined in \fB<sys/port.h>\fR. This event source provides
+notification for device-specific events. A minor node of the device to receive
+events from must be opened and the file descriptor be set in in the
+\fBdev_obj_t\fR object before associating. The device driver may require
+additional data by using a device-specific object, which in this case usually
+embeds \fBdev_obj_t\fR as its first member. Detailed information about any
+device-specific object structure or the events supported by a device are
+described in the man page of the device in question.
+.sp
+.LP
+The current version 1 of the \fBdev_obj_t\fR object contains the following
+elements:
+.sp
+.in +2
+.nf
+int32_t	do_version;	/* PORT_SOURCE_DEVICE interface version */
+int32_t	do_fd;		/* file descriptor of device minor node */
+.fi
+.in -2
+.sp
+.LP
+PORT_DEVICE_VERSION_DEFAULT can be used to request the current version
+of the interface. Version 1 can be explicitly requested by using
+PORT_DEVICE_VERSION_1.
 .SH RETURN VALUES
 .LP
 Upon successful completion, 0 is returned. Otherwise, \(mi1 is returned and
@@ -172,7 +201,20 @@ The \fIport\fR identifier is not valid.
 .ad
 .RS 10n
 The \fIsource\fR argument is of type \fBPORT_SOURCE_FD\fR and the object
-argument is not a valid file descriptor.
+argument is not a valid file descriptor, or the \fIsource\fR argument is of type
+\fBPORT_SOURCE_DEVICE\fR and the object argument does not contain a valid file
+descriptor in the \fIdo_fd\fR element.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBENODEV\fR\fR
+.ad
+.RS 10n
+The \fIsource\fR argument is of type \fBPORT_SOURCE_DEVICE\fR and the
+\fIdo_fd\fR element of the object is not a file descriptor of an open device
+supporting PORT_SOURCE_DEVICE events.
 .RE
 
 .sp

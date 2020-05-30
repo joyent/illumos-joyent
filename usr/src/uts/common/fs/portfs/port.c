@@ -511,6 +511,7 @@ _init(void)
 	port_control.pc_cache = kmem_cache_create("port_cache",
 	    sizeof (port_kevent_t), 0, NULL, NULL, NULL, NULL, NULL, 0);
 
+	port_dev_init();		/* init PORT_SOURCE_DEVICE */
 	port_kstat_init();		/* init port kstats */
 	return (mod_install(&modlinkage));
 }
@@ -652,6 +653,10 @@ portfs(int opcode, uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3,
 			error = port_associate_fop(pp, (int)a1, (uintptr_t)a2,
 			    (int)a3, (void *)a4);
 			break;
+		case PORT_SOURCE_DEVICE:
+			error = port_associate_dev(pp, (int)a1, (uintptr_t)a2,
+			    (int)a3, (void *)a4);
+			break;
 		default:
 			error = EINVAL;
 			break;
@@ -687,6 +692,9 @@ portfs(int opcode, uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3,
 			break;
 		case PORT_SOURCE_FILE:
 			error = port_dissociate_fop(pp, (uintptr_t)a2);
+			break;
+		case PORT_SOURCE_DEVICE:
+			error = port_dissociate_dev(pp, (uintptr_t)a2);
 			break;
 		default:
 			error = EINVAL;

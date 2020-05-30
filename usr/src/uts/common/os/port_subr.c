@@ -23,8 +23,9 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2019, Joyent, Inc.
+ */
 
 /*
  * This file containts all the functions required for interactions of
@@ -220,7 +221,7 @@ port_send_event(port_kevent_t *pkevp)
  * For that reason the event source should allocate an event slot as early
  * as possible and be prepared to get an error code instead of the
  * port event pointer.
- * Al current event sources allocate an event slot during a system call
+ * All current event sources allocate an event slot during a system call
  * entry. They return an error code to the application if an event slot
  * could not be reserved.
  * It is also recommended to associate the event source with the port
@@ -518,7 +519,7 @@ port_free_event_local(port_kevent_t *pkevp, int counter)
  *	This function initializes most of the "wired" elements of the port
  *	event structure. This is normally being used just after the allocation
  *	of the port event structure.
- *	pkevp	: pointer to the port event structure
+ *	pev	: pointer to the port event structure
  *	object	: object associated with this event structure
  *	user	: user defined pointer delivered with the association function
  *	port_callback:
@@ -798,4 +799,29 @@ free_fopdata(vnode_t *vp)
 	list_destroy(&pvp->pvp_pfoplist);
 	kmem_free(pvp, sizeof (*pvp));
 	vp->v_fopdata = NULL;
+}
+
+port_source_t *
+port_getsrc(port_t *pp, int source)
+{
+	port_source_t *pse;
+	int	lock = 0;
+	/*
+	 * get the port source structure.
+	 */
+	if (!MUTEX_HELD(&pp->port_queue.portq_source_mutex)) {
+		mutex_enter(&pp->port_queue.portq_source_mutex);
+		lock = 1;
+	}
+
+	pse = pp->port_queue.portq_scache[PORT_SHASH(source)];
+	for (; pse != NULL; pse = pse->portsrc_next) {
+		if (pse->portsrc_source == source)
+			break;
+	}
+
+	if (lock) {
+		mutex_exit(&pp->port_queue.portq_source_mutex);
+	}
+	return (pse);
 }

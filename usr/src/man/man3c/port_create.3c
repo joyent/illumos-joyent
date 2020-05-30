@@ -1,9 +1,10 @@
 '\" te
 .\" Copyright (c) 2008, Sun Microsystems, Inc. All Rights Reserved.
+.\" Copyright 2019 Joyent, Inc.
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH PORT_CREATE 3C "April 9, 2016"
+.TH PORT_CREATE 3C "September 26, 2019"
 .SH NAME
 port_create \- create a port
 .SH SYNOPSIS
@@ -36,6 +37,7 @@ T}
 \fBPORT_SOURCE_USER\fR	\fBuintptr_t\fR	\fBport_send\fR(3C)
 \fBPORT_SOURCE_ALERT\fR	\fBuintptr_t\fR	\fBport_alert\fR(3C)
 \fBPORT_SOURCE_FILE\fR	\fBfile_obj_t\fR	\fBport_associate\fR(3C)
+\fBPORT_SOURCE_DEVICE\fR	\fBdev_obj_t\fR	\fBport_associate\fR(3C)
 .TE
 
 .sp
@@ -81,6 +83,13 @@ active. It has to be reassociated to activate. A file object is associated or
 reassociated with a port using the \fBport_associate\fR(3C).
 .sp
 .LP
+\fBPORT_SOURCE_DEVICE\fR events represent device-specific status changes. The
+device object is versioned, in the current version 1 the device is specified
+by a file descriptor of an open device minor node. Device drivers may expect
+additional data following the dev_obj_t, usually by requiring the use of a
+device-specific object that contains a dev_obj_t as first member.
+.sp
+.LP
 The \fBport_get\fR(3C) and \fBport_getn\fR(3C) functions retrieve events from a
 port. They ignore non retrievable events (non-own or non-shareable events).
 .sp
@@ -97,10 +106,10 @@ If a port is exported to other processes, the port is destroyed on last close.
 .sp
 .LP
 \fBPORT_SOURCE_USER\fR and \fBPORT_SOURCE_ALERT\fR events can be distributed
-across processes. \fBPORT_SOURCE_FD\fR events can only be shared between
-processes when child processes inherit opened file decriptors from the parent
-process. See \fBfork\fR(2). \fBPORT_SOURCE_TIMER\fR and \fBPORT_SOURCE_AIO\fR
-cannot be shared between processes.
+across processes. \fBPORT_SOURCE_FD\fR and \fBPORT_SOURCE_DEVICE\fR events can
+only be shared between processes when child processes inherit opened file
+decriptors from the parent process. See \fBfork\fR(2). \fBPORT_SOURCE_TIMER\fR
+and \fBPORT_SOURCE_AIO\fR cannot be shared between processes.
 .SH RETURN VALUES
 .LP
 Upon successful completion, the \fBport_create()\fR function returns a

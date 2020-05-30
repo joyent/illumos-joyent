@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2019, Joyent, Inc.
  */
 
 /*
@@ -257,7 +257,7 @@ const fs_operation_def_t	port_vnodesrc_template[] = {
 	VOPNAME_READ,		{ .femop_read = port_fop_read },
 	VOPNAME_WRITE,		{ .femop_write = port_fop_write },
 	VOPNAME_MAP,		{ .femop_map = port_fop_map },
-	VOPNAME_SETATTR, 	{ .femop_setattr = port_fop_setattr },
+	VOPNAME_SETATTR,	{ .femop_setattr = port_fop_setattr },
 	VOPNAME_CREATE,		{ .femop_create = port_fop_create },
 	VOPNAME_REMOVE,		{ .femop_remove = port_fop_remove },
 	VOPNAME_LINK,		{ .femop_link = port_fop_link },
@@ -266,7 +266,7 @@ const fs_operation_def_t	port_vnodesrc_template[] = {
 	VOPNAME_RMDIR,		{ .femop_rmdir = port_fop_rmdir },
 	VOPNAME_READDIR,	{ .femop_readdir = port_fop_readdir },
 	VOPNAME_SYMLINK,	{ .femop_symlink = port_fop_symlink },
-	VOPNAME_SETSECATTR, 	{ .femop_setsecattr = port_fop_setsecattr },
+	VOPNAME_SETSECATTR,	{ .femop_setsecattr = port_fop_setsecattr },
 	VOPNAME_VNEVENT,	{ .femop_vnevent = port_fop_vnevent },
 	NULL,	NULL
 };
@@ -275,7 +275,7 @@ const fs_operation_def_t	port_vnodesrc_template[] = {
  * Fsem - vfs ops hooks
  */
 const fs_operation_def_t	port_vfssrc_template[] = {
-	VFSNAME_UNMOUNT, 	{ .fsemop_unmount = port_fop_unmount },
+	VFSNAME_UNMOUNT,	{ .fsemop_unmount = port_fop_unmount },
 	NULL,	NULL
 };
 
@@ -731,7 +731,7 @@ port_cache_lookup_fop(portfop_cache_t *pfcp, pid_t pid, uintptr_t obj)
  */
 int
 port_fop_getdvp(void *objptr, vnode_t **vp, vnode_t **dvp,
-	char **cname, int *len, int follow)
+    char **cname, int *len, int follow)
 {
 	int error = 0;
 	struct pathname pn;
@@ -781,31 +781,6 @@ port_fop_getdvp(void *objptr, vnode_t **vp, vnode_t **dvp,
 	return (error);
 }
 
-port_source_t *
-port_getsrc(port_t *pp, int source)
-{
-	port_source_t *pse;
-	int	lock = 0;
-	/*
-	 * get the port source structure.
-	 */
-	if (!MUTEX_HELD(&pp->port_queue.portq_source_mutex)) {
-		mutex_enter(&pp->port_queue.portq_source_mutex);
-		lock = 1;
-	}
-
-	pse = pp->port_queue.portq_scache[PORT_SHASH(source)];
-	for (; pse != NULL; pse = pse->portsrc_next) {
-		if (pse->portsrc_source == source)
-			break;
-	}
-
-	if (lock) {
-		mutex_exit(&pp->port_queue.portq_source_mutex);
-	}
-	return (pse);
-}
-
 
 /*
  * Compare time stamps and generate an event if it has changed.
@@ -815,7 +790,7 @@ port_getsrc(port_t *pp, int source)
  */
 static void
 port_check_timestamp(portfop_cache_t *pfcp, vnode_t *vp, vnode_t *dvp,
-	portfop_t *pfp, void *objptr, uintptr_t object)
+    portfop_t *pfp, void *objptr, uintptr_t object)
 {
 	vattr_t		vatt;
 	portfop_vp_t	*pvp = vp->v_fopdata;
@@ -1102,8 +1077,8 @@ port_install_fopdata(vnode_t *vp)
  */
 int
 port_pfp_setup(portfop_t **pfpp, port_t *pp, vnode_t *vp, portfop_cache_t *pfcp,
-	uintptr_t object, int events, void *user, char *cname, int clen,
-	vnode_t *dvp)
+    uintptr_t object, int events, void *user, char *cname, int clen,
+    vnode_t *dvp)
 {
 	portfop_t	*pfp = NULL;
 	port_kevent_t	*pkevp;
@@ -1610,7 +1585,7 @@ port_close_fop(void *arg, int port, pid_t pid, int lastclose)
 	portfop_t	*pfpnext;
 	int		index, i;
 	port_source_t	*pse;
-	vnode_t 	*tdvp = NULL;
+	vnode_t	*tdvp = NULL;
 	vnode_t		*vpl[PORTFOP_NVP];
 
 	pse = port_getsrc(pp, PORT_SOURCE_FILE);
@@ -1980,7 +1955,7 @@ port_fop(vnode_t *vp, int op, int retval)
 		event  |= FILE_TRUNC;
 	}
 	if (event) {
-		port_fop_sendevent(vp, 	event, NULL, NULL);
+		port_fop_sendevent(vp,	event, NULL, NULL);
 	}
 }
 

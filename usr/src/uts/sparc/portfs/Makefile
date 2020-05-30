@@ -23,6 +23,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 Joyent, Inc.
+
 
 #
 #	This makefile drives the production of the port kernel module.
@@ -35,7 +37,7 @@
 #
 UTSBASE	= ../..
 
-PORTFS_OBJS	+= port.o port_vnops.o port_fd.o port_fop.o
+PORTFS_OBJS	+= port.o port_vnops.o port_fd.o port_fop.o port_dev.o
 
 #
 #	Define the module and object file sets.
