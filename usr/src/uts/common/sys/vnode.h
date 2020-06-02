@@ -287,6 +287,7 @@ typedef struct vnode {
 	kmutex_t	v_lock;		/* protects vnode fields */
 	uint_t		v_flag;		/* vnode flags (see below) */
 	uint_t		v_count;	/* reference count */
+				/* non vn_count() ref count (see below) */
 	uint_t		v_phantom_count;
 	void		*v_data;	/* private data for fs */
 	struct vfs	*v_vfsp;	/* ptr to containing VFS */

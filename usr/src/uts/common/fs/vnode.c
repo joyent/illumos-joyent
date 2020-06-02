@@ -862,6 +862,7 @@ vn_phantom_rele(vnode_t *vp)
 	vp->v_phantom_count--;
 	DTRACE_PROBE1(vn__phantom_rele, vnode_t *, vp);
 	if (vp->v_count == 1) {
+		ASSERT0(vp->v_phantom_count);
 		mutex_exit(&vp->v_lock);
 		VOP_INACTIVE(vp, CRED(), NULL);
 		return;
@@ -870,6 +871,11 @@ vn_phantom_rele(vnode_t *vp)
 	mutex_exit(&vp->v_lock);
 }
 
+/*
+ * Return the number of non-phantom holds. Things such as portfs will use
+ * phantom holds to prevent it from blocking filesystems from mounting over
+ * watched directories.
+ */
 uint_t
 vn_count(vnode_t *vp)
 {
