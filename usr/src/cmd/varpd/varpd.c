@@ -316,7 +316,7 @@ varpd_setup_lookup_threads(void)
 		thread_t thr;
 
 		ret = thr_create(NULL, 0,
-		    (void *(*)(void *))libvarpd_overlay_lookup_run,
+		    (void *)libvarpd_overlay_lookup_run,
 		    varpd_handle, THR_DETACHED | THR_DAEMON, &thr);
 		if (ret != 0)
 			return (ret);

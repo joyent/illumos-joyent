@@ -5025,8 +5025,8 @@ drsas_add_intrs(struct drsas_instance *instance, int intr_type)
 	/* Call ddi_intr_add_handler() */
 	for (i = 0; i < actual; i++) {
 		ret = ddi_intr_add_handler(instance->intr_htable[i],
-		    (ddi_intr_handler_t *)drsas_isr, (caddr_t)instance,
-		    (caddr_t)(uintptr_t)i);
+		    (ddi_intr_handler_t *)(uintptr_t)drsas_isr,
+		    (caddr_t)instance, (caddr_t)(uintptr_t)i);
 
 		if (ret != DDI_SUCCESS) {
 			con_log(CL_ANN, (CE_WARN, "drsas_add_intrs:"

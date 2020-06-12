@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2020 Joyent, Inc.
 #
 
 #
@@ -449,7 +450,8 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	_init_costs;
 	_init_HP_pair;
 	initscr32;
-	_lib_version;
+	# FIXME!
+	# _lib_version;
 	LINES;
 	m_addch;
 	m_addstr;

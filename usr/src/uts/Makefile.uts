@@ -225,7 +225,8 @@ CERRWARN += -_gcc=-Wno-missing-field-initializers
 # gcc4 lacks -Wno-maybe-uninitialized
 CNOWARN_UNINIT = -_gcc4=-Wno-uninitialized \
     -_gcc7=-Wno-maybe-uninitialized \
-    -_gcc8=-Wno-maybe-uninitialized
+    -_gcc8=-Wno-maybe-uninitialized \
+    -_gcc9=-Wno-maybe-uninitialized
 
 # DEBUG v. -nd make for frequent unused variables, empty conditions, etc. in
 # -nd builds
@@ -240,15 +241,6 @@ include $(SRC)/Makefile.smatch
 # so we have to disable all these smatch checks.
 #
 SMOFF += sizeof
-
-#
-# Add specific compiler options that are required based on the
-# architecture in question.
-#
-CFLAGS_uts_i386 += -_gcc7=-mindirect-branch=thunk-extern
-CFLAGS_uts_i386 += -_gcc7=-mindirect-branch-register
-CFLAGS_uts_i386 += -_gcc8=-mindirect-branch=thunk-extern
-CFLAGS_uts_i386 += -_gcc8=-mindirect-branch-register
 
 #
 # Ensure that the standard function prologue remains at the very start

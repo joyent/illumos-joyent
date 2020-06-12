@@ -329,7 +329,10 @@ LDFLAGS.native = $(LDASSERTS) $(ZASSERTDEFLIB)=libc.so $(BDIRECT)
 # those headers.
 #
 genassym: $(GENASSYM_C)
-	$(NATIVECC) $(NATIVE_CFLAGS) $(CPPFLAGS) $(LDFLAGS.native) \
+	echo JLEVON $(NATIVECC)
+	echo JLEVON $(NATIVE_CFLAGS)
+	echo JLEVON $(CPPFLAGS)
+	$(NATIVECC) $(CPPFLAGS) $(LDFLAGS.native) \
 	-o $@ $(GENASSYM_C)
 
 # shared between 32- and 64-bit

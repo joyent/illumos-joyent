@@ -1211,7 +1211,7 @@ create_log_thread(zlog_t *zlogp)
 		return;
 	}
 
-	res = thr_create(NULL, 0, (void * (*)(void *))srvr, (void *)&mode, 0,
+	res = thr_create(NULL, 0, (void *)srvr, (void *)&mode, 0,
 	    &logger_tid);
 	if (res != 0) {
 		zerror(zlogp, B_FALSE, "error %d creating logger thread", res);

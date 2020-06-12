@@ -125,6 +125,9 @@ CPPFLAGS =	-I$(COMPAT)/bhyve -I$(CONTRIB)/bhyve \
 		-DWITHOUT_CAPSICUM
 
 pci_nvme.o := CERRWARN += -_gcc=-Wno-pointer-sign
+pci_nvme.o := CERRWARN += -_gcc9=-Wno-address-of-packed-member
+pci_passthru.o := CERRWARN += -_gcc9=-Wno-address-of-packed-member
+pci_xhci.o := CERRWARN += -_gcc9=-Wno-address-of-packed-member
 
 SMOFF += all_func_returns,leaks,no_if_block
 

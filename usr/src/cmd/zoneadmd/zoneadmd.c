@@ -297,8 +297,9 @@ zerror(zlog_t *zlogp, boolean_t use_strerror, const char *fmt, ...)
 static void
 strnappend(char *dest, size_t n, const char *src)
 {
-	(void) snprintf(dest, n, "%s%s%s", dest,
-	    dest[0] == '\0' ? "" : " ", src);
+	char *sep = (dest[0] == '\0') ? "" : " ";
+	(void) strlcat(dest, sep, n);
+	(void) strlcat(dest, src, n);
 }
 
 /*
