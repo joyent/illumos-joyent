@@ -942,7 +942,15 @@ ict_tcgets_native(file_t *fp, int cmd, intptr_t arg, int lxcmd)
 	error = VOP_IOCTL(fp->f_vnode, cmd, (intptr_t)&s_tios,
 	    FLFAKE(fp), fp->f_cred, &rv, NULL);
 	if (error)
-		return (set_errno(error));
+	       /* 
+		* when calling isatty on /dev/null, lx sets ENXIO
+		* instead of ENOTTY. Probably a side effect of
+		* how devices are handled? This here fixes the error.
+		* The fix is important as otherwhise systemd.exec will
+		* refuse to launch processes with the user property set.
+		* eg. user@.service will not start (chown_terminal). 
+		*/
+		return (set_errno(error == ENXIO ? ENOTTY : error ));
 
 	/* Now munge the data to how Linux wants it. */
 	s2l_termios(&s_tios, &l_tios);
