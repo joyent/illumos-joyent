@@ -32,6 +32,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
+#include <ctype.h>
 #include <dtrace.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -737,7 +738,7 @@ compile_str(dtrace_cmd_t *dcp)
 	    dcp->dc_spec, g_cflags | DTRACE_C_PSPEC, g_argc, g_argv)) == NULL)
 		dfatal("invalid probe specifier %s", dcp->dc_arg);
 
-	if ((p = strpbrk(dcp->dc_arg, "{/;")) != NULL)
+	if ((p = strpbrk(dcp->dc_arg, "{/; ")) != NULL)
 		*p = '\0'; /* crop name for reporting */
 
 	dcp->dc_desc = "description";
@@ -1157,6 +1158,14 @@ intr(int signo)
 		g_impatient = 1;
 }
 
+static char *
+skip_leading_spaces(char *s)
+{
+	while (isspace(*s))
+		s++;
+	return (s);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1409,7 +1418,7 @@ main(int argc, char *argv[])
 				dcp = &g_cmdv[g_cmdc++];
 				dcp->dc_func = compile_str;
 				dcp->dc_spec = DTRACE_PROBESPEC_FUNC;
-				dcp->dc_arg = optarg;
+				dcp->dc_arg = skip_leading_spaces(optarg);
 				break;
 
 			case 'F':
@@ -1426,7 +1435,7 @@ main(int argc, char *argv[])
 				dcp = &g_cmdv[g_cmdc++];
 				dcp->dc_func = compile_str;
 				dcp->dc_spec = DTRACE_PROBESPEC_NAME;
-				dcp->dc_arg = optarg;
+				dcp->dc_arg = skip_leading_spaces(optarg);
 				break;
 
 			case 'I':
@@ -1443,21 +1452,21 @@ main(int argc, char *argv[])
 				dcp = &g_cmdv[g_cmdc++];
 				dcp->dc_func = compile_str;
 				dcp->dc_spec = DTRACE_PROBESPEC_MOD;
-				dcp->dc_arg = optarg;
+				dcp->dc_arg = skip_leading_spaces(optarg);
 				break;
 
 			case 'n':
 				dcp = &g_cmdv[g_cmdc++];
 				dcp->dc_func = compile_str;
 				dcp->dc_spec = DTRACE_PROBESPEC_NAME;
-				dcp->dc_arg = optarg;
+				dcp->dc_arg = skip_leading_spaces(optarg);
 				break;
 
 			case 'P':
 				dcp = &g_cmdv[g_cmdc++];
 				dcp->dc_func = compile_str;
 				dcp->dc_spec = DTRACE_PROBESPEC_PROVIDER;
-				dcp->dc_arg = optarg;
+				dcp->dc_arg = skip_leading_spaces(optarg);
 				break;
 
 			case 'q':
