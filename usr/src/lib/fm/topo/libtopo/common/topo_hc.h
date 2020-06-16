@@ -248,8 +248,8 @@ extern "C" {
 #define	TOPO_PROP_NETCFG_IPV4_SUBNET	"ipv4-subnet"
 #define	TOPO_PROP_NETCFG_IPV4_GATEWAY	"ipv4-gateway"
 #define	TOPO_PROP_NETCFG_IPV4_TYPE	"ipv4-config-type"
-#define	TOPO_PROP_NETCFG_IPV6_ADDR	"ipv6-address"
-#define	TOPO_PROP_NETCFG_IPV6_ROUTES	"ipv6-routes"
+#define	TOPO_PROP_NETCFG_IPV6_ADDRS	"ipv6-addresses"
+#define	TOPO_PROP_NETCFG_IPV6_ROUTES	"ipv6-route-targets"
 #define	TOPO_PROP_NETCFG_IPV6_TYPE	"ipv6-config-type"
 
 /* Possible values for TOPO_PROP_NETCFG_TYPE */

@@ -625,13 +625,11 @@ static int
 ipmi_enum_sp(topo_mod_t *mod, tnode_t *pnode)
 {
 	ipmi_handle_t *ihp;
-	ipmi_channel_info_t *chinfo;
 	ipmi_lan_config_t lancfg = { 0 };
 	boolean_t found_lan = B_TRUE;
 	char ipv4_addr[INET_ADDRSTRLEN], subnet[INET_ADDRSTRLEN];
 	char gateway[INET_ADDRSTRLEN], macaddr[18];
-	char ipv6_addr[INET6_ADDRSTRLEN];
-	char **ipv6_routes;
+	char **ipv6_addrs = NULL, **ipv6_routes = NULL;
 	const char *sp_rev, *ipv4_cfgtype, *ipv6_cfgtype;
 	nvlist_t *auth, *fmri;
 	tnode_t *sp_node;
@@ -715,6 +713,8 @@ ipmi_enum_sp(topo_mod_t *mod, tnode_t *pnode)
 	 * Iterate through the channels to find the LAN channel.
 	 */
 	for (ch = 0; ch <= IPMI_MAX_CHANNEL; ch++) {
+		ipmi_channel_info_t *chinfo;
+
 		if ((chinfo = ipmi_get_channel_info(ihp, ch)) != NULL &&
 		    chinfo->ici_medium == IPMI_MEDIUM_8023LAN) {
 			found_lan = B_TRUE;
@@ -727,7 +727,7 @@ ipmi_enum_sp(topo_mod_t *mod, tnode_t *pnode)
 	 */
 	if (found_lan != B_TRUE ||
 	    ipmi_lan_get_config(ihp, ch, &lancfg) != 0) {
-		(void) fprintf(stderr, "failed to get LAN config\n");
+		topo_mod_dprintf(mod, "failed to get LAN config\n");
 		(void) topo_mod_seterrno(mod, EMOD_UNKNOWN);
 		goto out;
 	}
@@ -777,7 +777,7 @@ ipmi_enum_sp(topo_mod_t *mod, tnode_t *pnode)
 	    sizeof (subnet)) == NULL ||
 	    inet_ntop(AF_INET, &lancfg.ilc_gateway_addr, gateway,
 	    sizeof (gateway)) == NULL)) {
-		(void) fprintf(stderr, "failed to convert IP addresses: %s\n",
+		topo_mod_dprintf(mod, "failed to convert IP addresses: %s\n",
 		    strerror(errno));
 		(void) topo_mod_seterrno(mod, EMOD_UNKNOWN);
 		goto out;
@@ -806,41 +806,71 @@ ipmi_enum_sp(topo_mod_t *mod, tnode_t *pnode)
 	if (lancfg.ilc_ipv6_enabled == B_TRUE) {
 		ipv6_cfgtype = ipmi2toposrc(lancfg.ilc_ipv6_source);
 
-		if (inet_ntop(AF_INET6, &lancfg.ilc_ipv6_addr, ipv6_addr,
-		    sizeof (ipv6_addr)) == NULL) {
-			(void) fprintf(stderr, "failed to convert IPv6 "
-			    "address: %s\n", strerror(errno));
-			(void) topo_mod_seterrno(mod, EMOD_UNKNOWN);
+		/* allocate and populate ipv6-naddrs string array */
+		if ((ipv6_addrs = topo_mod_zalloc(mod,
+		    lancfg.ilc_ipv6_naddrs * sizeof (char *))) == NULL) {
+			/* errno set */
 			goto out;
 		}
 
-		/* allocate and populate ipv6-routes string array */
-		if ((ipv6_routes = topo_mod_zalloc(mod,
+		for (i = 0; i < lancfg.ilc_ipv6_naddrs; i++) {
+			if ((ipv6_addrs[i] = topo_mod_alloc(mod,
+			    INET6_ADDRSTRLEN + 4)) == NULL) {
+				/* errno set */
+				goto out;
+			}
+		}
+
+		for (i = 0; i < lancfg.ilc_ipv6_naddrs; i++) {
+			char v6addr[INET6_ADDRSTRLEN];
+
+			if (inet_ntop(AF_INET6,
+			    &lancfg.ilc_ipv6_addrs[i].iiv6_addr, v6addr,
+			    sizeof (v6addr)) == NULL) {
+				topo_mod_dprintf(mod, "failed to convert "
+				    "IPv6 addresses: %s\n", strerror(errno));
+				(void) topo_mod_seterrno(mod, EMOD_UNKNOWN);
+				goto out;
+			}
+			(void) snprintf(ipv6_addrs[i], INET6_ADDRSTRLEN + 3,
+			    "%s/%u", v6addr,
+			    lancfg.ilc_ipv6_addrs[i].iiv6_pfxlen);
+		}
+
+		/* allocate and populate ipv6-route-targets string array */
+		if (lancfg.ilc_ipv6_nroutes > 0 &&
+		    (ipv6_routes = topo_mod_zalloc(mod,
 		    lancfg.ilc_ipv6_nroutes * sizeof (char *))) == NULL) {
 			/* errno set */
 			goto out;
 		}
 		for (i = 0; i < lancfg.ilc_ipv6_nroutes; i++) {
 			if ((ipv6_routes[i] = topo_mod_alloc(mod,
-			    INET6_ADDRSTRLEN)) == NULL) {
+			    INET6_ADDRSTRLEN + 4)) == NULL) {
 				/* errno set */
 				goto out;
 			}
 		}
 		for (i = 0; i < lancfg.ilc_ipv6_nroutes; i++) {
-			if (inet_ntop(AF_INET6, &lancfg.ilc_ipv6_routes[i],
-			    ipv6_routes[i], sizeof (ipv6_routes[i])) == NULL) {
-				(void) fprintf(stderr, "failed to convert "
+			char v6route[INET6_ADDRSTRLEN];
+
+			if (inet_ntop(AF_INET6,
+			    &lancfg.ilc_ipv6_routes[i].iiv6_addr, v6route,
+			    sizeof (v6route)) == NULL) {
+				topo_mod_dprintf(mod, "failed to convert "
 				    "IPv6 addresses: %s\n", strerror(errno));
 				(void) topo_mod_seterrno(mod, EMOD_UNKNOWN);
 				goto out;
 			}
+			(void) snprintf(ipv6_routes[i], INET6_ADDRSTRLEN + 3,
+			    "%s/%u", v6route,
+			    lancfg.ilc_ipv6_routes[i].iiv6_pfxlen);
 		}
 	}
 	if (lancfg.ilc_ipv6_enabled == B_TRUE &&
-	    (topo_prop_set_string(sp_node, TOPO_PGROUP_NETCFG,
-	    TOPO_PROP_NETCFG_IPV6_ADDR, TOPO_PROP_IMMUTABLE, ipv6_addr,
-	    &err) != 0 ||
+	    (topo_prop_set_string_array(sp_node, TOPO_PGROUP_NETCFG,
+	    TOPO_PROP_NETCFG_IPV6_ADDRS, TOPO_PROP_IMMUTABLE,
+	    (const char **)ipv6_addrs, lancfg.ilc_ipv6_naddrs, &err) != 0 ||
 	    topo_prop_set_string_array(sp_node, TOPO_PGROUP_NETCFG,
 	    TOPO_PROP_NETCFG_IPV6_ROUTES, TOPO_PROP_IMMUTABLE,
 	    (const char **)ipv6_routes, lancfg.ilc_ipv6_nroutes, &err) != 0 ||
@@ -854,7 +884,14 @@ ipmi_enum_sp(topo_mod_t *mod, tnode_t *pnode)
 	}
 	ret = 0;
 out:
-	if (lancfg.ilc_ipv6_nroutes > 0) {
+	ipmi_lan_free_config(&lancfg);
+	if (lancfg.ilc_ipv6_naddrs > 0 && ipv6_addrs != NULL) {
+		for (i = 0; i < lancfg.ilc_ipv6_naddrs; i++)
+			topo_mod_free(mod, ipv6_addrs[i], INET6_ADDRSTRLEN);
+		topo_mod_free(mod, ipv6_addrs,
+		    lancfg.ilc_ipv6_naddrs * sizeof (char *));
+	}
+	if (lancfg.ilc_ipv6_nroutes > 0 && ipv6_routes != NULL) {
 		for (i = 0; i < lancfg.ilc_ipv6_nroutes; i++)
 			topo_mod_free(mod, ipv6_routes[i], INET6_ADDRSTRLEN);
 		topo_mod_free(mod, ipv6_routes,

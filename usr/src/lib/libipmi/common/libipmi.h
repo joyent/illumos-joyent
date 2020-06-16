@@ -49,6 +49,10 @@ typedef struct ipmi_handle ipmi_handle_t;
 
 #pragma pack(1)
 
+#ifndef	MAX
+#define	MAX(x, y) ((x) > (y) ? (x) : (y))
+#endif
+
 /*
  * Basic netfn definitions.  See section 5.1.
  */
@@ -297,24 +301,29 @@ extern ipmi_channel_info_t *ipmi_get_channel_info(ipmi_handle_t *, int);
  * This can be expanded in the future as needed.
  */
 
-/* We'll return up to a maximum of two static routee + two dynamic routes */
-#define	IPMI_LAN_IPV6_MAX_ROUTES	4
+typedef struct ipmi_ipv6_addr {
+	uint8_t iiv6_addr[16];
+	uint8_t iiv6_pfxlen;
+} ipmi_ipv6_addr_t;
 
 typedef struct ipmi_lan_config {
-	boolean_t	ilc_set_in_progress;
-	uint32_t	ilc_ipaddr;
-	uint8_t		ilc_ipaddr_source;
-	uint8_t		ilc_macaddr[6];
-	uint32_t	ilc_subnet;
-	uint32_t	ilc_gateway_addr;
-	uint8_t		ilc_ipv6_source;
-	uint8_t		ilc_ipv6_addr[16];
-	uint8_t		ilc_ipv6_routes[IPMI_LAN_IPV6_MAX_ROUTES][16];
-	uint8_t		ilc_ipv6_nroutes;
-	uint16_t	ilc_vlan_id;
-	boolean_t	ilc_ipv4_enabled;
-	boolean_t	ilc_ipv6_enabled;
-	boolean_t	ilc_vlan_enabled;
+	boolean_t		ilc_set_in_progress;
+	uint32_t		ilc_ipaddr;
+	uint8_t			ilc_ipaddr_source;
+	uint8_t			ilc_macaddr[6];
+	uint32_t		ilc_subnet;
+	uint32_t		ilc_gateway_addr;
+	uint8_t			ilc_ipv6_source;
+	/* configured and active addresses */
+	ipmi_ipv6_addr_t	*ilc_ipv6_addrs;
+	uint8_t			ilc_ipv6_naddrs;
+	/* route targets */
+	ipmi_ipv6_addr_t	*ilc_ipv6_routes;
+	uint8_t			ilc_ipv6_nroutes;
+	uint16_t		ilc_vlan_id;
+	boolean_t		ilc_ipv4_enabled;
+	boolean_t		ilc_ipv6_enabled;
+	boolean_t		ilc_vlan_enabled;
 } ipmi_lan_config_t;
 
 /* values for ilc_ipaddr_source */
@@ -336,6 +345,7 @@ typedef struct ipmi_lan_config {
 extern int ipmi_lan_get_config(ipmi_handle_t *, int,
     ipmi_lan_config_t *);
 extern int ipmi_lan_set_config(ipmi_handle_t *, int, ipmi_lan_config_t *, int);
+extern void ipmi_lan_free_config(ipmi_lan_config_t *);
 
 /*
  * SEL (System Event Log) commands.  Currently the library only provides

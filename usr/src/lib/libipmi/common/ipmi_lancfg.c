@@ -62,24 +62,27 @@ typedef struct ipmi_cmd_lan_set_config {
 #define	IPMI_LAN_SET_LEN(dlen)	\
 	(offsetof(ipmi_cmd_lan_set_config_t, ilsc_data) + (dlen))
 
-#define	IPMI_LAN_PARAM_SET_IN_PROGRESS		0
-#define	IPMI_LAN_PARAM_IP_ADDR			3
-#define	IPMI_LAN_PARAM_IP_SOURCE		4
-#define	IPMI_LAN_PARAM_MAC_ADDR			5
-#define	IPMI_LAN_PARAM_SUBNET_MASK		6
-#define	IPMI_LAN_PARAM_GATEWAY_ADDR		12
+#define	IPMI_LAN_PARAM_SET_IN_PROGRESS			0
+#define	IPMI_LAN_PARAM_IP_ADDR				3
+#define	IPMI_LAN_PARAM_IP_SOURCE			4
+#define	IPMI_LAN_PARAM_MAC_ADDR				5
+#define	IPMI_LAN_PARAM_SUBNET_MASK			6
+#define	IPMI_LAN_PARAM_GATEWAY_ADDR			12
 
 /* VLAN/IPv6 parameters are currently only supported for GET operations */
-#define	IPMI_LAN_PARAM_VLAN_ID			20
-#define	IPMI_LAN_PARAM_IPVX_ENABLED		51
-#define	IPMI_LAN_PARAM_IPV6_NUM_ADDRS		55
-#define	IPMI_LAN_PARAM_IPV6_SADDR		56
-#define	IPMI_LAN_PARAM_IPV6_DADDR		59
-#define	IPMI_LAN_PARAM_IPV6_ROUTER_CONFIG	64
-#define	IPMI_LAN_PARAM_IPV6_STATIC_ROUTE1	65
-#define	IPMI_LAN_PARAM_IPV6_STATIC_ROUTE2	68
-#define	IPMI_LAN_PARAM_IPV6_NUM_DYN_ROUTES	72
-#define	IPMI_LAN_PARAM_IPV6_DYN_ROUTE		73
+#define	IPMI_LAN_PARAM_VLAN_ID				20
+#define	IPMI_LAN_PARAM_IPVX_ENABLED			51
+#define	IPMI_LAN_PARAM_IPV6_NUM_ADDRS			55
+#define	IPMI_LAN_PARAM_IPV6_SADDR			56
+#define	IPMI_LAN_PARAM_IPV6_DADDR			59
+#define	IPMI_LAN_PARAM_IPV6_ROUTER_CONFIG		64
+#define	IPMI_LAN_PARAM_IPV6_STATIC_ROUTE1		65
+#define	IPMI_LAN_PARAM_IPV6_STATIC_ROUTE1_PFXLEN	67
+#define	IPMI_LAN_PARAM_IPV6_STATIC_ROUTE2		69
+#define	IPMI_LAN_PARAM_IPV6_STATIC_ROUTE2_PFXLEN	71
+#define	IPMI_LAN_PARAM_IPV6_NUM_DYN_ROUTES		72
+#define	IPMI_LAN_PARAM_IPV6_DYN_ROUTE			73
+#define	IPMI_LAN_PARAM_IPV6_DYN_ROUTE_PFXLEN		76
 
 #define	IPMI_LAN_SET_COMPLETE			0x0
 #define	IPMI_LAN_SET_INPROGRESS			0x1
@@ -153,7 +156,7 @@ struct ipmi_lan_ipv6_addr {
 	uint8_t		ipva_selector;
 	uint8_t		ipva_source;
 	uint8_t		ipva_addr[16];
-	uint8_t		ipva_prefixlen;
+	uint8_t		ipva_pfxlen;
 	uint8_t		ipva_status;
 };
 
@@ -171,16 +174,30 @@ struct ipmi_lan_vlan_cfg {
 	    ivla_vlan_enable	:1);
 };
 
+void
+ipmi_lan_free_config(ipmi_lan_config_t *cfgp)
+{
+	if (cfgp == NULL)
+		return;
+
+	if (cfgp->ilc_ipv6_naddrs > 0) {
+		free(cfgp->ilc_ipv6_addrs);
+	}
+	if (cfgp->ilc_ipv6_nroutes > 0) {
+		free(cfgp->ilc_ipv6_routes);
+	}
+}
+
 int
 ipmi_lan_get_config(ipmi_handle_t *ihp, int channel, ipmi_lan_config_t *cfgp)
 {
 	uint8_t set, enabled, route_cfg, ndynroutes = 0;
+	uint_t max_ipv6_addrs, max_ipv6_routes;
 	int i, j;
-	ipmi_lan_entry_t *lep;
 	struct ipmi_lan_ipv6_numaddrs numaddrs = { 0 };
-	struct ipmi_lan_ipv6_addr addrv6 = { 0 };
 	struct ipmi_lan_vlan_cfg vlancfg = { 0 };
-	struct in6_addr sroute1 = { 0 }, sroute2 = { 0 }, droute = { 0 };
+	struct in6_addr sroute1 = { 0 }, sroute2 = { 0 };
+	uint8_t sroute1_pfxlen, sroute2_pfxlen;
 	boolean_t found_addr = B_FALSE;
 	boolean_t stat_routes_enabled = B_FALSE, dyn_routes_enabled = B_FALSE;
 
@@ -226,7 +243,8 @@ ipmi_lan_get_config(ipmi_handle_t *ihp, int channel, ipmi_lan_config_t *cfgp)
 	/* If IPv4 support is enabled, gather the current configuration. */
 	if (cfgp->ilc_ipv4_enabled == B_TRUE) {
 		for (i = 0; i < IPMI_LAN_IPV4_NENTRIES; i++) {
-			lep = &ipmi_lan_ipv4_table[i];
+			ipmi_lan_entry_t *lep = &ipmi_lan_ipv4_table[i];
+
 			if (ipmi_lan_get_param(ihp, channel, lep->ile_param,
 			    lep->ile_set, lep->ile_block,
 			    (char *)cfgp + lep->ile_offset, lep->ile_len) != 0)
@@ -252,10 +270,10 @@ ipmi_lan_get_config(ipmi_handle_t *ihp, int channel, ipmi_lan_config_t *cfgp)
 		return (0);
 
 	/*
-	 * First check for a static address.  If we can't find one, we'll look
-	 * for a dynamic address.  The spec allows for multiple IPv6 static and
-	 * dynamic addresses to exist in various states.  For simplicity, we
-	 * will search for the first address that is configured and active.
+	 * First check for a static addresses.  If we can't find any, we'll
+	 * look for dynamic addresses.  The spec allows for multiple static and
+	 * dynamic addresses to exist in various states.  We return only
+	 * addresses that are configured and active.
 	 */
 	if (ipmi_lan_get_param(ihp, channel, IPMI_LAN_PARAM_IPV6_NUM_ADDRS, 0,
 	    0, &numaddrs, sizeof (numaddrs)) != 0) {
@@ -263,23 +281,43 @@ ipmi_lan_get_config(ipmi_handle_t *ihp, int channel, ipmi_lan_config_t *cfgp)
 		return (-1);
 	}
 
-	for (i = 0; i < numaddrs.inva_num_saddrs; i++) {
+	max_ipv6_addrs = numaddrs.inva_num_saddrs + numaddrs.inva_num_daddrs;
+	if (max_ipv6_addrs > 0 &&
+	    (cfgp->ilc_ipv6_addrs = ipmi_zalloc(ihp,
+	    sizeof (ipmi_ipv6_addr_t) * max_ipv6_addrs)) == NULL) {
+		/* errno set */
+		goto err;
+	}
+	for (i = 0, j = 0; i < numaddrs.inva_num_saddrs; i++) {
+		struct ipmi_lan_ipv6_addr addrv6 = { 0 };
+
 		if (ipmi_lan_get_param(ihp, channel, IPMI_LAN_PARAM_IPV6_SADDR,
-		    i, 0, &addrv6, sizeof (addrv6)) == 0 &&
+		    i, 0, &addrv6, sizeof (struct ipmi_lan_ipv6_addr)) == 0 &&
 		    addrv6.ipva_status == 0) {
 			found_addr = B_TRUE;
 			cfgp->ilc_ipv6_source = IPMI_LAN_SRC_STATIC;
-			break;
+			(void) memcpy(cfgp->ilc_ipv6_addrs[j].iiv6_addr,
+			    addrv6.ipva_addr, sizeof (addrv6.ipva_addr));
+			cfgp->ilc_ipv6_addrs[j].iiv6_pfxlen =
+			    addrv6.ipva_pfxlen;
+			cfgp->ilc_ipv6_naddrs++;
+			j++;
 		}
 	}
-	for (i = 0; found_addr == B_FALSE && i < numaddrs.inva_num_daddrs;
-	    i++) {
+	for (i = 0; i < numaddrs.inva_num_daddrs; i++) {
+		struct ipmi_lan_ipv6_addr addrv6 = { 0 };
+
 		if (ipmi_lan_get_param(ihp, channel, IPMI_LAN_PARAM_IPV6_DADDR,
-		    i, 0, &addrv6, sizeof (addrv6)) == 0 &&
+		    i, 0, &addrv6, sizeof (struct ipmi_lan_ipv6_addr)) == 0 &&
 		    addrv6.ipva_status == 0) {
 			found_addr = B_TRUE;
 			cfgp->ilc_ipv6_source = IPMI_LAN_SRC_DHCP;
-			break;
+			(void) memcpy(cfgp->ilc_ipv6_addrs[j].iiv6_addr,
+			    addrv6.ipva_addr, sizeof (addrv6.ipva_addr));
+			cfgp->ilc_ipv6_addrs[j].iiv6_pfxlen =
+			    addrv6.ipva_pfxlen;
+			cfgp->ilc_ipv6_naddrs++;
+			j++;
 		}
 	}
 
@@ -294,9 +332,6 @@ ipmi_lan_get_config(ipmi_handle_t *ihp, int channel, ipmi_lan_config_t *cfgp)
 		return (0);
 	}
 
-	(void) memcpy(cfgp->ilc_ipv6_addr, addrv6.ipva_addr,
-	    sizeof (addrv6.ipva_addr));
-
 	/*
 	 * For the case that static addressing was used for the SP IP then we
 	 * need to get the IPMI_LAN_PARAM_IPV6_ROUTER_CONFIG parameter to
@@ -309,7 +344,7 @@ ipmi_lan_get_config(ipmi_handle_t *ihp, int channel, ipmi_lan_config_t *cfgp)
 	    ipmi_lan_get_param(ihp, channel, IPMI_LAN_PARAM_IPV6_ROUTER_CONFIG,
 	    0, 0, &route_cfg, sizeof (route_cfg)) != 0) {
 		/* errno set */
-		return (-1);
+		goto err;
 	}
 
 	if (cfgp->ilc_ipv6_source == IPMI_LAN_SRC_STATIC) {
@@ -321,60 +356,84 @@ ipmi_lan_get_config(ipmi_handle_t *ihp, int channel, ipmi_lan_config_t *cfgp)
 		dyn_routes_enabled = B_TRUE;
 	}
 
-	/*
-	 * The IPMI spec allows for a max of two static IPv6 routes to be
-	 * configured.
-	 */
-	j = cfgp->ilc_ipv6_nroutes = 0;
-	if (stat_routes_enabled == B_TRUE) {
-		cfgp->ilc_ipv6_nroutes = 2;
-		if (ipmi_lan_get_param(ihp, channel,
-		    IPMI_LAN_PARAM_IPV6_STATIC_ROUTE1, 0, 0, &sroute1,
-		    sizeof (sroute1)) != 0 ||
-		    ipmi_lan_get_param(ihp, channel,
-		    IPMI_LAN_PARAM_IPV6_STATIC_ROUTE2, 0, 0, &sroute1,
-		    sizeof (sroute2)) != 0) {
-			/* errno set */
-			return (-1);
-		}
-		if (IN6_IS_ADDR_UNSPECIFIED(&sroute1)) {
-			cfgp->ilc_ipv6_nroutes++;
-			(void) memcpy(cfgp->ilc_ipv6_routes[j++], &sroute1,
-			    sizeof (sroute1));
-		}
-		if (IN6_IS_ADDR_UNSPECIFIED(&sroute2) != B_TRUE) {
-			cfgp->ilc_ipv6_nroutes++;
-			(void) memcpy(cfgp->ilc_ipv6_routes[j++], &sroute2,
-			    sizeof (sroute2));
-		}
-	}
-
-	/*
-	 * RFC4861 states that if dynamic routing is used, a host should retain
-	 * a minimum of two routes, though more is recommended.  Retrieve the
-	 * number of dynamic routes and then iterate through them and gather
-	 * up to the first two addresses.
-	 */
 	if (dyn_routes_enabled == B_TRUE &&
 	    ipmi_lan_get_param(ihp, channel, IPMI_LAN_PARAM_IPV6_NUM_DYN_ROUTES,
 	    0, 0, &ndynroutes, sizeof (ndynroutes)) != 0) {
 		/* errno set */
-		return (-1);
+		goto err;
 	}
+
+	max_ipv6_routes = ndynroutes;
+	/*
+	 * The IPMI spec allows for a max of two static IPv6 routes to be
+	 * configured.
+	 */
+	if (stat_routes_enabled == B_TRUE)
+		max_ipv6_routes += 2;
+
+	if ((cfgp->ilc_ipv6_routes = ipmi_zalloc(ihp,
+	    sizeof (ipmi_ipv6_addr_t) * max_ipv6_routes)) == NULL) {
+		/* errno set */
+		goto err;
+	}
+
+	j = cfgp->ilc_ipv6_nroutes = 0;
+	if (stat_routes_enabled == B_TRUE) {
+		if (ipmi_lan_get_param(ihp, channel,
+		    IPMI_LAN_PARAM_IPV6_STATIC_ROUTE1, 0, 0, &sroute1,
+		    sizeof (sroute1)) != 0 ||
+		    ipmi_lan_get_param(ihp, channel,
+		    IPMI_LAN_PARAM_IPV6_STATIC_ROUTE1_PFXLEN, 0, 0,
+		    &sroute1_pfxlen, sizeof (uint8_t)) != 0 ||
+		    ipmi_lan_get_param(ihp, channel,
+		    IPMI_LAN_PARAM_IPV6_STATIC_ROUTE2, 0, 0, &sroute1,
+		    sizeof (sroute2)) != 0 ||
+		    ipmi_lan_get_param(ihp, channel,
+		    IPMI_LAN_PARAM_IPV6_STATIC_ROUTE2_PFXLEN, 0, 0,
+		    &sroute2_pfxlen, sizeof (uint8_t)) != 0) {
+			/* errno set */
+			goto err;
+		}
+		if (IN6_IS_ADDR_UNSPECIFIED(&sroute1) != B_TRUE) {
+			cfgp->ilc_ipv6_nroutes++;
+			(void) memcpy(cfgp->ilc_ipv6_routes[j].iiv6_addr,
+			    &sroute1, sizeof (sroute1));
+			cfgp->ilc_ipv6_routes[j++].iiv6_pfxlen =
+			    sroute1_pfxlen;
+		}
+		if (IN6_IS_ADDR_UNSPECIFIED(&sroute2) != B_TRUE) {
+			cfgp->ilc_ipv6_nroutes++;
+			(void) memcpy(cfgp->ilc_ipv6_routes[j].iiv6_addr,
+			    &sroute2, sizeof (sroute2));
+			cfgp->ilc_ipv6_routes[j++].iiv6_pfxlen =
+			    sroute2_pfxlen;
+		}
+	}
+
 	for (i = 0; i < ndynroutes && i < 2; i++) {
+		struct in6_addr droute = { 0 };
+		uint8_t droute_pfxlen;
+
 		if (ipmi_lan_get_param(ihp, channel,
 		    IPMI_LAN_PARAM_IPV6_DYN_ROUTE, i, 0, &droute,
-		    sizeof (droute)) != 0)
+		    sizeof (droute)) != 0 ||
+		    ipmi_lan_get_param(ihp, channel,
+		    IPMI_LAN_PARAM_IPV6_DYN_ROUTE_PFXLEN, i, 0, &droute_pfxlen,
+		    sizeof (uint8_t)) != 0)
 			/* errno set */
-			return (-1);
+			goto err;
 
 		if (IN6_IS_ADDR_UNSPECIFIED(&droute) != B_TRUE) {
-			(void) memcpy(cfgp->ilc_ipv6_routes[j++], &droute,
-			    sizeof (droute));
+			(void) memcpy(cfgp->ilc_ipv6_routes[j].iiv6_addr,
+			    &droute, sizeof (droute));
+			cfgp->ilc_ipv6_routes[j++].iiv6_pfxlen = droute_pfxlen;
 			cfgp->ilc_ipv6_nroutes++;
 		}
 	}
 	return (0);
+err:
+	ipmi_lan_free_config(cfgp);
+	return (-1);
 }
 
 static int
@@ -423,8 +482,6 @@ ipmi_lan_set_config(ipmi_handle_t *ihp, int channel, ipmi_lan_config_t *cfgp,
     int mask)
 {
 	uint8_t set;
-	int i;
-	ipmi_lan_entry_t *lep;
 
 	/*
 	 * Cancel any pending transaction, then open a new transaction.
@@ -441,8 +498,9 @@ ipmi_lan_set_config(ipmi_handle_t *ihp, int channel, ipmi_lan_config_t *cfgp,
 	/*
 	 * Iterate over all parameters and set them.
 	 */
-	for (i = 0; i < IPMI_LAN_IPV4_NENTRIES; i++) {
-		lep = &ipmi_lan_ipv4_table[i];
+	for (int i = 0; i < IPMI_LAN_IPV4_NENTRIES; i++) {
+		ipmi_lan_entry_t *lep = &ipmi_lan_ipv4_table[i];
+
 		if (!(lep->ile_mask & mask))
 			continue;
 

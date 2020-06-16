@@ -68,6 +68,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	ipmi_get_sensor_reading;
 	ipmi_get_sensor_thresholds;
 	ipmi_is_sun_ilom;
+	ipmi_lan_free_config;
 	ipmi_lan_get_config;
 	ipmi_lan_set_config;
 	ipmi_open;
