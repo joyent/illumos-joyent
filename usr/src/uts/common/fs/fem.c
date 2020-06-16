@@ -4040,8 +4040,11 @@ fsem_install(
 	int	error;
 	struct fem_node	nnode;
 
-	/* If this vfs hasn't been properly initialized, fail the install */
-	if (vfsp->vfs_implp == NULL)
+	/*
+	 * If this vfs hasn't been properly initialized or has been unmounted,
+	 * fail the install.
+	 */
+	if (vfsp->vfs_implp == NULL || (vfsp->vfs_flag & VFS_UNMOUNTED))
 		return (EINVAL);
 
 	nnode.fn_available = arg;
