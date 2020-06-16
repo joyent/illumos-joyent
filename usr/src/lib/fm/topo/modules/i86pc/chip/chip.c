@@ -213,11 +213,14 @@ create_strand(topo_mod_t *mod, tnode_t *pnode, nvlist_t *cpu,
 {
 	tnode_t *strand;
 	int32_t strandid, cpuid;
+	uint32_t ucode_rev;
 	int err, perr, nerr = 0;
 	nvlist_t *fmri;
 	char *serial = NULL;
 	char *part = NULL;
 	char *rev = NULL;
+	char *ucode_rev_str;
+	topo_ufm_slot_info_t slotinfo = { 0 };
 
 	if ((err = nvlist_lookup_int32(cpu, FM_PHYSCPU_INFO_STRAND_ID,
 	    &strandid)) != 0) {
@@ -329,6 +332,23 @@ create_strand(topo_mod_t *mod, tnode_t *pnode, nvlist_t *cpu,
 
 		nvlist_free(fmri);
 		topo_mod_strfree(mod, serial);
+	}
+
+	if (nvlist_lookup_uint32(cpu, FM_PHYSCPU_INFO_UCODE_REV, &ucode_rev) !=
+	    0 ||
+	    asprintf(&ucode_rev_str, "%d", ucode_rev) < 0) {
+		whinge(mod, NULL, "failed to lookup ucode version on %s=%d",
+		    STRAND, strandid);
+	} else {
+		slotinfo.usi_version = ucode_rev_str;
+		slotinfo.usi_active = B_TRUE;
+		slotinfo.usi_mode = TOPO_UFM_SLOT_MODE_WO;
+		if (topo_node_range_create(mod, strand, UFM, 0, 0) != 0 ||
+		    topo_mod_create_ufm(mod, strand, "microcode", &slotinfo) ==
+		    NULL) {
+			whinge(mod, NULL, "failed to create %s node on %s/%d",
+			    UFM, STRAND, strandid);
+		}
 	}
 
 	return (err == 0 && nerr == 0 ? 0 : -1);

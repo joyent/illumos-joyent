@@ -167,6 +167,7 @@ extern uint_t cmi_hdl_smb_chipid(cmi_hdl_t);
 extern nvlist_t *cmi_hdl_smb_bboard(cmi_hdl_t);
 extern uint_t cmi_hdl_chipsig(cmi_hdl_t);
 extern const char *cmi_hdl_chipident(cmi_hdl_t);
+extern uint32_t cmi_hdl_ucode_rev(cmi_hdl_t);
 
 extern int cmi_hdl_online(cmi_hdl_t, int, int *);
 

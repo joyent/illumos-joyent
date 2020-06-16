@@ -21,7 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/stat.h>
@@ -204,6 +204,8 @@ populate_cpu(nvlist_t **nvlp, cmi_hdl_t hdl)
 	    (uint32_t)cmi_hdl_getsockettype(hdl),
 	    FM_PHYSCPU_INFO_CPU_ID, DATA_TYPE_INT32,
 	    (int32_t)cmi_hdl_logical_id(hdl),
+	    FM_PHYSCPU_INFO_UCODE_REV, DATA_TYPE_UINT32,
+	    cmi_hdl_ucode_rev(hdl),
 	    NULL);
 
 	/*

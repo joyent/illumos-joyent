@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2019, Joyent, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -125,6 +125,8 @@ struct cmi_hdl_ops {
 	uint_t (*cmio_chipsig)(cmi_hdl_impl_t *);
 
 	id_t (*cmio_logical_id)(cmi_hdl_impl_t *);
+	uint32_t (*cmio_ucode_rev)(cmi_hdl_impl_t *);
+
 	/*
 	 * These ops are optional in an implementation.
 	 */
@@ -866,6 +868,13 @@ ntv_online(cmi_hdl_impl_t *hdl, int new_status, int *old_status)
 
 	return (rc);
 }
+
+static uint32_t
+ntv_ucode_rev(cmi_hdl_impl_t *hdl)
+{
+	return (cpuid_get_ucode_rev(HDLPRIV(hdl)));
+}
+
 
 #else	/* __xpv */
 
@@ -1641,6 +1650,14 @@ CMI_HDL_OPFUNC(smb_bboard, nvlist_t *)
 CMI_HDL_OPFUNC(chipsig, uint_t)
 /* END CSTYLED */
 
+#ifndef __xpv
+uint32_t
+cmi_hdl_ucode_rev(cmi_hdl_t ophdl)
+{
+	return (ntv_ucode_rev(IMPLHDL(ophdl)));
+}
+#endif
+
 boolean_t
 cmi_hdl_is_cmt(cmi_hdl_t ophdl)
 {
@@ -2018,6 +2035,7 @@ static const struct cmi_hdl_ops cmi_hdl_ops = {
 	xpv_getsocketstr,	/* cmio_getsocketstr */
 	xpv_chipsig,		/* cmio_chipsig */
 	xpv_logical_id,		/* cmio_logical_id */
+	NULL,			/* cmio_ucoderev */
 	NULL,			/* cmio_getcr4 */
 	NULL,			/* cmio_setcr4 */
 	xpv_rdmsr,		/* cmio_rdmsr */
@@ -2051,6 +2069,7 @@ static const struct cmi_hdl_ops cmi_hdl_ops = {
 	ntv_getsocketstr,	/* cmio_getsocketstr */
 	ntv_chipsig,		/* cmio_chipsig */
 	ntv_logical_id,		/* cmio_logical_id */
+	ntv_ucode_rev,		/* cmio_ucoderev */
 	ntv_getcr4,		/* cmio_getcr4 */
 	ntv_setcr4,		/* cmio_setcr4 */
 	ntv_rdmsr,		/* cmio_rdmsr */

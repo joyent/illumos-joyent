@@ -5928,6 +5928,12 @@ cpuid_get_dtlb_nent(cpu_t *cpu, size_t pagesize)
 	return (dtlb_nent);
 }
 
+uint32_t
+cpuid_get_ucode_rev(cpu_t *cpu)
+{
+	return (cpu->cpu_m.mcpu_ucode_info->cui_rev);
+}
+
 /*
  * Return 0 if the erratum is not present or not applicable, positive
  * if it is, and negative if the status of the erratum is unknown.
