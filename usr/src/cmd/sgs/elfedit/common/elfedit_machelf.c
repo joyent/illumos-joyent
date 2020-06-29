@@ -278,17 +278,20 @@ elfedit32_init_obj_state(const char *file, int fd, Elf *elf)
 		switch (_cache->sec_shdr->sh_type) {
 		case SHT_SYMTAB_SHNDX:
 			symtab = get_symtab(obj_state, _cache);
-			symtab->symt_xshndx = ndx;
+			if (symtab != NULL)
+				symtab->symt_xshndx = ndx;
 			break;
 
 		case SHT_SUNW_syminfo:
 			symtab = get_symtab(obj_state, _cache);
-			symtab->symt_syminfo = ndx;
+			if (symtab != NULL)
+				symtab->symt_syminfo = ndx;
 			break;
 
 		case SHT_SUNW_versym:
 			symtab = get_symtab(obj_state, _cache);
-			symtab->symt_versym = ndx;
+			if (symtab != NULL)
+				symtab->symt_versym = ndx;
 			break;
 		}
 	}
