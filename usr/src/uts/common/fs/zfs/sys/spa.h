@@ -26,8 +26,9 @@
  * Copyright 2013 Saso Kiselkov. All rights reserved.
  * Copyright (c) 2014 Integros [integros.com]
  * Copyright 2019 Joyent, Inc.
- * Copyright (c) 2017 Datto Inc.
+ * Copyright (c) 2017, 2019, Datto Inc. All rights reserved.
  * Copyright (c) 2017, Intel Corporation.
+ * Copyright 2020 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 #ifndef _SYS_SPA_H
@@ -759,7 +760,8 @@ extern int spa_get_stats(const char *pool, nvlist_t **config, char *altroot,
     size_t buflen);
 extern int spa_create(const char *pool, nvlist_t *nvroot, nvlist_t *props,
     nvlist_t *zplprops, struct dsl_crypto_params *dcp);
-extern int spa_import_rootpool(char *devpath, char *devid);
+extern int spa_import_rootpool(char *devpath, char *devid, uint64_t pool_guid,
+    uint64_t vdev_guid);
 extern int spa_import(const char *pool, nvlist_t *config, nvlist_t *props,
     uint64_t flags);
 extern nvlist_t *spa_tryimport(nvlist_t *tryconfig);
@@ -773,6 +775,7 @@ extern void spa_async_request(spa_t *spa, int flag);
 extern void spa_async_unrequest(spa_t *spa, int flag);
 extern void spa_async_suspend(spa_t *spa);
 extern void spa_async_resume(spa_t *spa);
+extern int spa_async_tasks(spa_t *spa);
 extern spa_t *spa_inject_addref(char *pool);
 extern void spa_inject_delref(spa_t *spa);
 extern void spa_scan_stat_init(spa_t *spa);

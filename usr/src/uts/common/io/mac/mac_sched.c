@@ -4443,9 +4443,9 @@ mac_tx_send(mac_client_handle_t mch, mac_ring_handle_t ring, mblk_t *mp_chain,
 				mac_hw_emul(&mp, NULL, NULL, MAC_ALL_EMULS);
 				if (mp != NULL) {
 					(dst_flow_ent->fe_cb_fn)(
-						dst_flow_ent->fe_cb_arg1,
-						dst_flow_ent->fe_cb_arg2,
-						mp, do_switch);
+					    dst_flow_ent->fe_cb_arg1,
+					    dst_flow_ent->fe_cb_arg2,
+					    mp, do_switch);
 				}
 
 			}

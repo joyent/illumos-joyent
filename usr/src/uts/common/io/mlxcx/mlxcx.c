@@ -12,6 +12,7 @@
 /*
  * Copyright 2020, The University of Queensland
  * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 /*
@@ -272,11 +273,16 @@
  * before making a WQE for it.
  *
  * After a completion event occurs, the packet is either discarded (and the
- * buffer_t returned to the free list), or it is readied for loaning to MAC.
+ * buffer_t returned to the free list), or it is readied for loaning to MAC
+ * and placed on the "loaned" list in the mlxcx_buffer_shard_t.
  *
  * Once MAC and the rest of the system have finished with the packet, they call
- * freemsg() on its mblk, which will call mlxcx_buf_mp_return and return the
- * buffer_t to the free list.
+ * freemsg() on its mblk, which will call mlxcx_buf_mp_return. At this point
+ * the fate of the buffer_t is determined by the state of the
+ * mlxcx_buffer_shard_t. When the shard is in its normal state the buffer_t
+ * will be returned to the free list, potentially to be recycled and used
+ * again. But if the shard is draining (E.g. after a ring stop) there will be
+ * no recycling and the buffer_t is immediately destroyed.
  *
  * At detach/teardown time, buffers are only every destroyed from the free list.
  *
@@ -288,18 +294,18 @@
  *                         v
  *                    +----+----+
  *                    | created |
- *                    +----+----+
- *                         |
- *                         |
- *                         | mlxcx_buf_return
- *                         |
- *                         v
- * mlxcx_buf_destroy  +----+----+
- *          +---------|  free   |<---------------+
- *          |         +----+----+                |
+ *                    +----+----+                        +------+
+ *                         |                             | dead |
+ *                         |                             +------+
+ *                         | mlxcx_buf_return                ^
+ *                         |                                 |
+ *                         v                                 | mlxcx_buf_destroy
+ * mlxcx_buf_destroy  +----+----+          +-----------+     |
+ *          +---------|  free   |<------no-| draining? |-yes-+
+ *          |         +----+----+          +-----------+
+ *          |              |                     ^
  *          |              |                     |
- *          |              |                     | mlxcx_buf_return
- *          v              | mlxcx_buf_take      |
+ *          v              | mlxcx_buf_take      | mlxcx_buf_return
  *      +---+--+           v                     |
  *      | dead |       +---+---+                 |
  *      +------+       | on WQ |- - - - - - - - >O
@@ -453,6 +459,61 @@ uint_t mlxcx_doorbell_tries = MLXCX_DOORBELL_TRIES_DFLT;
 uint_t mlxcx_stuck_intr_count = MLXCX_STUCK_INTR_COUNT_DFLT;
 
 static void
+mlxcx_load_prop_defaults(mlxcx_t *mlxp)
+{
+	mlxcx_drv_props_t *p = &mlxp->mlx_props;
+	mlxcx_port_t *port = &mlxp->mlx_ports[0];
+
+	VERIFY((mlxp->mlx_attach & MLXCX_ATTACH_PORTS) != 0);
+	VERIFY((mlxp->mlx_attach & (MLXCX_ATTACH_CQS | MLXCX_ATTACH_WQS)) == 0);
+
+	/*
+	 * Currently we have different queue size defaults for two
+	 * categories of queues. One set for devices which support a
+	 * maximum speed of 10Gb/s, and another for those above that.
+	 */
+	if ((port->mlp_max_proto & (MLXCX_PROTO_25G | MLXCX_PROTO_40G |
+	    MLXCX_PROTO_50G | MLXCX_PROTO_100G)) != 0) {
+		p->mldp_cq_size_shift_default = MLXCX_CQ_SIZE_SHIFT_25G;
+		p->mldp_rq_size_shift_default = MLXCX_RQ_SIZE_SHIFT_25G;
+		p->mldp_sq_size_shift_default = MLXCX_SQ_SIZE_SHIFT_25G;
+	} else if ((port->mlp_max_proto & (MLXCX_PROTO_100M | MLXCX_PROTO_1G |
+	    MLXCX_PROTO_10G)) != 0) {
+		p->mldp_cq_size_shift_default = MLXCX_CQ_SIZE_SHIFT_DFLT;
+		p->mldp_rq_size_shift_default = MLXCX_RQ_SIZE_SHIFT_DFLT;
+		p->mldp_sq_size_shift_default = MLXCX_SQ_SIZE_SHIFT_DFLT;
+	} else {
+		mlxcx_warn(mlxp, "Encountered a port with a speed we don't "
+		    "recognize. Proto: 0x%x", port->mlp_max_proto);
+		p->mldp_cq_size_shift_default = MLXCX_CQ_SIZE_SHIFT_DFLT;
+		p->mldp_rq_size_shift_default = MLXCX_RQ_SIZE_SHIFT_DFLT;
+		p->mldp_sq_size_shift_default = MLXCX_SQ_SIZE_SHIFT_DFLT;
+	}
+}
+
+/*
+ * Properties which may have different defaults based on hardware
+ * characteristics.
+ */
+static void
+mlxcx_load_model_props(mlxcx_t *mlxp)
+{
+	mlxcx_drv_props_t *p = &mlxp->mlx_props;
+
+	mlxcx_load_prop_defaults(mlxp);
+
+	p->mldp_cq_size_shift = ddi_getprop(DDI_DEV_T_ANY, mlxp->mlx_dip,
+	    DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS, "cq_size_shift",
+	    p->mldp_cq_size_shift_default);
+	p->mldp_sq_size_shift = ddi_getprop(DDI_DEV_T_ANY, mlxp->mlx_dip,
+	    DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS, "sq_size_shift",
+	    p->mldp_sq_size_shift_default);
+	p->mldp_rq_size_shift = ddi_getprop(DDI_DEV_T_ANY, mlxp->mlx_dip,
+	    DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS, "rq_size_shift",
+	    p->mldp_rq_size_shift_default);
+}
+
+static void
 mlxcx_load_props(mlxcx_t *mlxp)
 {
 	mlxcx_drv_props_t *p = &mlxp->mlx_props;
@@ -460,16 +521,6 @@ mlxcx_load_props(mlxcx_t *mlxp)
 	p->mldp_eq_size_shift = ddi_getprop(DDI_DEV_T_ANY, mlxp->mlx_dip,
 	    DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS, "eq_size_shift",
 	    MLXCX_EQ_SIZE_SHIFT_DFLT);
-	p->mldp_cq_size_shift = ddi_getprop(DDI_DEV_T_ANY, mlxp->mlx_dip,
-	    DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS, "cq_size_shift",
-	    MLXCX_CQ_SIZE_SHIFT_DFLT);
-	p->mldp_sq_size_shift = ddi_getprop(DDI_DEV_T_ANY, mlxp->mlx_dip,
-	    DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS, "sq_size_shift",
-	    MLXCX_SQ_SIZE_SHIFT_DFLT);
-	p->mldp_rq_size_shift = ddi_getprop(DDI_DEV_T_ANY, mlxp->mlx_dip,
-	    DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS, "rq_size_shift",
-	    MLXCX_RQ_SIZE_SHIFT_DFLT);
-
 	p->mldp_cqemod_period_usec = ddi_getprop(DDI_DEV_T_ANY, mlxp->mlx_dip,
 	    DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS, "cqemod_period_usec",
 	    MLXCX_CQEMOD_PERIOD_USEC_DFLT);
@@ -521,6 +572,19 @@ mlxcx_load_props(mlxcx_t *mlxp)
 	p->mldp_wq_check_interval_sec = ddi_getprop(DDI_DEV_T_ANY,
 	    mlxp->mlx_dip, DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS,
 	    "wq_check_interval_sec", MLXCX_WQ_CHECK_INTERVAL_SEC_DFLT);
+
+	p->mldp_rx_per_cq = ddi_getprop(DDI_DEV_T_ANY, mlxp->mlx_dip,
+	    DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS, "rx_limit_per_completion",
+	    MLXCX_RX_PER_CQ_DEFAULT);
+
+	if (p->mldp_rx_per_cq < MLXCX_RX_PER_CQ_MIN ||
+	    p->mldp_rx_per_cq > MLXCX_RX_PER_CQ_MAX) {
+		mlxcx_warn(mlxp, "!rx_limit_per_completion = %u is "
+		    "out of range. Defaulting to: %d. Valid values are from "
+		    "%d to %d", p->mldp_rx_per_cq, MLXCX_RX_PER_CQ_DEFAULT,
+		    MLXCX_RX_PER_CQ_MIN, MLXCX_RX_PER_CQ_MAX);
+		p->mldp_rx_per_cq = MLXCX_RX_PER_CQ_DEFAULT;
+	}
 }
 
 void
@@ -700,13 +764,19 @@ mlxcx_mlbs_teardown(mlxcx_t *mlxp, mlxcx_buf_shard_t *s)
 	mlxcx_buffer_t *buf;
 
 	mutex_enter(&s->mlbs_mtx);
+
 	while (!list_is_empty(&s->mlbs_busy))
 		cv_wait(&s->mlbs_free_nonempty, &s->mlbs_mtx);
-	while ((buf = list_head(&s->mlbs_free)) != NULL) {
+
+	while (!list_is_empty(&s->mlbs_loaned))
+		cv_wait(&s->mlbs_free_nonempty, &s->mlbs_mtx);
+
+	while ((buf = list_head(&s->mlbs_free)) != NULL)
 		mlxcx_buf_destroy(mlxp, buf);
-	}
+
 	list_destroy(&s->mlbs_free);
 	list_destroy(&s->mlbs_busy);
+	list_destroy(&s->mlbs_loaned);
 	mutex_exit(&s->mlbs_mtx);
 
 	cv_destroy(&s->mlbs_free_nonempty);
@@ -1277,6 +1347,8 @@ mlxcx_mlbs_create(mlxcx_t *mlxp)
 	    offsetof(mlxcx_buffer_t, mlb_entry));
 	list_create(&s->mlbs_free, sizeof (mlxcx_buffer_t),
 	    offsetof(mlxcx_buffer_t, mlb_entry));
+	list_create(&s->mlbs_loaned, sizeof (mlxcx_buffer_t),
+	    offsetof(mlxcx_buffer_t, mlb_entry));
 	cv_init(&s->mlbs_free_nonempty, NULL, CV_DRIVER, NULL);
 
 	list_insert_tail(&mlxp->mlx_buf_shards, s);
@@ -1684,6 +1756,11 @@ mlxcx_setup_ports(mlxcx_t *mlxp)
 			mutex_exit(&p->mlp_mtx);
 			goto err;
 		}
+		if (!mlxcx_cmd_query_port_fec(mlxp, p)) {
+			mutex_exit(&p->mlp_mtx);
+			goto err;
+		}
+		p->mlp_fec_requested = LINK_FEC_AUTO;
 
 		mutex_exit(&p->mlp_mtx);
 	}
@@ -2594,6 +2671,8 @@ mlxcx_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		goto err;
 	}
 	mlxp->mlx_attach |= MLXCX_ATTACH_PORTS;
+
+	mlxcx_load_model_props(mlxp);
 
 	/*
 	 * Set up, enable and arm the rest of the interrupt EQs which will

@@ -258,7 +258,7 @@ bail:
 static boolean_t
 mac_sw_cksum_ipv6(mblk_t *mp, uint32_t ip_hdr_offset, const char **err)
 {
-	ip6_t* ip6h = (ip6_t *)(mp->b_rptr + ip_hdr_offset);
+	ip6_t *ip6h = (ip6_t *)(mp->b_rptr + ip_hdr_offset);
 	const uint8_t proto = ip6h->ip6_nxt;
 	const uint16_t *iphs = (uint16_t *)ip6h;
 	/* ULP offset from start of L2. */

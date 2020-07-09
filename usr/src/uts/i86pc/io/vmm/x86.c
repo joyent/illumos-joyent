@@ -39,6 +39,7 @@
  *
  * Copyright 2014 Pluribus Networks Inc.
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #include <sys/cdefs.h>
@@ -64,7 +65,10 @@ __FBSDID("$FreeBSD$");
 #include "x86.h"
 
 SYSCTL_DECL(_hw_vmm);
-SYSCTL_NODE(_hw_vmm, OID_AUTO, topology, CTLFLAG_RD, 0, NULL);
+#ifdef __FreeBSD__
+static SYSCTL_NODE(_hw_vmm, OID_AUTO, topology, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    NULL);
+#endif
 
 #define	CPUID_VM_HIGH		0x40000000
 
@@ -90,33 +94,38 @@ log2(u_int x)
 }
 
 int
-x86_emulate_cpuid(struct vm *vm, int vcpu_id,
-		  uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx)
+x86_emulate_cpuid(struct vm *vm, int vcpu_id, uint64_t *rax, uint64_t *rbx,
+    uint64_t *rcx, uint64_t *rdx)
 {
 	const struct xsave_limits *limits;
 	uint64_t cr4;
 	int error, enable_invpcid, level, width = 0, x2apic_id = 0;
-	unsigned int func, regs[4], logical_cpus = 0;
+	unsigned int func, regs[4], logical_cpus = 0, param;
 	enum x2apic_state x2apic_state;
 	uint16_t cores, maxcpus, sockets, threads;
 
-	VCPU_CTR2(vm, vcpu_id, "cpuid %#x,%#x", *eax, *ecx);
+	/*
+	 * The function of CPUID is controlled through the provided value of
+	 * %eax (and secondarily %ecx, for certain leaf data).
+	 */
+	func = (uint32_t)*rax;
+	param = (uint32_t)*rcx;
+
+	VCPU_CTR2(vm, vcpu_id, "cpuid %#x,%#x", func, param);
 
 	/*
 	 * Requests for invalid CPUID levels should map to the highest
 	 * available level instead.
 	 */
-	if (cpu_exthigh != 0 && *eax >= 0x80000000) {
-		if (*eax > cpu_exthigh)
-			*eax = cpu_exthigh;
-	} else if (*eax >= 0x40000000) {
-		if (*eax > CPUID_VM_HIGH)
-			*eax = CPUID_VM_HIGH;
-	} else if (*eax > cpu_high) {
-		*eax = cpu_high;
+	if (cpu_exthigh != 0 && func >= 0x80000000) {
+		if (func > cpu_exthigh)
+			func = cpu_exthigh;
+	} else if (func >= 0x40000000) {
+		if (func > CPUID_VM_HIGH)
+			func = CPUID_VM_HIGH;
+	} else if (func > cpu_high) {
+		func = cpu_high;
 	}
-
-	func = *eax;
 
 	/*
 	 * In general the approach used for CPU topology is to
@@ -135,11 +144,11 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 		case CPUID_8000_0003:
 		case CPUID_8000_0004:
 		case CPUID_8000_0006:
-			cpuid_count(*eax, *ecx, regs);
+			cpuid_count(func, param, regs);
 			break;
 		case CPUID_8000_0008:
-			cpuid_count(*eax, *ecx, regs);
-			if (vmm_is_amd()) {
+			cpuid_count(func, param, regs);
+			if (vmm_is_svm()) {
 				/*
 				 * As on Intel (0000_0007:0, EDX), mask out
 				 * unsupported or unsafe AMD extended features
@@ -169,7 +178,7 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 			break;
 
 		case CPUID_8000_0001:
-			cpuid_count(*eax, *ecx, regs);
+			cpuid_count(func, param, regs);
 
 			/*
 			 * Hide SVM from guest.
@@ -253,7 +262,7 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 
 		case CPUID_8000_001D:
 			/* AMD Cache topology, like 0000_0004 for Intel. */
-			if (!vmm_is_amd())
+			if (!vmm_is_svm())
 				goto default_leaf;
 
 			/*
@@ -263,7 +272,7 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 			 */
 			vm_get_topology(vm, &sockets, &cores, &threads,
 			    &maxcpus);
-			switch (*ecx) {
+			switch (param) {
 			case 0:
 				logical_cpus = threads;
 				level = 1;
@@ -295,8 +304,11 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 			break;
 
 		case CPUID_8000_001E:
-			/* AMD Family 16h+ additional identifiers */
-			if (!vmm_is_amd() || CPUID_TO_FAMILY(cpu_id) < 0x16)
+			/*
+			 * AMD Family 16h+ and Hygon Family 18h additional
+			 * identifiers.
+			 */
+			if (!vmm_is_svm() || CPUID_TO_FAMILY(cpu_id) < 0x16)
 				goto default_leaf;
 
 			vm_get_topology(vm, &sockets, &cores, &threads,
@@ -408,7 +420,7 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 			break;
 
 		case CPUID_0000_0004:
-			cpuid_count(*eax, *ecx, regs);
+			cpuid_count(func, param, regs);
 
 			if (regs[0] || regs[1] || regs[2] || regs[3]) {
 				vm_get_topology(vm, &sockets, &cores, &threads,
@@ -437,8 +449,8 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 			regs[3] = 0;
 
 			/* leaf 0 */
-			if (*ecx == 0) {
-				cpuid_count(*eax, *ecx, regs);
+			if (param == 0) {
+				cpuid_count(func, param, regs);
 
 				/* Only leaf 0 is supported */
 				regs[0] = 0;
@@ -491,21 +503,21 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 			if (vmm_is_intel()) {
 				vm_get_topology(vm, &sockets, &cores, &threads,
 				    &maxcpus);
-				if (*ecx == 0) {
+				if (param == 0) {
 					logical_cpus = threads;
 					width = log2(logical_cpus);
 					level = CPUID_TYPE_SMT;
 					x2apic_id = vcpu_id;
 				}
 
-				if (*ecx == 1) {
+				if (param == 1) {
 					logical_cpus = threads * cores;
 					width = log2(logical_cpus);
 					level = CPUID_TYPE_CORE;
 					x2apic_id = vcpu_id;
 				}
 
-				if (!cpuid_leaf_b || *ecx >= 2) {
+				if (!cpuid_leaf_b || param >= 2) {
 					width = 0;
 					logical_cpus = 0;
 					level = 0;
@@ -514,7 +526,7 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 
 				regs[0] = width & 0x1f;
 				regs[1] = logical_cpus & 0xffff;
-				regs[2] = (level << 8) | (*ecx & 0xff);
+				regs[2] = (level << 8) | (param & 0xff);
 				regs[3] = x2apic_id;
 			} else {
 				regs[0] = 0;
@@ -534,8 +546,8 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 				break;
 			}
 
-			cpuid_count(*eax, *ecx, regs);
-			switch (*ecx) {
+			cpuid_count(func, param, regs);
+			switch (param) {
 			case 0:
 				/*
 				 * Only permit the guest to use bits
@@ -565,7 +577,7 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 				 * pass through as-is, otherwise return
 				 * all zeroes.
 				 */
-				if (!(limits->xcr0_allowed & (1ul << *ecx))) {
+				if (!(limits->xcr0_allowed & (1ul << param))) {
 					regs[0] = 0;
 					regs[1] = 0;
 					regs[2] = 0;
@@ -573,6 +585,18 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 				}
 				break;
 			}
+			break;
+
+		case CPUID_0000_0015:
+			/*
+			 * Don't report CPU TSC/Crystal ratio and clock
+			 * values since guests may use these to derive the
+			 * local APIC frequency..
+			 */
+			regs[0] = 0;
+			regs[1] = 0;
+			regs[2] = 0;
+			regs[3] = 0;
 			break;
 
 		case 0x40000000:
@@ -590,14 +614,17 @@ default_leaf:
 			 * how many unhandled leaf values have been seen.
 			 */
 			atomic_add_long(&bhyve_xcpuids, 1);
-			cpuid_count(*eax, *ecx, regs);
+			cpuid_count(func, param, regs);
 			break;
 	}
 
-	*eax = regs[0];
-	*ebx = regs[1];
-	*ecx = regs[2];
-	*edx = regs[3];
+	/*
+	 * CPUID clears the upper 32-bits of the long-mode registers.
+	 */
+	*rax = regs[0];
+	*rbx = regs[1];
+	*rcx = regs[2];
+	*rdx = regs[3];
 
 	return (1);
 }

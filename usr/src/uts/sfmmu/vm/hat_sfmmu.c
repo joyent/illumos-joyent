@@ -1943,7 +1943,7 @@ hat_free_end(struct hat *sfmmup)
 	ASSERT(sfmmup->sfmmu_ttecnt[TTE256M] == 0);
 
 	if (sfmmup->sfmmu_rmstat) {
-		hat_freestat(sfmmup->sfmmu_as, NULL);
+		hat_freestat(sfmmup->sfmmu_as, 0);
 	}
 
 	while (sfmmup->sfmmu_tsb != NULL) {
@@ -4411,10 +4411,11 @@ rehash:
 	if (flags & HAC_PAGELOCK) {
 		if (!page_trylock(pp, SE_SHARED)) {
 			/*
-			 * Somebody is holding SE_EXCL lock. Might
-			 * even be hat_page_relocate(). Drop all
-			 * our locks, lookup the page in &kvp, and
-			 * retry. If it doesn't exist in &kvp and &zvp,
+			 * Somebody is holding SE_EXCL lock. Might even be
+			 * hat_page_relocate().
+			 * Drop all our locks, lookup the page in &kvp, and
+			 * retry.
+			 * If it doesn't exist in &kvp and &kvps[KV_ZVP],
 			 * then we must be dealing with a kernel mapped
 			 * page which doesn't actually belong to
 			 * segkmem so we punt.
@@ -4423,10 +4424,10 @@ rehash:
 			SFMMU_HASH_UNLOCK(hmebp);
 			pp = page_lookup(&kvp, (u_offset_t)saddr, SE_SHARED);
 
-			/* check zvp before giving up */
+			/* check &kvps[KV_ZVP] before giving up */
 			if (pp == NULL)
-				pp = page_lookup(&zvp, (u_offset_t)saddr,
-				    SE_SHARED);
+				pp = page_lookup(&kvps[KV_ZVP],
+				    (u_offset_t)saddr, SE_SHARED);
 
 			/* Okay, we didn't find it, give up */
 			if (pp == NULL) {
@@ -4590,10 +4591,11 @@ rehash:
 	if (flags & HAC_PAGELOCK) {
 		if (!page_trylock(pp, SE_SHARED)) {
 			/*
-			 * Somebody is holding SE_EXCL lock. Might
-			 * even be hat_page_relocate(). Drop all
-			 * our locks, lookup the page in &kvp, and
-			 * retry. If it doesn't exist in &kvp and &zvp,
+			 * Somebody is holding SE_EXCL lock. Might even be
+			 * hat_page_relocate().
+			 * Drop all our locks, lookup the page in &kvp, and
+			 * retry.
+			 * If it doesn't exist in &kvp and &kvps[KV_ZVP],
 			 * then we must be dealing with a kernel mapped
 			 * page which doesn't actually belong to
 			 * segkmem so we punt.
@@ -4601,10 +4603,11 @@ rehash:
 			sfmmu_mlist_exit(pml);
 			SFMMU_HASH_UNLOCK(hmebp);
 			pp = page_lookup(&kvp, (u_offset_t)saddr, SE_SHARED);
-			/* check zvp before giving up */
+
+			/* check &kvps[KV_ZVP] before giving up */
 			if (pp == NULL)
-				pp = page_lookup(&zvp, (u_offset_t)saddr,
-				    SE_SHARED);
+				pp = page_lookup(&kvps[KV_ZVP],
+				    (u_offset_t)saddr, SE_SHARED);
 
 			if (pp == NULL) {
 				ASSERT(cookie == NULL);
@@ -10090,7 +10093,7 @@ sfmmu_check_page_sizes(sfmmu_t *sfmmup, int growing)
 	 * Kernel threads, processes with small address spaces not using
 	 * large pages, and dummy ISM HATs need not apply.
 	 */
-	if (sfmmup == ksfmmup || sfmmup->sfmmu_ismhat != NULL)
+	if (sfmmup == ksfmmup || sfmmup->sfmmu_ismhat != 0)
 		return;
 
 	if (!SFMMU_LGPGS_INUSE(sfmmup) &&
@@ -12082,7 +12085,7 @@ sfmmu_ismtlbcache_demap(caddr_t addr, sfmmu_t *ism_sfmmup,
 	 */
 	ASSERT(ism_sfmmup->sfmmu_ismhat);
 	ASSERT(MUTEX_HELD(&ism_mlist_lock));
-	addr = addr - ISMID_STARTADDR;
+	addr = (caddr_t)((uintptr_t)addr - (uintptr_t)ISMID_STARTADDR);
 
 	for (ment = ism_sfmmup->sfmmu_iment; ment; ment = ment->iment_next) {
 

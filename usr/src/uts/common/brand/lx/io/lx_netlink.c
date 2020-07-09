@@ -11,6 +11,7 @@
 
 /*
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -568,7 +569,7 @@ lx_netlink_bind(sock_lower_handle_t handle, struct sockaddr *name,
 	lx_netlink_sock_t *lxsock = (lx_netlink_sock_t *)handle;
 	lx_netlink_sockaddr_t *lxsa = (lx_netlink_sockaddr_t *)name;
 
-	if (namelen != sizeof (lx_netlink_sockaddr_t) ||
+	if (namelen < sizeof (lx_netlink_sockaddr_t) ||
 	    lxsa->lxnl_family != AF_LX_NETLINK) {
 		return (EINVAL);
 	}
@@ -922,6 +923,7 @@ lx_netlink_reply_done(lx_netlink_reply_t *reply)
 		hdr->lxnh_len = sizeof (lx_netlink_err_t);
 		hdr->lxnh_seq = reply->lxnr_hdr.lxnh_seq;
 		hdr->lxnh_pid = lxsock->lxns_port;
+		hdr->lxnh_flags = 0;
 	} else {
 		uint32_t status = 0;
 
@@ -1974,7 +1976,7 @@ lx_netlink_send(sock_lower_handle_t handle, mblk_t *mp,
 		lx_netlink_sockaddr_t *lxsa =
 		    (lx_netlink_sockaddr_t *)msg->msg_name;
 
-		if (msg->msg_namelen != sizeof (lx_netlink_sockaddr_t) ||
+		if (msg->msg_namelen < sizeof (lx_netlink_sockaddr_t) ||
 		    lxsa->lxnl_family != AF_LX_NETLINK) {
 			return (EINVAL);
 		}

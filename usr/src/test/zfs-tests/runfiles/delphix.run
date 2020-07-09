@@ -370,6 +370,10 @@ tests = ['zpool_replace_001_neg', 'zpool_replace_002_neg', 'replace-o_ashift',
 tests = ['zpool_resilver_bad_args', 'zpool_resilver_restart']
 tags = ['functional', 'cli_root', 'zpool_resilver']
 
+[/opt/zfs-tests/tests/functional/resilver]
+tests = ['resilver_restart_001']
+tags = ['functional', 'resilver']
+
 [/opt/zfs-tests/tests/functional/cli_root/zpool_scrub]
 tests = ['zpool_scrub_001_neg', 'zpool_scrub_002_pos', 'zpool_scrub_003_pos',
     'zpool_scrub_004_pos', 'zpool_scrub_005_pos', 'zpool_scrub_print_repairing',
@@ -577,6 +581,9 @@ tests = ['projectid_001_pos', 'projectid_002_pos', 'projectid_003_pos',
 [/opt/zfs-tests/tests/functional/quota]
 tests = ['quota_001_pos', 'quota_002_pos', 'quota_003_pos', 'quota_004_pos',
     'quota_005_pos', 'quota_006_neg']
+
+[/opt/zfs-tests/tests/functional/raidz]
+tests = ['raidz_001_neg', 'raidz_002_pos']
 
 [/opt/zfs-tests/tests/functional/redundancy]
 tests = ['redundancy_001_pos', 'redundancy_002_pos', 'redundancy_003_pos',

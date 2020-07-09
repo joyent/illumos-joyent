@@ -12,6 +12,7 @@
 /*
  * Copyright 2020, The University of Queensland
  * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 /*
@@ -24,6 +25,7 @@
 #include <sys/sysmacros.h>
 #include <sys/atomic.h>
 #include <sys/cpuvar.h>
+#include <sys/sdt.h>
 
 #include <sys/pattr.h>
 #include <sys/dlpi.h>
@@ -113,8 +115,9 @@ mlxcx_wq_rele_dma(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq)
 	mlwq->mlwq_state &= ~MLXCX_CQ_ALLOC;
 }
 
-boolean_t
-mlxcx_cq_alloc_dma(mlxcx_t *mlxp, mlxcx_completion_queue_t *mlcq)
+static boolean_t
+mlxcx_cq_alloc_dma(mlxcx_t *mlxp, mlxcx_completion_queue_t *mlcq,
+    uint_t ent_shift)
 {
 	ddi_device_acc_attr_t acc;
 	ddi_dma_attr_t attr;
@@ -123,7 +126,7 @@ mlxcx_cq_alloc_dma(mlxcx_t *mlxp, mlxcx_completion_queue_t *mlcq)
 
 	VERIFY0(mlcq->mlcq_state & MLXCX_EQ_ALLOC);
 
-	mlcq->mlcq_entshift = mlxp->mlx_props.mldp_cq_size_shift;
+	mlcq->mlcq_entshift = ent_shift;
 	mlcq->mlcq_nents = (1 << mlcq->mlcq_entshift);
 	sz = mlcq->mlcq_nents * sizeof (mlxcx_completionq_ent_t);
 	ASSERT3U(sz & (MLXCX_HW_PAGE_SIZE - 1), ==, 0);
@@ -165,7 +168,7 @@ mlxcx_cq_alloc_dma(mlxcx_t *mlxp, mlxcx_completion_queue_t *mlcq)
 	return (B_TRUE);
 }
 
-void
+static void
 mlxcx_cq_rele_dma(mlxcx_t *mlxp, mlxcx_completion_queue_t *mlcq)
 {
 	VERIFY(mlcq->mlcq_state & MLXCX_CQ_ALLOC);
@@ -331,7 +334,7 @@ mlxcx_cq_teardown(mlxcx_t *mlxp, mlxcx_completion_queue_t *mlcq)
 
 static boolean_t
 mlxcx_cq_setup(mlxcx_t *mlxp, mlxcx_event_queue_t *eq,
-    mlxcx_completion_queue_t **cqp)
+    mlxcx_completion_queue_t **cqp, uint_t ent_shift)
 {
 	mlxcx_completion_queue_t *cq;
 
@@ -350,7 +353,7 @@ mlxcx_cq_setup(mlxcx_t *mlxp, mlxcx_event_queue_t *eq,
 
 	mutex_enter(&cq->mlcq_mtx);
 
-	if (!mlxcx_cq_alloc_dma(mlxp, cq)) {
+	if (!mlxcx_cq_alloc_dma(mlxp, cq, ent_shift)) {
 		mutex_exit(&cq->mlcq_mtx);
 		return (B_FALSE);
 	}
@@ -413,6 +416,9 @@ mlxcx_rq_setup(mlxcx_t *mlxp, mlxcx_completion_queue_t *cq,
 		return (B_FALSE);
 	}
 
+	wq->mlwq_bufhwm = wq->mlwq_nents - MLXCX_WQ_HWM_GAP;
+	wq->mlwq_buflwm = wq->mlwq_nents - MLXCX_WQ_LWM_GAP;
+
 	mutex_exit(&wq->mlwq_mtx);
 
 	mutex_enter(&cq->mlcq_mtx);
@@ -459,6 +465,9 @@ mlxcx_sq_setup(mlxcx_t *mlxp, mlxcx_port_t *port, mlxcx_completion_queue_t *cq,
 		return (B_FALSE);
 	}
 
+	wq->mlwq_bufhwm = wq->mlwq_nents - MLXCX_WQ_HWM_GAP;
+	wq->mlwq_buflwm = wq->mlwq_nents - MLXCX_WQ_LWM_GAP;
+
 	mutex_exit(&wq->mlwq_mtx);
 
 	mutex_enter(&cq->mlcq_mtx);
@@ -469,6 +478,35 @@ mlxcx_sq_setup(mlxcx_t *mlxp, mlxcx_port_t *port, mlxcx_completion_queue_t *cq,
 	mutex_exit(&cq->mlcq_mtx);
 
 	return (B_TRUE);
+}
+
+/*
+ * Before we tear down the queues associated with the rx group,
+ * flag each cq as being torn down and wake up any tasks.
+ */
+static void
+mlxcx_quiesce_rx_cqs(mlxcx_t *mlxp, mlxcx_ring_group_t *g)
+{
+	mlxcx_work_queue_t *wq;
+	mlxcx_completion_queue_t *cq;
+	mlxcx_buf_shard_t *s;
+	uint_t i;
+
+	mutex_enter(&g->mlg_mtx);
+
+	for (i = 0; i < g->mlg_nwqs; ++i) {
+		wq = &g->mlg_wqs[i];
+		cq = wq->mlwq_cq;
+		if (cq != NULL) {
+			s = wq->mlwq_bufs;
+			mutex_enter(&s->mlbs_mtx);
+			atomic_or_uint(&cq->mlcq_state, MLXCX_CQ_TEARDOWN);
+			cv_broadcast(&s->mlbs_free_nonempty);
+			mutex_exit(&s->mlbs_mtx);
+		}
+	}
+
+	mutex_exit(&g->mlg_mtx);
 }
 
 void
@@ -551,6 +589,7 @@ mlxcx_teardown_rx_group(mlxcx_t *mlxp, mlxcx_ring_group_t *g)
 			}
 			mutex_exit(&wq->mlwq_mtx);
 		}
+		taskq_destroy(g->mlg_refill_tq);
 		g->mlg_state &= ~MLXCX_GROUP_RUNNING;
 	}
 
@@ -662,8 +701,16 @@ mlxcx_teardown_groups(mlxcx_t *mlxp)
 		if (!(g->mlg_state & MLXCX_GROUP_INIT))
 			continue;
 		ASSERT3S(g->mlg_type, ==, MLXCX_GROUP_RX);
+		mlxcx_quiesce_rx_cqs(mlxp, g);
+	}
+
+	for (i = 0; i < mlxp->mlx_rx_ngroups; ++i) {
+		g = &mlxp->mlx_rx_groups[i];
+		if (!(g->mlg_state & MLXCX_GROUP_INIT))
+			continue;
 		mlxcx_teardown_rx_group(mlxp, g);
 	}
+
 	kmem_free(mlxp->mlx_rx_groups, mlxp->mlx_rx_groups_size);
 	mlxp->mlx_rx_groups = NULL;
 
@@ -674,6 +721,7 @@ mlxcx_teardown_groups(mlxcx_t *mlxp)
 		ASSERT3S(g->mlg_type, ==, MLXCX_GROUP_TX);
 		mlxcx_teardown_tx_group(mlxp, g);
 	}
+
 	kmem_free(mlxp->mlx_tx_groups, mlxp->mlx_tx_groups_size);
 	mlxp->mlx_tx_groups = NULL;
 }
@@ -687,6 +735,7 @@ mlxcx_rx_group_setup(mlxcx_t *mlxp, mlxcx_ring_group_t *g)
 	mlxcx_flow_table_t *ft;
 	mlxcx_flow_group_t *fg;
 	mlxcx_flow_entry_t *fe;
+	uint_t ent_shift;
 	uint_t i, j;
 
 	ASSERT3S(g->mlg_state, ==, 0);
@@ -730,10 +779,18 @@ mlxcx_rx_group_setup(mlxcx_t *mlxp, mlxcx_ring_group_t *g)
 			}
 		}
 
-		if (!mlxcx_cq_setup(mlxp, eq, &cq)) {
+		/*
+		 * A single completion is indicated for each rq entry as
+		 * it is used. So, the number of cq entries never needs
+		 * to be larger than the rq.
+		 */
+		ent_shift = MIN(mlxp->mlx_props.mldp_cq_size_shift,
+		    mlxp->mlx_props.mldp_rq_size_shift);
+		if (!mlxcx_cq_setup(mlxp, eq, &cq, ent_shift)) {
 			g->mlg_nwqs = i;
 			break;
 		}
+
 		cq->mlcq_stats = &g->mlg_port->mlp_stats;
 
 		rq = &g->mlg_wqs[i];
@@ -1156,6 +1213,8 @@ mlxcx_rx_ring_start(mlxcx_t *mlxp, mlxcx_ring_group_t *g,
 	ASSERT0(rq->mlwq_state & MLXCX_WQ_BUFFERS);
 	rq->mlwq_state |= MLXCX_WQ_BUFFERS;
 
+	mlxcx_shard_ready(rq->mlwq_bufs);
+
 	for (j = 0; j < rq->mlwq_nents; ++j) {
 		if (!mlxcx_buf_create(mlxp, rq->mlwq_bufs, &b))
 			break;
@@ -1182,6 +1241,7 @@ mlxcx_rx_group_start(mlxcx_t *mlxp, mlxcx_ring_group_t *g)
 	mlxcx_flow_table_t *ft;
 	mlxcx_flow_group_t *fg;
 	mlxcx_flow_entry_t *fe;
+	char tq_name[TASKQ_NAMELEN];
 
 	mutex_enter(&g->mlg_mtx);
 
@@ -1193,6 +1253,23 @@ mlxcx_rx_group_start(mlxcx_t *mlxp, mlxcx_ring_group_t *g)
 	ASSERT0(g->mlg_state & MLXCX_GROUP_RUNNING);
 
 	g->mlg_state |= MLXCX_GROUP_RUNNING;
+
+	(void) snprintf(tq_name, sizeof (tq_name), "%s_refill_%d_%ld",
+	    ddi_driver_name(mlxp->mlx_dip), mlxp->mlx_inst,
+	    g - &mlxp->mlx_rx_groups[0]);
+
+	/*
+	 * Create one refill taskq per group with one thread per work queue.
+	 * The refill task may block waiting for resources, so by effectively
+	 * having one thread per work queue we avoid work queues blocking each
+	 * other.
+	 */
+	if ((g->mlg_refill_tq = taskq_create(tq_name, g->mlg_nwqs, minclsyspri,
+	    g->mlg_nwqs, INT_MAX, TASKQ_PREPOPULATE)) == NULL) {
+		mlxcx_warn(mlxp, "failed to create rq refill task queue");
+		mutex_exit(&g->mlg_mtx);
+		return (B_FALSE);
+	}
 
 	if (g == &mlxp->mlx_rx_groups[0]) {
 		ft = g->mlg_port->mlp_rx_flow;
@@ -1207,6 +1284,8 @@ mlxcx_rx_group_start(mlxcx_t *mlxp, mlxcx_ring_group_t *g)
 		fe->mlfe_dest[fe->mlfe_ndest++].mlfed_flow = g->mlg_rx_hash_ft;
 		if (!mlxcx_cmd_set_flow_table_entry(mlxp, fe)) {
 			mutex_exit(&ft->mlft_mtx);
+			g->mlg_state &= ~MLXCX_GROUP_RUNNING;
+			taskq_destroy(g->mlg_refill_tq);
 			mutex_exit(&g->mlg_mtx);
 			return (B_FALSE);
 		}
@@ -1273,8 +1352,10 @@ mlxcx_tx_group_setup(mlxcx_t *mlxp, mlxcx_ring_group_t *g)
 			}
 		}
 
-		if (!mlxcx_cq_setup(mlxp, eq, &cq))
+		if (!mlxcx_cq_setup(mlxp, eq, &cq,
+		    mlxp->mlx_props.mldp_cq_size_shift))
 			return (B_FALSE);
+
 		cq->mlcq_stats = &g->mlg_port->mlp_stats;
 
 		sq = &g->mlg_wqs[i];
@@ -1329,6 +1410,9 @@ mlxcx_tx_ring_start(mlxcx_t *mlxp, mlxcx_ring_group_t *g,
 		mlxcx_buf_return(mlxp, b);
 	}
 	sq->mlwq_state |= MLXCX_WQ_BUFFERS;
+
+	mlxcx_shard_ready(sq->mlwq_bufs);
+	mlxcx_shard_ready(sq->mlwq_foreign_bufs);
 
 	if (!mlxcx_cmd_start_sq(mlxp, sq)) {
 		mutex_exit(&sq->mlwq_mtx);
@@ -1409,6 +1493,11 @@ mlxcx_sq_add_nop(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq)
 	ent0 = &mlwq->mlwq_send_ent[index];
 	start_pc = mlwq->mlwq_pc;
 	++mlwq->mlwq_pc;
+	/*
+	 * This counter is manipulated in the interrupt handler, which
+	 * does not hold the mlwq_mtx, hence the atomic.
+	 */
+	atomic_inc_64(&mlwq->mlwq_wqebb_used);
 
 	bzero(ent0, sizeof (mlxcx_sendq_ent_t));
 	ent0->mlsqe_control.mlcs_opcode = MLXCX_WQE_OP_NOP;
@@ -1441,7 +1530,7 @@ mlxcx_sq_add_buffer(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
     uint8_t *inlinehdrs, size_t inlinelen, uint32_t chkflags,
     mlxcx_buffer_t *b0)
 {
-	uint_t index, first, ents = 0;
+	uint_t index, first, ents;
 	mlxcx_completion_queue_t *cq;
 	mlxcx_sendq_ent_t *ent0;
 	mlxcx_sendq_extra_ent_t *ent;
@@ -1449,8 +1538,10 @@ mlxcx_sq_add_buffer(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 	uint_t ptri, nptr;
 	const ddi_dma_cookie_t *c;
 	size_t rem;
+	uint64_t wqebb_used;
 	mlxcx_buffer_t *b;
 	ddi_fm_error_t err;
+	boolean_t rv;
 
 	ASSERT(mutex_owned(&mlwq->mlwq_mtx));
 	ASSERT3P(b0->mlb_tx_head, ==, b0);
@@ -1460,15 +1551,9 @@ mlxcx_sq_add_buffer(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 	index = mlwq->mlwq_pc & (mlwq->mlwq_nents - 1);
 	ent0 = &mlwq->mlwq_send_ent[index];
 	b0->mlb_wqe_index = mlwq->mlwq_pc;
-	++mlwq->mlwq_pc;
-	++ents;
+	ents = 1;
 
 	first = index;
-
-	mutex_enter(&cq->mlcq_bufbmtx);
-	list_insert_tail(&cq->mlcq_buffers_b, b0);
-	atomic_inc_64(&cq->mlcq_bufcnt);
-	mutex_exit(&cq->mlcq_bufbmtx);
 
 	bzero(ent0, sizeof (mlxcx_sendq_ent_t));
 	ent0->mlsqe_control.mlcs_opcode = MLXCX_WQE_OP_SEND;
@@ -1488,8 +1573,8 @@ mlxcx_sq_add_buffer(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 		    inlinelen);
 	}
 
-	ent0->mlsqe_control.mlcs_ds =
-	    offsetof(mlxcx_sendq_ent_t, mlsqe_data) / 16;
+	ent0->mlsqe_control.mlcs_ds = offsetof(mlxcx_sendq_ent_t, mlsqe_data) /
+	    MLXCX_WQE_OCTOWORD;
 
 	if (chkflags & HCK_IPV4_HDRCKSUM) {
 		ASSERT(mlxp->mlx_caps->mlc_checksum);
@@ -1502,6 +1587,16 @@ mlxcx_sq_add_buffer(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 		    MLXCX_SQE_ETH_CSFLAG_L4_CHECKSUM);
 	}
 
+	/*
+	 * mlwq_wqebb_used is only incremented whilst holding
+	 * the mlwq_mtx mutex, but it is decremented (atomically) in
+	 * the interrupt context *not* under mlwq_mtx mutex.
+	 * So, now take a snapshot of the number of used wqes which will
+	 * be a conistent maximum we can use whilst iterating through
+	 * the buffers and DMA cookies.
+	 */
+	wqebb_used = mlwq->mlwq_wqebb_used;
+
 	b = b0;
 	ptri = 0;
 	nptr = sizeof (ent0->mlsqe_data) / sizeof (mlxcx_wqe_data_seg_t);
@@ -1513,9 +1608,12 @@ mlxcx_sq_add_buffer(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 		while (rem > 0 &&
 		    (c = mlxcx_dma_cookie_iter(&b->mlb_dma, c)) != NULL) {
 			if (ptri >= nptr) {
-				index = mlwq->mlwq_pc & (mlwq->mlwq_nents - 1);
+				if ((ents + wqebb_used) >= mlwq->mlwq_nents)
+					return (B_FALSE);
+
+				index = (mlwq->mlwq_pc + ents) &
+				    (mlwq->mlwq_nents - 1);
 				ent = &mlwq->mlwq_send_extra_ent[index];
-				++mlwq->mlwq_pc;
 				++ents;
 
 				seg = ent->mlsqe_data;
@@ -1548,6 +1646,10 @@ mlxcx_sq_add_buffer(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 		}
 	}
 
+	b0->mlb_wqebbs = ents;
+	mlwq->mlwq_pc += ents;
+	atomic_add_64(&mlwq->mlwq_wqebb_used, ents);
+
 	for (; ptri < nptr; ++ptri, ++seg) {
 		seg->mlds_lkey = to_be32(MLXCX_NULL_LKEY);
 		seg->mlds_byte_count = to_be32(0);
@@ -1557,7 +1659,20 @@ mlxcx_sq_add_buffer(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 	/*
 	 * Make sure the workqueue entry is flushed out before updating
 	 * the doorbell.
+	 * If the ring has wrapped, we need to flush the front and back.
 	 */
+	if ((first + ents) > mlwq->mlwq_nents) {
+		uint_t sync_cnt = mlwq->mlwq_nents - first;
+
+		VERIFY0(ddi_dma_sync(mlwq->mlwq_dma.mxdb_dma_handle,
+		    (uintptr_t)ent0 - (uintptr_t)mlwq->mlwq_send_ent,
+		    sync_cnt * sizeof (mlxcx_sendq_ent_t),
+		    DDI_DMA_SYNC_FORDEV));
+
+		ent0 = &mlwq->mlwq_send_ent[0];
+		ents -= sync_cnt;
+	}
+
 	VERIFY0(ddi_dma_sync(mlwq->mlwq_dma.mxdb_dma_handle,
 	    (uintptr_t)ent0 - (uintptr_t)mlwq->mlwq_send_ent,
 	    ents * sizeof (mlxcx_sendq_ent_t), DDI_DMA_SYNC_FORDEV));
@@ -1566,10 +1681,24 @@ mlxcx_sq_add_buffer(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 	if (err.fme_status != DDI_FM_OK) {
 		return (B_FALSE);
 	}
-	if (!mlxcx_sq_ring_dbell(mlxp, mlwq, first)) {
-		return (B_FALSE);
+
+	/*
+	 * Hold the bufmtx whilst ringing the doorbell, to prevent
+	 * the buffer from being moved to another list, so we can
+	 * safely remove it should the ring fail.
+	 */
+	mutex_enter(&cq->mlcq_bufbmtx);
+
+	list_insert_tail(&cq->mlcq_buffers_b, b0);
+	if ((rv = mlxcx_sq_ring_dbell(mlxp, mlwq, first))) {
+		atomic_inc_64(&cq->mlcq_bufcnt);
+	} else {
+		list_remove(&cq->mlcq_buffers_b, b0);
 	}
-	return (B_TRUE);
+
+	mutex_exit(&cq->mlcq_bufbmtx);
+
+	return (rv);
 }
 
 boolean_t
@@ -1604,8 +1733,10 @@ mlxcx_rq_add_buffers(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 		index = mlwq->mlwq_pc & (mlwq->mlwq_nents - 1);
 		ent = &mlwq->mlwq_recv_ent[index];
 		buf->mlb_wqe_index = mlwq->mlwq_pc;
+		buf->mlb_wqebbs = 1;
 
 		++mlwq->mlwq_pc;
+		atomic_inc_64(&mlwq->mlwq_wqebb_used);
 
 		mutex_enter(&cq->mlcq_bufbmtx);
 		list_insert_tail(&cq->mlcq_buffers, buf);
@@ -1666,11 +1797,60 @@ mlxcx_rq_add_buffers(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq,
 	return (B_TRUE);
 }
 
+static void
+mlxcx_rq_refill_task(void *arg)
+{
+	mlxcx_work_queue_t *wq = arg;
+	mlxcx_completion_queue_t *cq = wq->mlwq_cq;
+	mlxcx_t *mlxp = wq->mlwq_mlx;
+	mlxcx_buf_shard_t *s = wq->mlwq_bufs;
+	boolean_t refill, draining;
+
+	do {
+		/*
+		 * Wait here until one of 3 conditions:
+		 * 1. The shard is draining, or
+		 * 2. There are buffers on the free list, or
+		 * 3. The WQ is being shut down.
+		 */
+		mutex_enter(&s->mlbs_mtx);
+		while (s->mlbs_state != MLXCX_SHARD_DRAINING &&
+		    list_is_empty(&s->mlbs_free) &&
+		    (cq->mlcq_state & MLXCX_CQ_TEARDOWN) == 0) {
+			cv_wait(&s->mlbs_free_nonempty, &s->mlbs_mtx);
+		}
+
+		draining = (s->mlbs_state == MLXCX_SHARD_DRAINING);
+		mutex_exit(&s->mlbs_mtx);
+
+		mutex_enter(&cq->mlcq_mtx);
+		mutex_enter(&wq->mlwq_mtx);
+
+		if (draining || (cq->mlcq_state & MLXCX_CQ_TEARDOWN) != 0) {
+			refill = B_FALSE;
+			wq->mlwq_state &= ~MLXCX_WQ_REFILLING;
+		} else {
+			mlxcx_rq_refill(mlxp, wq);
+
+			if (cq->mlcq_bufcnt < MLXCX_RQ_REFILL_STEP) {
+				refill = B_TRUE;
+			} else {
+				refill = B_FALSE;
+				wq->mlwq_state &= ~MLXCX_WQ_REFILLING;
+			}
+		}
+
+		mutex_exit(&wq->mlwq_mtx);
+		mutex_exit(&cq->mlcq_mtx);
+	} while (refill);
+}
+
 void
 mlxcx_rq_refill(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq)
 {
 	size_t target, current, want, done, n;
 	mlxcx_completion_queue_t *cq;
+	mlxcx_ring_group_t *g;
 	mlxcx_buffer_t *b[MLXCX_RQ_REFILL_STEP];
 	uint_t i;
 
@@ -1683,7 +1863,10 @@ mlxcx_rq_refill(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq)
 	target = mlwq->mlwq_nents - MLXCX_RQ_REFILL_STEP;
 	cq = mlwq->mlwq_cq;
 
-	if (cq->mlcq_state & MLXCX_CQ_TEARDOWN)
+	if ((mlwq->mlwq_state & MLXCX_WQ_STARTED) == 0)
+		return;
+
+	if ((cq->mlcq_state & MLXCX_CQ_TEARDOWN) != 0)
 		return;
 
 	current = cq->mlcq_bufcnt;
@@ -1697,11 +1880,25 @@ mlxcx_rq_refill(mlxcx_t *mlxp, mlxcx_work_queue_t *mlwq)
 	while (!(mlwq->mlwq_state & MLXCX_WQ_TEARDOWN) && done < want) {
 		n = mlxcx_buf_take_n(mlxp, mlwq, b, MLXCX_RQ_REFILL_STEP);
 		if (n == 0) {
-			mlxcx_warn(mlxp, "!exiting rq refill early, done %u "
-			    "but wanted %u", done, want);
+			/*
+			 * We didn't get any buffers from the free queue.
+			 * It might not be an issue, schedule a taskq
+			 * to wait for free buffers if the completion
+			 * queue is low.
+			 */
+			if (current < MLXCX_RQ_REFILL_STEP &&
+			    (mlwq->mlwq_state & MLXCX_WQ_REFILLING) == 0) {
+				mlwq->mlwq_state |= MLXCX_WQ_REFILLING;
+				g = mlwq->mlwq_group;
+				taskq_dispatch_ent(g->mlg_refill_tq,
+				    mlxcx_rq_refill_task, mlwq, TQ_NOSLEEP,
+				    &mlwq->mlwq_tqe);
+			}
+
 			return;
 		}
-		if (mlwq->mlwq_state & MLXCX_WQ_TEARDOWN) {
+
+		if ((mlwq->mlwq_state & MLXCX_WQ_TEARDOWN) != 0) {
 			for (i = 0; i < n; ++i)
 				mlxcx_buf_return(mlxp, b[i]);
 			return;
@@ -1826,6 +2023,7 @@ mlxcx_rx_completion(mlxcx_t *mlxp, mlxcx_completion_queue_t *mlcq,
     mlxcx_completionq_ent_t *ent, mlxcx_buffer_t *buf)
 {
 	uint32_t chkflags = 0;
+	uint_t wqe_index;
 	ddi_fm_error_t err;
 
 	ASSERT(mutex_owned(&mlcq->mlcq_mtx));
@@ -1868,8 +2066,13 @@ mlxcx_rx_completion(mlxcx_t *mlxp, mlxcx_completion_queue_t *mlcq,
 		return (NULL);
 	}
 
+	/*
+	 * mlxcx_buf_loan() will set mlb_wqe_index to zero.
+	 * Remember it for later.
+	 */
+	wqe_index = buf->mlb_wqe_index;
+
 	if (!mlxcx_buf_loan(mlxp, buf)) {
-		mlxcx_warn(mlxp, "!loan failed, dropping packet");
 		mlxcx_buf_return(mlxp, buf);
 		return (NULL);
 	}
@@ -1894,7 +2097,7 @@ mlxcx_rx_completion(mlxcx_t *mlxp, mlxcx_completion_queue_t *mlcq,
 	 * Don't check if a refill is needed on every single completion,
 	 * since checking involves taking the RQ lock.
 	 */
-	if ((buf->mlb_wqe_index & 0x7) == 0) {
+	if ((wqe_index & 0x7) == 0) {
 		mlxcx_work_queue_t *wq = mlcq->mlcq_wq;
 		ASSERT(wq != NULL);
 		mutex_enter(&wq->mlwq_mtx);
@@ -1912,16 +2115,11 @@ mlxcx_buf_mp_return(caddr_t arg)
 	mlxcx_buffer_t *b = (mlxcx_buffer_t *)arg;
 	mlxcx_t *mlxp = b->mlb_mlx;
 
-	if (b->mlb_state != MLXCX_BUFFER_ON_LOAN) {
-		b->mlb_mp = NULL;
-		return;
-	}
-	/*
-	 * The mblk for this buffer_t (in its mlb_mp field) has been used now,
-	 * so NULL it out.
-	 */
+	/* The mblk has been used now, so NULL it out. */
 	b->mlb_mp = NULL;
-	mlxcx_buf_return(mlxp, b);
+
+	if (b->mlb_state == MLXCX_BUFFER_ON_LOAN)
+		mlxcx_buf_return(mlxp, b);
 }
 
 boolean_t
@@ -1981,87 +2179,118 @@ mlxcx_buf_create_foreign(mlxcx_t *mlxp, mlxcx_buf_shard_t *shard,
 	return (B_TRUE);
 }
 
-static void
-mlxcx_buf_take_foreign(mlxcx_t *mlxp, mlxcx_work_queue_t *wq,
-    mlxcx_buffer_t **bp)
+static mlxcx_buffer_t *
+mlxcx_buf_take_foreign(mlxcx_t *mlxp, mlxcx_work_queue_t *wq)
 {
 	mlxcx_buffer_t *b;
 	mlxcx_buf_shard_t *s = wq->mlwq_foreign_bufs;
 
 	mutex_enter(&s->mlbs_mtx);
-	while (list_is_empty(&s->mlbs_free))
-		cv_wait(&s->mlbs_free_nonempty, &s->mlbs_mtx);
-	b = list_remove_head(&s->mlbs_free);
-	ASSERT3U(b->mlb_state, ==, MLXCX_BUFFER_FREE);
-	ASSERT(b->mlb_foreign);
-	b->mlb_state = MLXCX_BUFFER_ON_WQ;
-	list_insert_tail(&s->mlbs_busy, b);
+	if (s->mlbs_state != MLXCX_SHARD_READY) {
+		mutex_exit(&s->mlbs_mtx);
+		return (NULL);
+	}
+
+	if ((b = list_remove_head(&s->mlbs_free)) != NULL) {
+		ASSERT3U(b->mlb_state, ==, MLXCX_BUFFER_FREE);
+		ASSERT(b->mlb_foreign);
+		b->mlb_state = MLXCX_BUFFER_ON_WQ;
+		list_insert_tail(&s->mlbs_busy, b);
+	}
 	mutex_exit(&s->mlbs_mtx);
 
-	*bp = b;
+	return (b);
 }
 
-boolean_t
+static mlxcx_buffer_t *
+mlxcx_copy_data(mlxcx_t *mlxp, mlxcx_work_queue_t *wq, uint8_t *rptr, size_t sz)
+{
+	ddi_fm_error_t err;
+	mlxcx_buffer_t *b;
+	uint_t attempts = 0;
+
+copyb:
+	if ((b = mlxcx_buf_take(mlxp, wq)) == NULL)
+		return (NULL);
+
+	ASSERT3U(b->mlb_dma.mxdb_len, >=, sz);
+	bcopy(rptr, b->mlb_dma.mxdb_va, sz);
+
+	MLXCX_DMA_SYNC(b->mlb_dma, DDI_DMA_SYNC_FORDEV);
+
+	ddi_fm_dma_err_get(b->mlb_dma.mxdb_dma_handle, &err,
+	    DDI_FME_VERSION);
+	if (err.fme_status != DDI_FM_OK) {
+		ddi_fm_dma_err_clear(b->mlb_dma.mxdb_dma_handle,
+		    DDI_FME_VERSION);
+		mlxcx_buf_return(mlxp, b);
+		if (++attempts > MLXCX_BUF_BIND_MAX_ATTEMTPS) {
+			return (NULL);
+		}
+		goto copyb;
+	}
+
+	return (b);
+}
+
+static mlxcx_buffer_t *
+mlxcx_bind_or_copy_mblk(mlxcx_t *mlxp, mlxcx_work_queue_t *wq,
+    mblk_t *mp, size_t off)
+{
+	mlxcx_buffer_t *b;
+	uint8_t *rptr;
+	size_t sz;
+	boolean_t ret;
+
+	rptr = mp->b_rptr;
+	sz = MBLKL(mp);
+
+#ifdef DEBUG
+	if (off > 0) {
+		ASSERT3U(off, <, sz);
+	}
+#endif
+
+	rptr += off;
+	sz -= off;
+
+	if (sz < mlxp->mlx_props.mldp_tx_bind_threshold) {
+		b = mlxcx_copy_data(mlxp, wq, rptr, sz);
+	} else {
+		b = mlxcx_buf_take_foreign(mlxp, wq);
+		if (b == NULL)
+			return (NULL);
+
+		ret = mlxcx_dma_bind_mblk(mlxp, &b->mlb_dma, mp, off,
+		    B_FALSE);
+
+		if (!ret) {
+			mlxcx_buf_return(mlxp, b);
+
+			b = mlxcx_copy_data(mlxp, wq, rptr, sz);
+		}
+	}
+
+	return (b);
+}
+
+uint_t
 mlxcx_buf_bind_or_copy(mlxcx_t *mlxp, mlxcx_work_queue_t *wq,
     mblk_t *mpb, size_t off, mlxcx_buffer_t **bp)
 {
 	mlxcx_buffer_t *b, *b0 = NULL;
 	boolean_t first = B_TRUE;
-	ddi_fm_error_t err;
 	mblk_t *mp;
-	uint8_t *rptr;
-	size_t sz;
+	size_t offset = off;
 	size_t ncookies = 0;
-	boolean_t ret;
-	uint_t attempts = 0;
+	uint_t count = 0;
 
-	for (mp = mpb; mp != NULL; mp = mp->b_cont) {
-		rptr = mp->b_rptr;
-		sz = MBLKL(mp);
+	for (mp = mpb; mp != NULL && ncookies <= MLXCX_SQE_MAX_PTRS;
+	    mp = mp->b_cont) {
+		b = mlxcx_bind_or_copy_mblk(mlxp, wq, mp, offset);
+		if (b == NULL)
+			goto failed;
 
-		if (off > 0)
-			ASSERT3U(off, <, sz);
-		rptr += off;
-		sz -= off;
-
-		if (sz < mlxp->mlx_props.mldp_tx_bind_threshold)
-			goto copyb;
-
-		mlxcx_buf_take_foreign(mlxp, wq, &b);
-		ret = mlxcx_dma_bind_mblk(mlxp, &b->mlb_dma, mp, off, B_FALSE);
-
-		if (!ret) {
-			mlxcx_buf_return(mlxp, b);
-
-copyb:
-			mlxcx_buf_take(mlxp, wq, &b);
-			ASSERT3U(b->mlb_dma.mxdb_len, >=, sz);
-			bcopy(rptr, b->mlb_dma.mxdb_va, sz);
-			MLXCX_DMA_SYNC(b->mlb_dma, DDI_DMA_SYNC_FORDEV);
-			ddi_fm_dma_err_get(b->mlb_dma.mxdb_dma_handle, &err,
-			    DDI_FME_VERSION);
-			if (err.fme_status != DDI_FM_OK) {
-				ddi_fm_dma_err_clear(b->mlb_dma.mxdb_dma_handle,
-				    DDI_FME_VERSION);
-				mlxcx_buf_return(mlxp, b);
-				if (++attempts > MLXCX_BUF_BIND_MAX_ATTEMTPS) {
-					*bp = NULL;
-					return (B_FALSE);
-				}
-				goto copyb;
-			}
-		}
-
-		/*
-		 * We might overestimate here when we've copied data, since
-		 * the buffer might be longer than what we copied into it. This
-		 * is safe since it's always wrong in the conservative
-		 * direction (and we will blow up later when we actually
-		 * generate the WQE anyway).
-		 *
-		 * If the assert below ever blows, we'll have to come and fix
-		 * this up so we can transmit these packets.
-		 */
 		ncookies += b->mlb_dma.mxdb_ncookies;
 
 		if (first)
@@ -2072,64 +2301,96 @@ copyb:
 
 		b->mlb_tx_mp = mp;
 		b->mlb_tx_head = b0;
-		b->mlb_used = sz;
+		b->mlb_used = MBLKL(mp) - offset;
 
 		if (!first)
 			list_insert_tail(&b0->mlb_tx_chain, b);
 		first = B_FALSE;
-		off = 0;
+		offset = 0;
+
+		count++;
 	}
 
-	ASSERT3U(ncookies, <=, MLXCX_SQE_MAX_PTRS);
+	/*
+	 * The chain of mblks has resulted in too many cookies for
+	 * a single message. This is unusual, so take the hit to tidy
+	 * up, do a pullup to a single mblk and allocate the requisite
+	 * buf.
+	 */
+	if (ncookies > MLXCX_SQE_MAX_PTRS) {
+		DTRACE_PROBE4(pullup, mlxcx_t *, mlxp, mlxcx_work_queue_t *, wq,
+		    mblk_t *, mpb, size_t, ncookies);
+
+		if (b0 != NULL)
+			mlxcx_buf_return_chain(mlxp, b0, B_TRUE);
+
+		if ((mp = msgpullup(mpb, -1)) == NULL)
+			return (0);
+
+		b0 = mlxcx_bind_or_copy_mblk(mlxp, wq, mp, off);
+		if (b0 == NULL) {
+			freemsg(mp);
+			return (0);
+		}
+		freemsg(mpb);
+
+		b0->mlb_tx_mp = mp;
+		b0->mlb_tx_head = b0;
+		b0->mlb_used = MBLKL(mp) - off;
+
+		count = 1;
+	}
 
 	*bp = b0;
-	return (B_TRUE);
+
+	return (count);
+
+failed:
+	if (b0 != NULL)
+		mlxcx_buf_return_chain(mlxp, b0, B_TRUE);
+
+	return (0);
 }
 
-void
-mlxcx_buf_take(mlxcx_t *mlxp, mlxcx_work_queue_t *wq, mlxcx_buffer_t **bp)
+mlxcx_buffer_t *
+mlxcx_buf_take(mlxcx_t *mlxp, mlxcx_work_queue_t *wq)
 {
 	mlxcx_buffer_t *b;
 	mlxcx_buf_shard_t *s = wq->mlwq_bufs;
 
 	mutex_enter(&s->mlbs_mtx);
-	while (list_is_empty(&s->mlbs_free))
-		cv_wait(&s->mlbs_free_nonempty, &s->mlbs_mtx);
-	b = list_remove_head(&s->mlbs_free);
-	ASSERT3U(b->mlb_state, ==, MLXCX_BUFFER_FREE);
-	b->mlb_state = MLXCX_BUFFER_ON_WQ;
-	list_insert_tail(&s->mlbs_busy, b);
+	if (s->mlbs_state != MLXCX_SHARD_READY) {
+		mutex_exit(&s->mlbs_mtx);
+		return (NULL);
+	}
+
+	if ((b = list_remove_head(&s->mlbs_free)) != NULL) {
+		ASSERT3U(b->mlb_state, ==, MLXCX_BUFFER_FREE);
+		b->mlb_state = MLXCX_BUFFER_ON_WQ;
+		list_insert_tail(&s->mlbs_busy, b);
+	}
 	mutex_exit(&s->mlbs_mtx);
 
-	*bp = b;
+	return (b);
 }
-
-#define	MLXCX_BUF_TAKE_N_TIMEOUT_USEC		5000
-#define	MLXCX_BUF_TAKE_N_MAX_RETRIES		3
 
 size_t
 mlxcx_buf_take_n(mlxcx_t *mlxp, mlxcx_work_queue_t *wq,
     mlxcx_buffer_t **bp, size_t nbufs)
 {
 	mlxcx_buffer_t *b;
-	size_t done = 0, empty = 0;
-	clock_t wtime = drv_usectohz(MLXCX_BUF_TAKE_N_TIMEOUT_USEC);
+	size_t done = 0;
 	mlxcx_buf_shard_t *s;
 
 	s = wq->mlwq_bufs;
 
 	mutex_enter(&s->mlbs_mtx);
-	while (done < nbufs) {
-		while (list_is_empty(&s->mlbs_free)) {
-			(void) cv_reltimedwait(&s->mlbs_free_nonempty,
-			    &s->mlbs_mtx, wtime, TR_MILLISEC);
-			if (list_is_empty(&s->mlbs_free) &&
-			    empty++ >= MLXCX_BUF_TAKE_N_MAX_RETRIES) {
-				mutex_exit(&s->mlbs_mtx);
-				return (done);
-			}
-		}
-		b = list_remove_head(&s->mlbs_free);
+	if (s->mlbs_state != MLXCX_SHARD_READY) {
+		mutex_exit(&s->mlbs_mtx);
+		return (0);
+	}
+
+	while (done < nbufs && (b = list_remove_head(&s->mlbs_free)) != NULL) {
 		ASSERT3U(b->mlb_state, ==, MLXCX_BUFFER_FREE);
 		b->mlb_state = MLXCX_BUFFER_ON_WQ;
 		list_insert_tail(&s->mlbs_busy, b);
@@ -2142,6 +2403,8 @@ mlxcx_buf_take_n(mlxcx_t *mlxp, mlxcx_work_queue_t *wq,
 boolean_t
 mlxcx_buf_loan(mlxcx_t *mlxp, mlxcx_buffer_t *b)
 {
+	mlxcx_buf_shard_t *s = b->mlb_shard;
+
 	VERIFY3U(b->mlb_state, ==, MLXCX_BUFFER_ON_WQ);
 	ASSERT3P(b->mlb_mlx, ==, mlxp);
 
@@ -2154,6 +2417,12 @@ mlxcx_buf_loan(mlxcx_t *mlxp, mlxcx_buffer_t *b)
 
 	b->mlb_state = MLXCX_BUFFER_ON_LOAN;
 	b->mlb_wqe_index = 0;
+
+	mutex_enter(&s->mlbs_mtx);
+	list_remove(&s->mlbs_busy, b);
+	list_insert_tail(&s->mlbs_loaned, b);
+	mutex_exit(&s->mlbs_mtx);
+
 	return (B_TRUE);
 }
 
@@ -2187,12 +2456,25 @@ mlxcx_buf_return(mlxcx_t *mlxp, mlxcx_buffer_t *b)
 
 	VERIFY3U(oldstate, !=, MLXCX_BUFFER_FREE);
 	ASSERT3P(b->mlb_mlx, ==, mlxp);
+
+	/*
+	 * The mlbs_mtx held below is a heavily contended lock, so it is
+	 * imperative we do as much of the buffer clean up outside the lock
+	 * as is possible.
+	 */
 	b->mlb_state = MLXCX_BUFFER_FREE;
 	b->mlb_wqe_index = 0;
 	b->mlb_tx_head = NULL;
 	b->mlb_tx_mp = NULL;
 	b->mlb_used = 0;
+	b->mlb_wqebbs = 0;
 	ASSERT(list_is_empty(&b->mlb_tx_chain));
+
+	if (b->mlb_foreign) {
+		if (b->mlb_dma.mxdb_flags & MLXCX_DMABUF_BOUND) {
+			mlxcx_dma_unbind(mlxp, &b->mlb_dma);
+		}
+	}
 
 	mutex_enter(&s->mlbs_mtx);
 	switch (oldstate) {
@@ -2203,7 +2485,23 @@ mlxcx_buf_return(mlxcx_t *mlxp, mlxcx_buffer_t *b)
 		break;
 	case MLXCX_BUFFER_ON_LOAN:
 		ASSERT(!b->mlb_foreign);
-		list_remove(&s->mlbs_busy, b);
+		list_remove(&s->mlbs_loaned, b);
+		if (s->mlbs_state == MLXCX_SHARD_DRAINING) {
+			/*
+			 * When we're draining, Eg during mac_stop(),
+			 * we destroy the buffer immediately rather than
+			 * recycling it. Otherwise we risk leaving it
+			 * on the free list and leaking it.
+			 */
+			list_insert_tail(&s->mlbs_free, b);
+			mlxcx_buf_destroy(mlxp, b);
+			/*
+			 * Teardown might be waiting for loaned list to empty.
+			 */
+			cv_broadcast(&s->mlbs_free_nonempty);
+			mutex_exit(&s->mlbs_mtx);
+			return;
+		}
 		break;
 	case MLXCX_BUFFER_FREE:
 		VERIFY(0);
@@ -2215,14 +2513,8 @@ mlxcx_buf_return(mlxcx_t *mlxp, mlxcx_buffer_t *b)
 		break;
 	}
 
-	if (b->mlb_foreign) {
-		if (b->mlb_dma.mxdb_flags & MLXCX_DMABUF_BOUND) {
-			mlxcx_dma_unbind(mlxp, &b->mlb_dma);
-		}
-	}
-
 	list_insert_tail(&s->mlbs_free, b);
-	cv_signal(&s->mlbs_free_nonempty);
+	cv_broadcast(&s->mlbs_free_nonempty);
 
 	mutex_exit(&s->mlbs_mtx);
 
@@ -2240,9 +2532,11 @@ void
 mlxcx_buf_destroy(mlxcx_t *mlxp, mlxcx_buffer_t *b)
 {
 	mlxcx_buf_shard_t *s = b->mlb_shard;
+
 	VERIFY(b->mlb_state == MLXCX_BUFFER_FREE ||
 	    b->mlb_state == MLXCX_BUFFER_INIT);
 	ASSERT(mutex_owned(&s->mlbs_mtx));
+
 	if (b->mlb_state == MLXCX_BUFFER_FREE)
 		list_remove(&s->mlbs_free, b);
 
@@ -2261,4 +2555,21 @@ mlxcx_buf_destroy(mlxcx_t *mlxp, mlxcx_buffer_t *b)
 	ASSERT(list_is_empty(&b->mlb_tx_chain));
 
 	kmem_cache_free(mlxp->mlx_bufs_cache, b);
+}
+
+void
+mlxcx_shard_ready(mlxcx_buf_shard_t *s)
+{
+	mutex_enter(&s->mlbs_mtx);
+	s->mlbs_state = MLXCX_SHARD_READY;
+	mutex_exit(&s->mlbs_mtx);
+}
+
+void
+mlxcx_shard_draining(mlxcx_buf_shard_t *s)
+{
+	mutex_enter(&s->mlbs_mtx);
+	s->mlbs_state = MLXCX_SHARD_DRAINING;
+	cv_broadcast(&s->mlbs_free_nonempty);
+	mutex_exit(&s->mlbs_mtx);
 }

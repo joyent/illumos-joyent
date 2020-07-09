@@ -28,6 +28,7 @@
 
 /*
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #include <sys/cdefs.h>
@@ -76,7 +77,8 @@ __FBSDID("$FreeBSD$");
 #include "npt.h"
 
 SYSCTL_DECL(_hw_vmm);
-SYSCTL_NODE(_hw_vmm, OID_AUTO, svm, CTLFLAG_RW, NULL, NULL);
+SYSCTL_NODE(_hw_vmm, OID_AUTO, svm, CTLFLAG_RW | CTLFLAG_MPSAFE, NULL,
+    NULL);
 
 /*
  * SVM CPUID function 0x8000_000A, edx bit decoding.
@@ -1513,11 +1515,8 @@ svm_vmexit(struct svm_softc *svm_sc, int vcpu, struct vm_exit *vmexit)
 		break;
 	case VMCB_EXIT_CPUID:
 		vmm_stat_incr(svm_sc->vm, vcpu, VMEXIT_CPUID, 1);
-		handled = x86_emulate_cpuid(svm_sc->vm, vcpu,
-		    (uint32_t *)&state->rax,
-		    (uint32_t *)&ctx->sctx_rbx,
-		    (uint32_t *)&ctx->sctx_rcx,
-		    (uint32_t *)&ctx->sctx_rdx);
+		handled = x86_emulate_cpuid(svm_sc->vm, vcpu, &state->rax,
+		    &ctx->sctx_rbx, &ctx->sctx_rcx, &ctx->sctx_rdx);
 		break;
 	case VMCB_EXIT_HLT:
 		vmm_stat_incr(svm_sc->vm, vcpu, VMEXIT_HLT, 1);
@@ -1564,6 +1563,9 @@ svm_vmexit(struct svm_softc *svm_sc, int vcpu, struct vm_exit *vmexit)
 	VCPU_CTR4(svm_sc->vm, vcpu, "%s %s vmexit at %#lx/%d",
 	    handled ? "handled" : "unhandled", exit_reason_to_str(code),
 	    vmexit->rip, vmexit->inst_length);
+
+	DTRACE_PROBE3(vmm__vexit, int, vcpu, uint64_t, vmexit->rip, uint32_t,
+	    code);
 
 	if (handled) {
 		vmexit->rip += vmexit->inst_length;
@@ -2295,6 +2297,11 @@ svm_setreg(void *arg, int vcpu, int ident, uint64_t val)
 
 	if (reg != NULL) {
 		*reg = val;
+		return (0);
+	}
+
+	if (ident == VM_REG_GUEST_ENTRY_INST_LENGTH) {
+		/* Ignore. */
 		return (0);
 	}
 

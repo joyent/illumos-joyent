@@ -10,7 +10,7 @@
 #
 
 #
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 #
 
 [DEFAULT]
@@ -130,7 +130,8 @@ tests = ['zfs_mount_001_pos', 'zfs_mount_002_pos', 'zfs_mount_003_pos',
     'zfs_mount_007_pos', 'zfs_mount_008_pos', 'zfs_mount_009_neg',
     'zfs_mount_010_neg', 'zfs_mount_011_neg', 'zfs_mount_012_neg',
     'zfs_mount_all_001_pos', 'zfs_mount_all_fail', 'zfs_mount_all_mountpoints',
-    'zfs_mount_encrypted']
+    'zfs_mount_encrypted', 'zfs_mount_watched_inotify',
+    'zfs_mount_watched_portfs' ]
 
 [/opt/zfs-tests/tests/functional/cli_root/zfs_program]
 tests = ['zfs_program_json']
@@ -163,6 +164,10 @@ tests = ['zfs_rename_001_pos', 'zfs_rename_002_pos', 'zfs_rename_003_pos',
 
 [/opt/zfs-tests/tests/functional/cli_root/zfs_reservation]
 tests = ['zfs_reservation_001_pos', 'zfs_reservation_002_pos']
+
+[/opt/zfs-tests/tests/functional/resilver]
+tests = ['resilver_restart_001', 'resilver_restart_002']
+tags = ['functional', 'resilver']
 
 [/opt/zfs-tests/tests/functional/cli_root/zfs_rollback]
 tests = ['zfs_rollback_001_pos', 'zfs_rollback_002_pos',
@@ -242,7 +247,7 @@ tests = ['zpool_create_001_pos', 'zpool_create_002_pos',
     'zpool_create_encrypted', 'zpool_create_crypt_combos',
     'zpool_create_features_001_pos', 'zpool_create_features_002_pos',
     'zpool_create_features_003_pos', 'zpool_create_features_004_neg',
-    'zpool_create_tempname', 'create-o_ashift']
+    'zpool_create_features_005_pos', 'zpool_create_tempname', 'create-o_ashift']
 
 [/opt/zfs-tests/tests/functional/cli_root/zpool_destroy]
 tests = ['zpool_destroy_001_pos', 'zpool_destroy_002_pos',
@@ -506,6 +511,9 @@ tests = ['projectid_001_pos', 'projectid_002_pos', 'projectid_003_pos',
 tests = ['quota_001_pos', 'quota_002_pos', 'quota_003_pos', 'quota_004_pos',
     'quota_005_pos', 'quota_006_neg']
 
+[/opt/zfs-tests/tests/functional/raidz]
+tests = ['raidz_001_neg', 'raidz_002_pos']
+
 [/opt/zfs-tests/tests/functional/refquota]
 tests = ['refquota_001_pos', 'refquota_002_pos', 'refquota_003_pos',
     'refquota_004_pos', 'refquota_005_pos', 'refquota_006_neg']
@@ -631,9 +639,7 @@ tests = ['zvol_misc_001_neg', 'zvol_misc_002_pos', 'zvol_misc_003_neg',
     'zvol_misc_004_pos', 'zvol_misc_005_neg', 'zvol_misc_006_pos']
 
 [/opt/zfs-tests/tests/functional/libzfs]
-tests = ['many_fds']
-pre =
-post =
+tests = ['many_fds', 'libzfs_input']
 
 [/opt/zfs-tests/tests/functional/log_spacemap]
 tests = ['log_spacemap_import_logs']

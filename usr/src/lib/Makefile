@@ -188,7 +188,6 @@ SUBDIRS +=				\
 	libpkg		\
 	libpool		\
 	libpp		\
-	libppt		\
 	libproc		\
 	libproject	\
 	libpthread	\
@@ -239,6 +238,7 @@ SUBDIRS +=				\
 	libtsnet	\
 	libtsol		\
 	libumem		\
+	libutempter	\
 	libuuid		\
 	libuutil	\
 	libvnd		\
@@ -286,6 +286,7 @@ SUBDIRS +=				\
 
 i386_SUBDIRS=		\
 	libfdisk	\
+	libppt		\
 	libsaveargs	\
 	libvmm		\
 	libvmmapi
@@ -456,7 +457,6 @@ HDRSUBDIRS=				\
 	libpicltree	\
 	libpool		\
 	libpp		\
-	libppt		\
 	libproc		\
 	libraidcfg	\
 	librcm		\
@@ -493,6 +493,7 @@ HDRSUBDIRS=				\
 	libtsnet	\
 	libtsol		\
 	libumem		\
+	libutempter	\
 	libuutil	\
 	libvnd		\
 	libvolmgt	\
@@ -518,6 +519,7 @@ HDRSUBDIRS=				\
 
 i386_HDRSUBDIRS=	\
 	libfdisk	\
+	libppt		\
 	libsaveargs	\
 	libvmm		\
 	libvmmapi
@@ -563,13 +565,14 @@ install_extra:
 
 clean clobber:		$(NOWAIT_SUBDIRS:%=%-nodepend)
 
-lint:
 
 install_h check:	$(HDRSUBDIRS:%=%-nodepend)
 
 _msg:			$(MSGSUBDIRS:%=%-nodepend) .WAIT _dc
 
 _dc:			$(DCSUBDIRS:%=%-nodepend)
+
+lint:
 
 # Library interdependencies are called out explicitly here.
 ../cmd/sgs/libconv: crt

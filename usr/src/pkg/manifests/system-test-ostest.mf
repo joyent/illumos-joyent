@@ -13,6 +13,7 @@
 # Copyright (c) 2012, 2016 by Delphix. All rights reserved.
 # Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright 2020 Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 
 set name=pkg.fmri value=pkg:/system/test/ostest@$(PKGVERS)
@@ -28,6 +29,7 @@ dir path=opt/os-tests/tests
 dir path=opt/os-tests/tests/ddi_ufm
 dir path=opt/os-tests/tests/file-locking
 $(i386_ONLY)dir path=opt/os-tests/tests/i386
+dir path=opt/os-tests/tests/libtopo
 dir path=opt/os-tests/tests/pf_key
 dir path=opt/os-tests/tests/poll
 dir path=opt/os-tests/tests/sdevfs
@@ -35,6 +37,7 @@ dir path=opt/os-tests/tests/secflags
 dir path=opt/os-tests/tests/sigqueue
 dir path=opt/os-tests/tests/sockfs
 dir path=opt/os-tests/tests/stress
+dir path=opt/os-tests/tests/timer
 dir path=opt/os-tests/tests/uccid
 file path=opt/os-tests/README mode=0444
 file path=opt/os-tests/bin/ostest mode=0555
@@ -53,6 +56,12 @@ $(i386_ONLY)file path=opt/os-tests/tests/i386/badseg mode=0555
 $(i386_ONLY)file path=opt/os-tests/tests/i386/badseg_exec mode=0555
 $(i386_ONLY)file path=opt/os-tests/tests/i386/ldt mode=0555
 $(i386_ONLY)file path=opt/os-tests/tests/imc_test mode=0555
+file path=opt/os-tests/tests/libtopo/digraph-test mode=0555
+file path=opt/os-tests/tests/libtopo/digraph-test-in-badedge.xml mode=0444
+file path=opt/os-tests/tests/libtopo/digraph-test-in-badelement.xml mode=0444
+file path=opt/os-tests/tests/libtopo/digraph-test-in-badnum.xml mode=0444
+file path=opt/os-tests/tests/libtopo/digraph-test-in-badscheme.xml mode=0444
+file path=opt/os-tests/tests/libtopo/digraph-test-in.xml mode=0444
 file path=opt/os-tests/tests/odirectory.32 mode=0555
 file path=opt/os-tests/tests/odirectory.64 mode=0555
 file path=opt/os-tests/tests/pf_key/acquire-compare mode=0555
@@ -83,9 +92,12 @@ file path=opt/os-tests/tests/sockfs/conn mode=0555
 file path=opt/os-tests/tests/sockfs/dgram mode=0555
 file path=opt/os-tests/tests/sockfs/drop_priv mode=0555
 file path=opt/os-tests/tests/sockfs/nosignal mode=0555
+file path=opt/os-tests/tests/sockfs/rights.32 mode=0555
+file path=opt/os-tests/tests/sockfs/rights.64 mode=0555
 file path=opt/os-tests/tests/sockfs/sockpair mode=0555
 file path=opt/os-tests/tests/spoof-ras mode=0555
 file path=opt/os-tests/tests/stress/dladm-kstat mode=0555
+file path=opt/os-tests/tests/timer/timer_limit mode=0555
 file path=opt/os-tests/tests/uccid/atrparse mode=0555
 file path=opt/os-tests/tests/uccid/excl-badread mode=0555
 file path=opt/os-tests/tests/uccid/excl-basic mode=0555

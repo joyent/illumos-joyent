@@ -30,6 +30,7 @@
 # Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
 # Copyright 2020 Joyent, Inc.
 # Copyright 2019 RackTop Systems.
+# Copyright 2020 Oxide Computer Company
 #
 
 #
@@ -60,7 +61,7 @@ NATIVE_ADJUNCT=	/usr
 # Compatibility code for FreeBSD etc.
 #
 COMPAT=	$(SRC)/compat
-CONTRIB= $(SRC)/../contrib
+CONTRIB= $(SRC)/contrib
 
 #
 # RELEASE_BUILD should be cleared for final release builds.
@@ -147,7 +148,7 @@ GCCLIBDIR64=	$(GNUC_ROOT)/lib/$(MACH64)
 
 DOCBOOK_XSL_ROOT=	/usr/share/sgml/docbook/xsl-stylesheets
 
-RPCGEN=		/usr/bin/rpcgen
+RPCGEN=		$(ONBLD_TOOLS)/bin/$(MACH)/rpcgen
 STABS=		$(ONBLD_TOOLS)/bin/$(MACH)/stabs
 ELFEXTRACT=	$(ONBLD_TOOLS)/bin/$(MACH)/elfextract
 MBH_PATCH=	$(ONBLD_TOOLS)/bin/$(MACH)/mbh_patch
@@ -1116,9 +1117,23 @@ VERSION=	SunOS Development
 PATCHID=	$(VERSION)
 RELEASE_DATE=	release date not set
 PATCH_DATE=	$(RELEASE_DATE)
-RELEASE_CM=	"@($(POUND_SIGN))SunOS $(RELEASE) $(PATCHID) $(PATCH_DATE)"
-DEV_CM=		"@($(POUND_SIGN))SunOS Internal Development: non-nightly build"
+RELEASE_CM=	"@($(POUND_SIGN))illumos $(PATCHID) $(PATCH_DATE)"
+DEV_CM_TAIL=	development build: $(LOGNAME)
+DEV_CM=		"@($(POUND_SIGN))illumos $(DEV_CM_TAIL)"
 UTS_LABEL=	$(RELEASE)
+
+#
+# The boot banner may be overridden by distributions.  Up to five lines can be
+# specified by overriding the BOOTBANNER macros, and any line that expands to
+# an empty string will not be printed.  See comments in
+# bootbanner_expand_template() for more details about the template string
+# format.
+#
+BOOTBANNER1=	^o Version ^v ^w-bit
+BOOTBANNER2=
+BOOTBANNER3=
+BOOTBANNER4=
+BOOTBANNER5=
 
 PROCESS_COMMENT=  @?${MCS} -d -a $(RELEASE_CM) -a $(DEV_CM)
 $(RELEASE_BUILD)PROCESS_COMMENT=   @?${MCS} -d -a $(RELEASE_CM)

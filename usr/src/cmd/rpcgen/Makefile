@@ -25,24 +25,12 @@
 #
 # cmd/rpcgen/Makefile
 
-PROG= rpcgen 
-
-
-OBJS= rpc_clntout.o rpc_cout.o rpc_hout.o rpc_main.o rpc_parse.o \
-	  rpc_scan.o rpc_svcout.o rpc_tblout.o rpc_util.o rpc_sample.o
-SRCS= $(OBJS:%.o=%.c)
-
 include ../Makefile.cmd
-
-LDLIBS += 
-CFLAGS +=	$(CCVERBOSE)
-CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-char-subscripts
+include Makefile.common
 
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG)
 
 $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
@@ -52,7 +40,5 @@ install: all $(ROOTPROG)
 
 clean:
 	$(RM) $(OBJS)
-
-lint:	lint_SRCS
 
 include ../Makefile.targ

@@ -12,6 +12,7 @@
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2020 Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 
 [DEFAULT]
@@ -63,12 +64,17 @@ tests = ['tmpfs_badmount', 'tmpfs_enospc']
 user = root
 tests = ['dladm-kstat']
 
+[/opt/os-tests/tests/timer]
+user = root
+tests = ['timer_limit']
+
 [/opt/os-tests/tests/file-locking]
 tests = ['runtests.32', 'runtests.64']
 
 [/opt/os-tests/tests/sockfs]
 user = root
-tests = ['conn', 'dgram', 'drop_priv', 'nosignal', 'sockpair']
+tests = ['conn', 'dgram', 'drop_priv', 'nosignal', 'rights.32', 'rights.64',
+         'sockpair']
 
 [/opt/os-tests/tests/pf_key]
 user = root
@@ -112,3 +118,7 @@ arch = i86pc
 [/opt/os-tests/tests/uccid]
 arch = i86pc
 tests = ['atrparse']
+
+[/opt/os-tests/tests/libtopo]
+user = root
+tests = ['digraph-test']

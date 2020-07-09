@@ -8,6 +8,7 @@
  * source.  A copy of the CDDL is also available via the Internet at
  * http://www.illumos.org/license/CDDL.
  */
+/* This file is dual-licensed; see usr/src/contrib/bhyve/LICENSE */
 
 /*
  * Copyright (c) 2018, Joyent, Inc.
@@ -20,6 +21,7 @@
 #include <sys/list.h>
 #include <sys/types.h>
 #include <sys/vmm.h>
+#include <sys/vmm_kernel.h>
 #include <sys/vmm_impl.h>
 #include <sys/zone.h>
 

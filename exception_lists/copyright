@@ -25,6 +25,7 @@
 # Copyright (c) 2011 by Delphix. All rights reserved.
 # Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
 # Copyright (c) 2018, Joyent, Inc.
+# Copyright 2020 Oxide Computer Company
 #
 
 syntax: glob
@@ -410,6 +411,8 @@ usr/src/lib/libsmbfs/netsmb/spnego.h
 usr/src/lib/libsmbfs/smb/derparse.[ch]
 usr/src/lib/libsmbfs/smb/spnego.c
 usr/src/lib/libsmbfs/smb/spnegoparse.[ch]
+usr/src/test/crypto-tests/tests/digest/data/*.rsp
+usr/src/test/crypto-tests/tests/digest/data/README
 usr/src/test/util-tests/tests/dis/*/*.out
 usr/src/test/util-tests/tests/libsff/*.out
 usr/src/test/util-tests/tests/grep_xpg4/files/gout*
@@ -543,15 +546,9 @@ usr/src/cmd/bhyve/vga.[ch]
 usr/src/cmd/bhyve/virtio.[ch]
 usr/src/cmd/bhyve/xmsr.[ch]
 usr/src/cmd/bhyvectl/bhyvectl.c
-usr/src/compat/freebsd/*.h
-usr/src/compat/freebsd/*/*.h
-usr/src/compat/freebsd/amd64/machine/*.h
-usr/contrib/freebsd/*/*.h
-usr/contrib/freebsd/*/*/*.h
-usr/contrib/freebsd/lib/libutil/*.c
-usr/src/head/bhyve.h
+usr/src/compat/bhyve/*
+usr/src/contrib/bhyve/*
 usr/src/lib/libvmmapi/common/vmmapi.[ch]
-usr/src/tools/scripts/gensetdefs.pl
 usr/src/uts/i86pc/io/vmm/amd/*.[chs]
 usr/src/uts/i86pc/io/vmm/intel/*.[chs]
 usr/src/uts/i86pc/io/vmm/intel/offsets.in

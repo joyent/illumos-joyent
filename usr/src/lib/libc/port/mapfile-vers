@@ -78,6 +78,14 @@ $if _x86 && _ELF64
 $add amd64
 $endif
 
+SYMBOL_VERSION ILLUMOS_0.33 {
+    protected:
+	c16rtomb;
+	c32rtomb;
+	mbrtoc16;
+	mbrtoc32;
+} ILLUMOS_0.32;
+
 SYMBOL_VERSION ILLUMOS_0.32 {
     protected:
 	fmemopen;
@@ -3357,6 +3365,10 @@ $if sparc32
 	__lshrdi3;
 	__muldi3;
 	__ucmpdi2;
+$endif
+
+$if sparcv9
+	__multi3;
 $endif
 
 $if _x86

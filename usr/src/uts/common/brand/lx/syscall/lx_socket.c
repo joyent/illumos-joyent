@@ -22,7 +22,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
  */
 
@@ -1401,6 +1401,18 @@ lx_socket_create(int domain, int type, int protocol, int options, file_t **fpp,
 	vnode_t *vp;
 	file_t *fp;
 	int err, fd;
+
+	/*
+	 * EACCES is returned in Linux when the user isn't allowed to use a
+	 * "ping socket". EACCES is also used by the iputils-ping userland
+	 * application to determine if fallback to SOCK_RAW is necessary.
+	 *
+	 * This can be removed if we ever implement SOCK_DGRAM + IPPROTO_ICMP.
+	 */
+	if ((domain == AF_INET && type == SOCK_DGRAM && protocol ==
+	    IPPROTO_ICMP) || (domain == AF_INET6 && type == SOCK_DGRAM &&
+	    protocol == IPPROTO_ICMPV6))
+		return (EACCES);
 
 	/* logic cloned from so_socket */
 	so = socket_create(domain, type, protocol, NULL, NULL, SOCKET_SLEEP,
@@ -3962,6 +3974,20 @@ lx_getsockopt_socket(sonode_t *so, int optname, void *optval,
 	lx_socket_aux_data_t *sad;
 
 	switch (optname) {
+	case LX_SO_PROTOCOL:
+		/*
+		 * We need to special-case netlink and AF_UNIX too.
+		 */
+		if (so->so_family != AF_LX_NETLINK && so->so_family != AF_UNIX)
+			break;	/* Common-case it. */
+		if (*optlen < sizeof (int)) {
+			error = EINVAL;
+		} else {
+			*intval = so->so_protocol;
+		}
+		*optlen = sizeof (int);
+		return (error);
+
 	case LX_SO_TYPE:
 		/*
 		 * Special handling for connectionless AF_UNIX sockets.

@@ -47,7 +47,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/ioctl.h>
+#ifdef	__FreeBSD__
+#include <sys/linker.h>
+#endif
 #include <sys/mman.h>
+#include <sys/module.h>
 #include <sys/_iovec.h>
 #include <sys/cpuset.h>
 
@@ -66,9 +70,6 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/vmm.h>
 #include <machine/vmm_dev.h>
-#ifndef	__FreeBSD__
-#include <sys/vmm_impl.h>
-#endif
 
 #include "vmmapi.h"
 
@@ -156,7 +157,11 @@ vm_device_open(const char *name)
 int
 vm_create(const char *name)
 {
-
+#ifdef __FreeBSD__
+	/* Try to load vmm(4) module before creating a guest. */
+	if (modfind("vmm") < 0)
+		kldload("vmm");
+#endif
 	return (CREATE((char *)name));
 }
 
@@ -811,6 +816,25 @@ vm_inject_exception(struct vmctx *ctx, int vcpu, int vector, int errcode_valid,
 	return (ioctl(ctx->fd, VM_INJECT_EXCEPTION, &exc));
 }
 
+#ifndef __FreeBSD__
+void
+vm_inject_fault(struct vmctx *ctx, int vcpu, int vector, int errcode_valid,
+    int errcode)
+{
+	int error;
+	struct vm_exception exc;
+
+	exc.cpuid = vcpu;
+	exc.vector = vector;
+	exc.error_code = errcode;
+	exc.error_code_valid = errcode_valid;
+	exc.restart_instruction = 1;
+	error = ioctl(ctx->fd, VM_INJECT_EXCEPTION, &exc);
+
+	assert(error == 0);
+}
+#endif /* __FreeBSD__ */
+
 int
 vm_apicid2vcpu(struct vmctx *ctx, int apicid)
 {
@@ -898,6 +922,25 @@ vm_ioapic_pincount(struct vmctx *ctx, int *pincount)
 }
 
 int
+vm_readwrite_kernemu_device(struct vmctx *ctx, int vcpu, vm_paddr_t gpa,
+    bool write, int size, uint64_t *value)
+{
+	struct vm_readwrite_kernemu_device irp = {
+		.vcpuid = vcpu,
+		.access_width = fls(size) - 1,
+		.gpa = gpa,
+		.value = write ? *value : ~0ul,
+	};
+	long cmd = (write ? VM_SET_KERNEMU_DEV : VM_GET_KERNEMU_DEV);
+	int rc;
+
+	rc = ioctl(ctx->fd, cmd, &irp);
+	if (rc == 0 && !write)
+		*value = irp.value;
+	return (rc);
+}
+
+int
 vm_isa_assert_irq(struct vmctx *ctx, int atpic_irq, int ioapic_irq)
 {
 	struct vm_isa_irq isa_irq;
@@ -957,16 +1000,13 @@ vm_inject_nmi(struct vmctx *ctx, int vcpu)
 	return (ioctl(ctx->fd, VM_INJECT_NMI, &vmnmi));
 }
 
-static struct {
-	const char	*name;
-	int		type;
-} capstrmap[] = {
-	{ "hlt_exit",		VM_CAP_HALT_EXIT },
-	{ "mtrap_exit",		VM_CAP_MTRAP_EXIT },
-	{ "pause_exit",		VM_CAP_PAUSE_EXIT },
-	{ "unrestricted_guest",	VM_CAP_UNRESTRICTED_GUEST },
-	{ "enable_invpcid",	VM_CAP_ENABLE_INVPCID },
-	{ 0 }
+static const char *capstrmap[] = {
+	[VM_CAP_HALT_EXIT]  = "hlt_exit",
+	[VM_CAP_MTRAP_EXIT] = "mtrap_exit",
+	[VM_CAP_PAUSE_EXIT] = "pause_exit",
+	[VM_CAP_UNRESTRICTED_GUEST] = "unrestricted_guest",
+	[VM_CAP_ENABLE_INVPCID] = "enable_invpcid",
+	[VM_CAP_BPT_EXIT] = "bpt_exit",
 };
 
 int
@@ -974,9 +1014,9 @@ vm_capability_name2type(const char *capname)
 {
 	int i;
 
-	for (i = 0; capstrmap[i].name != NULL && capname != NULL; i++) {
-		if (strcmp(capstrmap[i].name, capname) == 0)
-			return (capstrmap[i].type);
+	for (i = 0; i < nitems(capstrmap); i++) {
+		if (strcmp(capstrmap[i], capname) == 0)
+			return (i);
 	}
 
 	return (-1);
@@ -985,12 +1025,8 @@ vm_capability_name2type(const char *capname)
 const char *
 vm_capability_type2name(int type)
 {
-	int i;
-
-	for (i = 0; capstrmap[i].name != NULL; i++) {
-		if (capstrmap[i].type == type)
-			return (capstrmap[i].name);
-	}
+	if (type >= 0 && type < nitems(capstrmap))
+		return (capstrmap[type]);
 
 	return (NULL);
 }
@@ -1808,6 +1844,7 @@ vm_get_ioctls(size_t *len)
 	    VM_MMAP_GETNEXT, VM_SET_REGISTER, VM_GET_REGISTER,
 	    VM_SET_SEGMENT_DESCRIPTOR, VM_GET_SEGMENT_DESCRIPTOR,
 	    VM_SET_REGISTER_SET, VM_GET_REGISTER_SET,
+	    VM_SET_KERNEMU_DEV, VM_GET_KERNEMU_DEV,
 	    VM_INJECT_EXCEPTION, VM_LAPIC_IRQ, VM_LAPIC_LOCAL_IRQ,
 	    VM_LAPIC_MSI, VM_IOAPIC_ASSERT_IRQ, VM_IOAPIC_DEASSERT_IRQ,
 	    VM_IOAPIC_PULSE_IRQ, VM_IOAPIC_PINCOUNT, VM_ISA_ASSERT_IRQ,

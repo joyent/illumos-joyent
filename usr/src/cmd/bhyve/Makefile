@@ -26,7 +26,6 @@ all	:=	TARGET = all
 install	:=	TARGET = install
 clean	:=	TARGET = clean
 clobber	:=	TARGET = clobber
-lint	:=	TARGET = lint
 
 SRCS =	acpi.c			\
 	atkbdc.c		\
@@ -76,10 +75,15 @@ SRCS =	acpi.c			\
 	vga.c			\
 	virtio.c		\
 	vmm_instruction_emul.c	\
+	vmgenc.c		\
 	xmsr.c			\
 	spinup_ap.c		\
 	iov.c			\
 	bhyve_sol_glue.c
+
+# We are not yet performing instruction emulation in userspace, so going to the
+# trouble of fixing the header tangle for this is not worth the complexity.
+	#kernemu_dev.c		\
 
 # The virtio-scsi driver appears to include  a slew of materials from FreeBSD's
 # native SCSI implementation.  We will omit that complexity for now.
@@ -112,10 +116,10 @@ MEVENT_TEST_OBJS = $(MEVENT_TEST_SRCS:.c=.o)
 CLEANFILES =	$(PROG) $(ZHYVE_PROG) $(MEVENT_TEST_PROG) $(MEVENT_TEST_OBJS)
 
 CFLAGS +=	$(CCVERBOSE) -_gcc=-Wimplicit-function-declaration -_gcc=-Wno-parentheses
-CPPFLAGS =	-I$(COMPAT)/freebsd -I$(CONTRIB)/freebsd \
-		-I$(COMPAT)/freebsd/amd64 -I$(CONTRIB)/freebsd/amd64 \
-		-I$(CONTRIB)/freebsd/dev/usb/controller \
-		-I$(CONTRIB)/freebsd/dev/mii \
+CPPFLAGS =	-I$(COMPAT)/bhyve -I$(CONTRIB)/bhyve \
+		-I$(COMPAT)/bhyve/amd64 -I$(CONTRIB)/bhyve/amd64 \
+		-I$(CONTRIB)/bhyve/dev/usb/controller \
+		-I$(CONTRIB)/bhyve/dev/mii \
 		-I$(SRC)/uts/common/io/e1000api \
 		$(CPPFLAGS.master) \
 		-I$(ROOT)/usr/platform/i86pc/include \
@@ -126,6 +130,7 @@ CPPFLAGS =	-I$(COMPAT)/freebsd -I$(CONTRIB)/freebsd \
 		-DWITHOUT_CAPSICUM
 
 pci_nvme.o := CERRWARN += -_gcc=-Wno-pointer-sign
+pci_nvme.o := SMOFF += kmalloc_wrong_size
 
 SMOFF += all_func_returns,leaks,no_if_block
 
@@ -133,16 +138,8 @@ SMOFF += all_func_returns,leaks,no_if_block
 CSTD=		$(CSTD_GNU99)
 C99MODE=	-xc99=%all
 
-$(PROG) := LDLIBS +=	\
-	-lsocket	\
-	-lnsl		\
-	-ldlpi		\
-	-ldladm		\
-	-lmd		\
-	-lsunw_crypto	\
-	-luuid		\
-	-lvmmapi	\
-	-lz
+$(PROG) := LDLIBS += -lsocket -lnsl -ldlpi -ldladm -lmd -lsunw_crypto -luuid \
+	-lvmmapi -lz
 $(ZHYVE_PROG) := LDLIBS += -lnvpair
 $(MEVENT_TEST_PROG) := LDLIBS += -lsocket
 

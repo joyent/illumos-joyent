@@ -83,8 +83,8 @@ static ddi_dma_attr_t dma_attr = {
 	0x00000001,			/* dma_attr_minxfer	*/
 	0x000000000000FFFFull,		/* dma_attr_maxxfer	*/
 	0x00000000FFFFFFFFull,		/* dma_attr_seg		*/
-	1,				/* dma_attr_sgllen 	*/
-	0x00000001,			/* dma_attr_granular 	*/
+	1,				/* dma_attr_sgllen	*/
+	0x00000001,			/* dma_attr_granular	*/
 	DDI_DMA_FLAGERR			/* dma_attr_flags */
 };
 
@@ -119,9 +119,7 @@ static ddi_device_acc_attr_t bge_data_accattr = {
 static int		bge_m_start(void *);
 static void		bge_m_stop(void *);
 static int		bge_m_promisc(void *, boolean_t);
-static int		bge_m_unicst(void * pArg, const uint8_t *);
 static int		bge_m_multicst(void *, boolean_t, const uint8_t *);
-static void		bge_m_resources(void * arg);
 static void		bge_m_ioctl(void *, queue_t *, mblk_t *);
 static boolean_t	bge_m_getcapab(void *, mac_capab_t, void *);
 static int		bge_unicst_set(void *, const uint8_t *,
@@ -140,47 +138,19 @@ static void		bge_priv_propinfo(const char *,
     mac_prop_info_handle_t);
 
 static mac_callbacks_t bge_m_callbacks = {
-    MC_IOCTL
-#ifdef MC_RESOURCES
-  | MC_RESOURCES
-#endif
-#ifdef MC_SETPROP
-  | MC_SETPROP
-#endif
-#ifdef MC_GETPROP
-  | MC_GETPROP
-#endif
-#ifdef MC_PROPINFO
-  | MC_PROPINFO
-#endif
-  | MC_GETCAPAB,
-	bge_m_stat,
-	bge_m_start,
-	bge_m_stop,
-	bge_m_promisc,
-	bge_m_multicst,
-	bge_m_unicst,
-	bge_m_tx,
-#ifdef MC_RESOURCES
-	bge_m_resources,
-#else
-	NULL,
-#endif
-	bge_m_ioctl,
-	bge_m_getcapab,
-#ifdef MC_OPEN
-	NULL,
-	NULL,
-#endif
-#ifdef MC_SETPROP
-	bge_m_setprop,
-#endif
-#ifdef MC_GETPROP
-	bge_m_getprop,
-#endif
-#ifdef MC_PROPINFO
-	bge_m_propinfo
-#endif
+	.mc_callbacks = MC_IOCTL | MC_SETPROP | MC_GETPROP | MC_PROPINFO |
+	    MC_GETCAPAB,
+	.mc_getstat = bge_m_stat,
+	.mc_start = bge_m_start,
+	.mc_stop = bge_m_stop,
+	.mc_setpromisc = bge_m_promisc,
+	.mc_multicst = bge_m_multicst,
+	.mc_tx = bge_m_tx,
+	.mc_ioctl = bge_m_ioctl,
+	.mc_getcapab = bge_m_getcapab,
+	.mc_setprop = bge_m_setprop,
+	.mc_getprop = bge_m_getprop,
+	.mc_propinfo = bge_m_propinfo
 };
 
 char *bge_priv_prop[] = {
@@ -1288,21 +1258,6 @@ bge_priv_propinfo(const char *pr_name, mac_prop_info_handle_t mph)
 	mac_prop_info_set_default_str(mph, valstr);
 }
 
-
-static int
-bge_m_unicst(void * arg, const uint8_t * mac_addr)
-{
-	bge_t *bgep = arg;
-	int i;
-
-	/* XXX sets the mac address for all ring slots... OK? */
-	for (i = 0; i < MIN(bgep->chipid.rx_rings, MAC_ADDRESS_REGS_MAX); i++)
-		bge_addmac(&bgep->recv[i], mac_addr);
-
-	return (0);
-}
-
-
 /*
  * Compute the index of the required bit in the multicast hash map.
  * This must mirror the way the hardware actually does it!
@@ -1463,37 +1418,6 @@ bge_m_promisc(void *arg, boolean_t on)
 	return (0);
 }
 
-#ifdef MC_RESOURCES
-
-static void
-bge_blank(void * arg, time_t tick_cnt, uint_t pkt_cnt)
-{
-	(void)arg;
-	(void)tick_cnt;
-	(void)pkt_cnt;
-}
-
-static void
-bge_m_resources(void * arg)
-{
-	bge_t *bgep = arg;
-	mac_rx_fifo_t mrf;
-	int i;
-
-	mrf.mrf_type              = MAC_RX_FIFO;
-	mrf.mrf_blank             = bge_blank;
-	mrf.mrf_arg               = (void *)bgep;
-	mrf.mrf_normal_blank_time = 25;
-	mrf.mrf_normal_pkt_count  = 8;
-
-	for (i = 0; i < BGE_RECV_RINGS_MAX; i++) {
-		bgep->macRxResourceHandles[i] =
-		    mac_resource_add(bgep->mh, (mac_resource_t *)&mrf);
-	}
-}
-
-#endif /* MC_RESOURCES */
-
 /*
  * Find the slot for the specified unicast address
  */
@@ -1513,8 +1437,49 @@ bge_unicst_find(bge_t *bgep, const uint8_t *mac_addr)
 }
 
 /*
- * Programs the classifier to start steering packets matching 'mac_addr' to the
- * specified ring 'arg'.
+ * The job of bge_addmac() is to set up everything in hardware for the mac
+ * address indicated to map to the specified group.
+ *
+ * For this to make sense, we need to first understand how most of the bge chips
+ * work. A given packet reaches a ring in two distinct logical steps:
+ *
+ *  1) The device must accept the packet.
+ *  2) The device must steer an accepted packet to a specific ring.
+ *
+ * For step 1, the device has four global MAC address filtering registers. We
+ * must either add the address here or put the device in promiscuous mode.
+ * Because there are only four of these and up to four groups, each group is
+ * only allowed to program a single entry. Note, this is not explicitly done in
+ * the driver. Rather, it is implicitly done by how we implement step 2. These
+ * registers start at 0x410 and are referred to as the 'EMAC MAC Addresses' in
+ * the manuals.
+ *
+ * For step 2, the device has eight sets of rule registers that are used to
+ * control how a packet in step 1 is mapped to a specific ring. Each set is
+ * comprised of a control register and a mask register. These start at 0x480 and
+ * are referred to as the 'Receive Rules Control Registers' and 'Receive Rules
+ * Value/Mask Registers'. These can be used to check for a 16-bit or 32-bit
+ * value at an offset in the packet. In addition, two sets can be combined to
+ * create a single conditional rule.
+ *
+ * For our purposes, we need to use this mechanism to steer a mac address to a
+ * specific ring. This requires that we use two of the sets of registers per MAC
+ * address that comes in here. The data about this is stored in 'mac_addr_rule'
+ * member of the 'recv_ring_t'.
+ *
+ * A reasonable question to ask is why are we storing this on the ring, when it
+ * relates to the group. The answer is that the current implementation of the
+ * driver assumes that each group is comprised of a single ring. While some
+ * parts may support additional rings, the driver doesn't take advantage of
+ * that.
+ *
+ * A result of all this is that the driver will support up to 4 groups today.
+ * Each group has a single ring. We want to make sure that each group can have a
+ * single MAC address programmed into it. This results in the check for a rule
+ * being assigned in the 'mac_addr_rule' member of the recv_ring_t below. If a
+ * future part were to support more global MAC address filters in part 1 and
+ * more rule registers needed for part 2, then we could relax this constraint
+ * and allow a group to have more than one MAC address assigned to it.
  */
 static int
 bge_addmac(void *arg, const uint8_t * mac_addr)
@@ -1537,10 +1502,27 @@ bge_addmac(void *arg, const uint8_t * mac_addr)
 	}
 
 	/*
-	 * First add the unicast address to a available slot.
+	 * The driver only supports a MAC address being programmed to be
+	 * received by one ring in step 2. We check the global table of MAC
+	 * addresses to see if this address has already been claimed by another
+	 * group as a way to determine that.
 	 */
 	slot = bge_unicst_find(bgep, mac_addr);
-	ASSERT(slot == -1);
+	if (slot != -1) {
+		mutex_exit(bgep->genlock);
+		return (EEXIST);
+	}
+
+	/*
+	 * Check to see if this group has already used its hardware resources
+	 * for step 2. If so, we have to return ENOSPC to MAC to indicate that
+	 * this group cannot handle an additional MAC address and that MAC will
+	 * need to use software classification on the default group.
+	 */
+	if (rrp->mac_addr_rule != NULL) {
+		mutex_exit(bgep->genlock);
+		return (ENOSPC);
+	}
 
 	for (slot = 0; slot < bgep->unicst_addr_total; slot++) {
 		if (!bgep->curr_addr[slot].set) {
@@ -1549,18 +1531,12 @@ bge_addmac(void *arg, const uint8_t * mac_addr)
 		}
 	}
 
-	ASSERT(slot < bgep->unicst_addr_total);
+	VERIFY3S(slot, <, bgep->unicst_addr_total);
 	bgep->unicst_addr_avail--;
 	mutex_exit(bgep->genlock);
 
 	if ((err = bge_unicst_set(bgep, mac_addr, slot)) != 0)
 		goto fail;
-
-	/* A rule is already here. Deny this.  */
-	if (rrp->mac_addr_rule != NULL) {
-		err = ether_cmp(mac_addr, rrp->mac_addr_val) ? EEXIST : EBUSY;
-		goto fail;
-	}
 
 	/*
 	 * Allocate a bge_rule_info_t to keep track of which rule slots
@@ -1671,7 +1647,7 @@ bge_remmac(void *arg, const uint8_t *mac_addr)
 
 
 static int
-bge_flag_intr_enable(mac_ring_driver_t ih)
+bge_flag_intr_enable(mac_intr_handle_t ih)
 {
 	recv_ring_t *rrp = (recv_ring_t *)ih;
 	bge_t *bgep = rrp->bgep;
@@ -1684,7 +1660,7 @@ bge_flag_intr_enable(mac_ring_driver_t ih)
 }
 
 static int
-bge_flag_intr_disable(mac_ring_driver_t ih)
+bge_flag_intr_disable(mac_intr_handle_t ih)
 {
 	recv_ring_t *rrp = (recv_ring_t *)ih;
 	bge_t *bgep = rrp->bgep;
@@ -1736,8 +1712,9 @@ bge_fill_ring(void *arg, mac_ring_type_t rtype, const int rg_index,
 		infop->mri_stat = bge_rx_ring_stat;
 
 		mintr = &infop->mri_intr;
-		mintr->mi_enable = (mac_intr_enable_t)bge_flag_intr_enable;
-		mintr->mi_disable = (mac_intr_disable_t)bge_flag_intr_disable;
+		mintr->mi_handle = (mac_intr_handle_t)rx_ring;
+		mintr->mi_enable = bge_flag_intr_enable;
+		mintr->mi_disable = bge_flag_intr_disable;
 
 		break;
 	}
@@ -2691,7 +2668,8 @@ bge_alloc_bufs(bge_t *bgep)
 	 * Enable PCI relaxed ordering only for RX/TX data buffers
 	 */
 	if (!(DEVICE_5717_SERIES_CHIPSETS(bgep) ||
-	    DEVICE_5725_SERIES_CHIPSETS(bgep))) {
+	    DEVICE_5725_SERIES_CHIPSETS(bgep) ||
+	    DEVICE_57765_SERIES_CHIPSETS(bgep))) {
 		if (bge_relaxed_ordering)
 			dma_attr.dma_attr_flags |= DDI_DMA_RELAXED_ORDERING;
 	}
@@ -2727,7 +2705,8 @@ bge_alloc_bufs(bge_t *bgep)
 	           txbuffsize));
 
 	if (!(DEVICE_5717_SERIES_CHIPSETS(bgep) ||
-	    DEVICE_5725_SERIES_CHIPSETS(bgep))) {
+	    DEVICE_5725_SERIES_CHIPSETS(bgep) ||
+	    DEVICE_57765_SERIES_CHIPSETS(bgep))) {
 		/* no relaxed ordering for descriptors rings? */
 		dma_attr.dma_attr_flags &= ~DDI_DMA_RELAXED_ORDERING;
 	}
@@ -3716,6 +3695,8 @@ bge_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	bgep->ape_enabled = B_FALSE;
 	bgep->ape_regs = NULL;
 
+	cidp = &bgep->chipid;
+	cidp->device = pci_config_get16(bgep->cfg_handle, PCI_CONF_DEVID);
 	if (DEVICE_5717_SERIES_CHIPSETS(bgep) ||
 	    DEVICE_5725_SERIES_CHIPSETS(bgep)) {
 		err = ddi_regs_map_setup(devinfo, BGE_PCI_APEREGS_RNUMBER,
@@ -3749,8 +3730,6 @@ bge_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * registers. (This information will be used by bge_ind_put32,
 	 * bge_ind_get32 and bge_nic_read32)
 	 */
-	bgep->chipid.device = pci_config_get16(bgep->cfg_handle,
-	    PCI_CONF_DEVID);
 	value16 = pci_config_get16(bgep->cfg_handle, PCI_CONF_COMM);
 	value16 = value16 | (PCI_COMM_MAE | PCI_COMM_ME);
 	pci_config_put16(bgep->cfg_handle, PCI_CONF_COMM, value16);
@@ -3767,7 +3746,8 @@ bge_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * byte-swapped value to it. So we just write zero first for simplicity.
 	 */
 	if (DEVICE_5717_SERIES_CHIPSETS(bgep) ||
-	    DEVICE_5725_SERIES_CHIPSETS(bgep))
+	    DEVICE_5725_SERIES_CHIPSETS(bgep) ||
+	    DEVICE_57765_SERIES_CHIPSETS(bgep))
 		pci_config_put32(bgep->cfg_handle, PCI_CONF_BGE_MHCR, 0);
 #else
 	mhcrValue = MHCR_ENABLE_INDIRECT_ACCESS |
@@ -3792,8 +3772,6 @@ bge_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 		goto attach_fail;
 	}
 	bgep->progress |= PROGRESS_CFG;
-	cidp = &bgep->chipid;
-	bzero(cidp, sizeof(*cidp));
 	bge_chip_cfg_init(bgep, cidp, B_FALSE);
 	if (bge_check_acc_handle(bgep, bgep->cfg_handle) != DDI_FM_OK) {
 		ddi_fm_service_impact(bgep->devinfo, DDI_SERVICE_LOST);
@@ -4065,14 +4043,6 @@ bge_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Determine whether to override the chip's own MAC address
 	 */
 	bge_find_mac_address(bgep, cidp);
-	{
-		int slot;
-		for (slot = 0; slot < MAC_ADDRESS_REGS_MAX; slot++) {
-			ethaddr_copy(cidp->vendor_addr.addr,
-			    bgep->curr_addr[slot].addr);
-			bgep->curr_addr[slot].set = 1;
-		}
-	}
 
 	bge_read_fw_ver(bgep);
 
@@ -4090,10 +4060,7 @@ bge_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	macp->m_max_sdu = cidp->ethmax_size - sizeof (struct ether_header);
 	macp->m_margin = VLAN_TAGSZ;
 	macp->m_priv_props = bge_priv_prop;
-
-#if defined(ILLUMOS)
-	bge_m_unicst(bgep, cidp->vendor_addr.addr);
-#endif
+	macp->m_v12n = MAC_VIRT_LEVEL1;
 
 	/*
 	 * Finally, we're ready to register ourselves with the MAC layer

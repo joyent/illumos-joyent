@@ -19,7 +19,7 @@
 # CDDL HEADER END
 #
 #
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 # Copyright 2017 ASS-Einrichtungssysteme GmbH
 #
 # This lists all the files that illumos-joyent delivers as part of a build.
@@ -3204,7 +3204,9 @@ f usr/include/hbaapi.h 0644 root bin
 d usr/include/ia32 0755 root bin
 d usr/include/ia32/sys 0755 root bin
 f usr/include/ia32/sys/asm_linkage.h 0644 root bin
+f usr/include/ia32/sys/kdi_regs.h 0644 root bin
 f usr/include/ia32/sys/machtypes.h 0644 root bin
+f usr/include/ia32/sys/privmregs.h 0644 root bin
 f usr/include/ia32/sys/privregs.h 0644 root bin
 f usr/include/ia32/sys/psw.h 0644 root bin
 f usr/include/ia32/sys/pte.h 0644 root bin
@@ -4149,6 +4151,7 @@ f usr/include/sys/fs/pc_label.h 0644 root bin
 f usr/include/sys/fs/pc_node.h 0644 root bin
 f usr/include/sys/fs/pxfs_ki.h 0644 root bin
 f usr/include/sys/fs/sdev_impl.h 0644 root bin
+f usr/include/sys/fs/sdev_plugin.h 0644 root bin
 f usr/include/sys/fs/snode.h 0644 root bin
 f usr/include/sys/fs/swapnode.h 0644 root bin
 f usr/include/sys/fs/tmp.h 0644 root bin
@@ -4888,6 +4891,7 @@ f usr/include/tnf/writer.h 0644 root bin
 d usr/include/tsol 0755 root bin
 f usr/include/tsol/label.h 0644 root bin
 f usr/include/tzfile.h 0644 root bin
+f usr/include/uchar.h 0644 root bin
 f usr/include/ucontext.h 0644 root bin
 f usr/include/ucred.h 0644 root bin
 f usr/include/uid_stp.h 0644 root bin
@@ -4899,6 +4903,7 @@ f usr/include/unistd.h 0644 root bin
 f usr/include/user_attr.h 0644 root bin
 f usr/include/userdefs.h 0644 root bin
 f usr/include/ustat.h 0644 root bin
+f usr/include/utempter.h 0644 root bin
 f usr/include/utility.h 0644 root bin
 f usr/include/utime.h 0644 root bin
 f usr/include/utmp.h 0644 root bin
@@ -5411,6 +5416,8 @@ s usr/lib/amd64/libtsol.so.2=../../../lib/amd64/libtsol.so.2
 s usr/lib/amd64/libtsol.so=../../../lib/amd64/libtsol.so.2
 s usr/lib/amd64/libumem.so.1=../../../lib/amd64/libumem.so.1
 s usr/lib/amd64/libumem.so=../../../lib/amd64/libumem.so.1
+f usr/lib/amd64/libutempter.so.1 0755 root bin
+s usr/lib/amd64/libutempter.so=libutempter.so.1
 s usr/lib/amd64/libuuid.so.1=../../../lib/amd64/libuuid.so.1
 s usr/lib/amd64/libuuid.so=../../../lib/amd64/libuuid.so.1
 s usr/lib/amd64/libuutil.so.1=../../../lib/amd64/libuutil.so.1
@@ -5551,6 +5558,7 @@ f usr/lib/brand/lx/lx_boot_zone_docker 0755 root root
 f usr/lib/brand/lx/lx_boot_zone_redhat 0755 root root
 f usr/lib/brand/lx/lx_boot_zone_suse 0755 root root
 f usr/lib/brand/lx/lx_boot_zone_ubuntu 0755 root root
+f usr/lib/brand/lx/lx_boot_zone_void 0755 root root
 f usr/lib/brand/lx/lx_install 0755 root root
 f usr/lib/brand/lx/lx_librtld_db.so.1 0755 root root
 f usr/lib/brand/lx/lx_lockd 0755 root root
@@ -5986,6 +5994,7 @@ f usr/lib/fwflash/identify/sd.so 0755 root bin
 f usr/lib/fwflash/identify/ses.so 0755 root bin
 s usr/lib/fwflash/identify/sgen.so=ses.so
 f usr/lib/fwflash/identify/tavor.so 0755 root bin
+f usr/lib/fwflash/identify/ufm.so 0755 root bin
 d usr/lib/fwflash/verify 0755 root bin
 f usr/lib/fwflash/verify/hermon-MELLANOX.so 0755 root bin
 f usr/lib/fwflash/verify/sd-GENERIC.so 0755 root bin
@@ -6940,6 +6949,8 @@ s usr/lib/libtsol.so.2=../../lib/libtsol.so.2
 s usr/lib/libtsol.so=../../lib/libtsol.so.2
 s usr/lib/libumem.so.1=../../lib/libumem.so.1
 s usr/lib/libumem.so=../../lib/libumem.so.1
+f usr/lib/libutempter.so.1 0755 root bin
+s usr/lib/libutempter.so=libutempter.so.1
 s usr/lib/libuuid.so.1=../../lib/libuuid.so.1
 s usr/lib/libuuid.so=../../lib/libuuid.so.1
 s usr/lib/libuutil.so.1=../../lib/libuutil.so.1
@@ -11244,6 +11255,7 @@ d usr/share/lib/xml 0755 root sys
 d usr/share/lib/xml/dtd 0755 root sys
 f usr/share/lib/xml/dtd/adt_record.dtd.1 0444 root bin
 f usr/share/lib/xml/dtd/brand.dtd.1 0644 root bin
+f usr/share/lib/xml/dtd/digraph-topology.dtd.1 0644 root bin
 f usr/share/lib/xml/dtd/kmfpolicy.dtd 0444 root bin
 f usr/share/lib/xml/dtd/rm_pool.dtd.1 0444 root bin
 f usr/share/lib/xml/dtd/service_bundle.dtd.1 0444 root sys
@@ -11371,7 +11383,7 @@ f usr/share/lib/zoneinfo/America/Fort_Nelson 0644 root bin
 h usr/share/lib/zoneinfo/America/Fort_Wayne=usr/share/lib/zoneinfo/US/East-Indiana
 f usr/share/lib/zoneinfo/America/Fortaleza 0644 root bin
 f usr/share/lib/zoneinfo/America/Glace_Bay 0644 root bin
-f usr/share/lib/zoneinfo/America/Godthab 0644 root bin
+h usr/share/lib/zoneinfo/America/Godthab=usr/share/lib/zoneinfo/America/Nuuk
 f usr/share/lib/zoneinfo/America/Goose_Bay 0644 root bin
 f usr/share/lib/zoneinfo/America/Grand_Turk 0644 root bin
 f usr/share/lib/zoneinfo/America/Grenada 0644 root bin
@@ -11434,6 +11446,7 @@ d usr/share/lib/zoneinfo/America/North_Dakota 0755 root bin
 f usr/share/lib/zoneinfo/America/North_Dakota/Beulah 0644 root bin
 f usr/share/lib/zoneinfo/America/North_Dakota/Center 0644 root bin
 f usr/share/lib/zoneinfo/America/North_Dakota/New_Salem 0644 root bin
+f usr/share/lib/zoneinfo/America/Nuuk 0644 root bin
 f usr/share/lib/zoneinfo/America/Ojinaga 0644 root bin
 f usr/share/lib/zoneinfo/America/Panama 0644 root bin
 f usr/share/lib/zoneinfo/America/Pangnirtung 0644 root bin
@@ -11901,7 +11914,7 @@ f usr/share/man/man1/at.1 0444 root bin
 f usr/share/man/man1/atq.1 0444 root bin
 f usr/share/man/man1/atrm.1 0444 root bin
 f usr/share/man/man1/auths.1 0444 root bin
-s usr/share/man/man1/awk.1=nawk.1
+f usr/share/man/man1/awk.1 0444 root bin
 f usr/share/man/man1/banner.1 0444 root bin
 f usr/share/man/man1/basename.1 0444 root bin
 s usr/share/man/man1/batch.1=at.1
@@ -12118,7 +12131,7 @@ f usr/share/man/man1/mpss.so.1.1 0444 root bin
 f usr/share/man/man1/msgfmt.1 0444 root bin
 f usr/share/man/man1/mt.1 0444 root bin
 f usr/share/man/man1/mv.1 0444 root bin
-f usr/share/man/man1/nawk.1 0444 root bin
+s usr/share/man/man1/nawk.1=awk.1
 f usr/share/man/man1/nc.1 0444 root bin
 s usr/share/man/man1/neqn.1=eqn.1
 f usr/share/man/man1/newform.1 0444 root bin
@@ -13215,6 +13228,8 @@ f usr/share/man/man3c/btowc.3c 0444 root bin
 s usr/share/man/man3c/btowc_l.3c=btowc.3c
 f usr/share/man/man3c/byteorder.3c 0444 root bin
 s usr/share/man/man3c/bzero.3c=bstring.3c
+f usr/share/man/man3c/c16rtomb.3c 0444 root bin
+s usr/share/man/man3c/c32rtomb.3c=c16rtomb.3c
 f usr/share/man/man3c/call_once.3c 0444 root bin
 s usr/share/man/man3c/calloc.3c=malloc.3c
 s usr/share/man/man3c/canonicalize_file_name.3c=realpath.3c
@@ -13675,8 +13690,11 @@ f usr/share/man/man3c/mblen.3c 0444 root bin
 s usr/share/man/man3c/mblen_l.3c=mblen.3c
 f usr/share/man/man3c/mbrlen.3c 0444 root bin
 s usr/share/man/man3c/mbrlen_l.3c=mbrlen.3c
-f usr/share/man/man3c/mbrtowc.3c 0444 root bin
-s usr/share/man/man3c/mbrtowc_l.3c=mbrtowc.3c
+f usr/share/man/man3c/mbrtoc16.3c 0444 root bin
+s usr/share/man/man3c/mbrtoc32.3c=mbrtoc16.3c
+s usr/share/man/man3c/mbrtowc.3c=mbrtoc16.3c
+s usr/share/man/man3c/mbrtowc32.3c=mbrtoc16.3c
+s usr/share/man/man3c/mbrtowc_l.3c=mbrtowc16.3c
 f usr/share/man/man3c/mbsinit.3c 0444 root bin
 s usr/share/man/man3c/mbsinit_l.3c=mbsinit.3c
 s usr/share/man/man3c/mbsnrtowcs.3c=mbsrtowcs.3c
@@ -14356,8 +14374,8 @@ s usr/share/man/man3c/watol.3c=wcstol.3c
 s usr/share/man/man3c/watoll.3c=wcstol.3c
 f usr/share/man/man3c/wcpcpy.3c 0444 root bin
 s usr/share/man/man3c/wcpncpy.3c=wcpcpy.3c
-f usr/share/man/man3c/wcrtomb.3c 0444 root bin
-s usr/share/man/man3c/wcrtomb_l.3c=wcrtomb.3c
+s usr/share/man/man3c/wcrtomb.3c=c16rtomb.3c
+s usr/share/man/man3c/wcrtomb_l.3c=c16rtomb.3c
 f usr/share/man/man3c/wcscasecmp.3c 0444 root bin
 s usr/share/man/man3c/wcscasecmp_l.3c=wcscasecmp.3c
 s usr/share/man/man3c/wcscat.3c=wcstring.3c
@@ -14619,7 +14637,8 @@ s usr/share/man/man3contract/ct_tmpl_set_cookie.3contract=ct_tmpl_activate.3cont
 s usr/share/man/man3contract/ct_tmpl_set_critical.3contract=ct_tmpl_activate.3contract
 s usr/share/man/man3contract/ct_tmpl_set_informative.3contract=ct_tmpl_activate.3contract
 d usr/share/man/man3cpc 0755 root bin
-f usr/share/man/man3cpc/amd_f17h_events.3cpc 0444 root bin
+f usr/share/man/man3cpc/amd_f17h_zen1_events.3cpc 0444 root bin
+f usr/share/man/man3cpc/amd_f17h_zen2_events.3cpc 0444 root bin
 f usr/share/man/man3cpc/bdw_de_events.3cpc 0444 root bin
 f usr/share/man/man3cpc/bdw_events.3cpc 0444 root bin
 f usr/share/man/man3cpc/bdx_events.3cpc 0444 root bin
@@ -16047,6 +16066,7 @@ s usr/share/man/man3head/types.3head=types.h.3head
 f usr/share/man/man3head/types.h.3head 0444 root bin
 s usr/share/man/man3head/types32.3head=types32.h.3head
 f usr/share/man/man3head/types32.h.3head 0444 root bin
+f usr/share/man/man3head/uchar.h.3head 0444 root bin
 s usr/share/man/man3head/ucontext.3head=ucontext.h.3head
 f usr/share/man/man3head/ucontext.h.3head 0444 root bin
 s usr/share/man/man3head/uio.3head=uio.h.3head
@@ -18035,6 +18055,7 @@ s usr/share/man/man3scf/scf_value_type.3scf=scf_value_create.3scf
 s usr/share/man/man3scf/scf_values_destroy.3scf=scf_tmpl_prop_name.3scf
 s usr/share/man/man3scf/smf_degrade_instance.3scf=smf_enable_instance.3scf
 s usr/share/man/man3scf/smf_disable_instance.3scf=smf_enable_instance.3scf
+s usr/share/man/man3scf/smf_disable_instance_with_comment.3scf=smf_enable_instance.3scf
 f usr/share/man/man3scf/smf_enable_instance.3scf 0444 root bin
 s usr/share/man/man3scf/smf_get_state.3scf=smf_enable_instance.3scf
 s usr/share/man/man3scf/smf_maintain_instance.3scf=smf_enable_instance.3scf
@@ -18619,6 +18640,13 @@ f usr/share/man/man3tnf/tnfctl_strerror.3tnf 0444 root bin
 f usr/share/man/man3tnf/tnfctl_trace_attrs_get.3tnf 0444 root bin
 f usr/share/man/man3tnf/tnfctl_trace_state_set.3tnf 0444 root bin
 f usr/share/man/man3tnf/tracing.3tnf 0444 root bin
+d usr/share/man/man3utempter 0755 root bin
+s usr/share/man/man3utempter/addToUtmp.3utempter=utempter_add_record.3utempter
+s usr/share/man/man3utempter/removeFromUtmp.3utempter=utempter_add_record.3utempter
+s usr/share/man/man3utempter/removeLineFromUtmp.3utempter=utempter_add_record.3utempter
+f usr/share/man/man3utempter/utempter_add_record.3utempter 0444 root bin
+s usr/share/man/man3utempter/utempter_remove_added_record.3utempter=utempter_add_record.3utempter
+s usr/share/man/man3utempter/utempter_remove_record.3utempter=utempter_add_record.3utempter
 d usr/share/man/man3uuid 0755 root bin
 f usr/share/man/man3uuid/uuid_clear.3uuid 0444 root bin
 s usr/share/man/man3uuid/uuid_compare.3uuid=uuid_clear.3uuid
@@ -20474,6 +20502,7 @@ s usr/share/man/man9f/ddi_ufm_image_set_nslots.9f=ddi_ufm_image.9f
 s usr/share/man/man9f/ddi_ufm_init.9f=ddi_ufm.9f
 f usr/share/man/man9f/ddi_ufm_slot.9f 0444 root bin
 s usr/share/man/man9f/ddi_ufm_slot_set_attrs.9f=ddi_ufm_slot.9f
+s usr/share/man/man9f/ddi_ufm_slot_set_imgsize.9f=ddi_ufm_slot.9f
 s usr/share/man/man9f/ddi_ufm_slot_set_misc.9f=ddi_ufm_slot.9f
 s usr/share/man/man9f/ddi_ufm_slot_set_version.9f=ddi_ufm_slot.9f
 s usr/share/man/man9f/ddi_ufm_update.9f=ddi_ufm.9f
@@ -21281,6 +21310,7 @@ s usr/share/man/man9s/usba_hcdi_register_args_t.9s=usba_hcdi_register_args.9s
 f usr/share/man/man9s/usba_pipe_handle_data.9s 0444 root bin
 s usr/share/man/man9s/usba_pipe_handle_data_t.9s=usba_pipe_handle_data.9s
 d usr/share/src 0755 root sys
+s usr/share/terminfo=../share/lib/terminfo
 s usr/spool=../var/spool
 s usr/src=share/src
 s usr/tmp=../var/tmp
