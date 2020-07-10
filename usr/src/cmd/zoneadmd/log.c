@@ -969,6 +969,9 @@ logstream_reset(logstream_t *lsp)
 	(void) memset(lsp, 0, sizeof (*lsp));
 	lsp->ls_cusbuf = buf;
 	lsp->ls_cusobuf = obuf;
+
+	custr_reset(buf);
+	custr_reset(obuf);
 }
 
 static void
@@ -979,6 +982,8 @@ logfile_reset(logfile_t *lfp)
 	(void) memset(lfp, 0, sizeof (*lfp));
 	lfp->lf_cus = buf;
 	lfp->lf_fd = -1;
+
+	custr_reset(buf);
 }
 
 void
