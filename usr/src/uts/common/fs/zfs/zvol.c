@@ -1161,10 +1161,10 @@ zvol_dumpio(zvol_state_t *zv, void *addr, uint64_t offset, uint64_t size,
 	ASSERT(size <= zv->zv_volblocksize);
 
 	/* Locate the extent this belongs to */
-	ze = list_head(&zv->zv_extents);
-	while (offset >= ze->ze_nblks * zv->zv_volblocksize) {
+	for (ze = list_head(&zv->zv_extents);
+	    ze != NULL && offset >= ze->ze_nblks * zv->zv_volblocksize;
+	    ze = list_next(&zv->zv_extents, ze)) {
 		offset -= ze->ze_nblks * zv->zv_volblocksize;
-		ze = list_next(&zv->zv_extents, ze);
 	}
 
 	if (ze == NULL)
@@ -1232,7 +1232,7 @@ zvol_strategy(buf_t *bp)
 	addr = bp->b_un.b_addr;
 	resid = bp->b_bcount;
 
-	if (resid > 0 && (off < 0 || off >= volsize)) {
+	if (resid > 0 && off >= volsize) {
 		bioerror(bp, EIO);
 		biodone(bp);
 		return (0);

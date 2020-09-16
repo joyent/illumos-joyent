@@ -39,6 +39,7 @@
  *
  * Copyright 2015 Pluribus Networks Inc.
  * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #include <sys/cdefs.h>
@@ -771,17 +772,16 @@ vm_get_register_set(struct vmctx *ctx, int vcpu, unsigned int count,
 }
 
 int
-vm_run(struct vmctx *ctx, int vcpu, struct vm_exit *vmexit)
+vm_run(struct vmctx *ctx, int vcpu, const struct vm_entry *vm_entry,
+    struct vm_exit *vm_exit)
 {
-	int error;
-	struct vm_run vmrun;
+	struct vm_entry entry;
 
-	bzero(&vmrun, sizeof(vmrun));
-	vmrun.cpuid = vcpu;
+	bcopy(vm_entry, &entry, sizeof (entry));
+	entry.cpuid = vcpu;
+	entry.exit_data = vm_exit;
 
-	error = ioctl(ctx->fd, VM_RUN, &vmrun);
-	bcopy(&vmrun.vm_exit, vmexit, sizeof(struct vm_exit));
-	return (error);
+	return (ioctl(ctx->fd, VM_RUN, &entry));
 }
 
 int
@@ -1004,7 +1004,9 @@ static const char *capstrmap[] = {
 	[VM_CAP_HALT_EXIT]  = "hlt_exit",
 	[VM_CAP_MTRAP_EXIT] = "mtrap_exit",
 	[VM_CAP_PAUSE_EXIT] = "pause_exit",
+#ifdef __FreeBSD__
 	[VM_CAP_UNRESTRICTED_GUEST] = "unrestricted_guest",
+#endif
 	[VM_CAP_ENABLE_INVPCID] = "enable_invpcid",
 	[VM_CAP_BPT_EXIT] = "bpt_exit",
 };

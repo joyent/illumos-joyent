@@ -13,6 +13,8 @@
  * Copyright 2015 OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2018, Joyent, Inc.
  * Copyright 2017 Tegile Systems, Inc.  All rights reserved.
+ * Copyright 2020 Ryan Zezeski
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 /*
@@ -177,7 +179,7 @@ i40e_m_start(void *arg)
 		goto done;
 	}
 
-	if (!i40e_start(i40e, B_TRUE)) {
+	if (!i40e_start(i40e)) {
 		rc = EIO;
 		goto done;
 	}
@@ -200,7 +202,7 @@ i40e_m_stop(void *arg)
 		goto done;
 
 	atomic_and_32(&i40e->i40e_state, ~I40E_STARTED);
-	i40e_stop(i40e, B_TRUE);
+	i40e_stop(i40e);
 done:
 	mutex_exit(&i40e->i40e_general_lock);
 }
@@ -434,6 +436,10 @@ static int
 i40e_ring_start(mac_ring_driver_t rh, uint64_t gen_num)
 {
 	i40e_trqpair_t *itrq = (i40e_trqpair_t *)rh;
+	int rv;
+
+	if ((rv = i40e_setup_ring(itrq)) != 0)
+		return (rv);
 
 	/*
 	 * GLDv3 requires we keep track of a generation number, as it uses
@@ -443,6 +449,19 @@ i40e_ring_start(mac_ring_driver_t rh, uint64_t gen_num)
 	itrq->itrq_rxgen = gen_num;
 	mutex_exit(&itrq->itrq_rx_lock);
 	return (0);
+}
+
+static void
+i40e_ring_stop(mac_ring_driver_t rh)
+{
+	i40e_trqpair_t *itrq = (i40e_trqpair_t *)rh;
+
+	if (!i40e_shutdown_ring(itrq)) {
+		i40e_t *i40e = itrq->itrq_i40e;
+
+		ddi_fm_service_impact(i40e->i40e_dip, DDI_SERVICE_LOST);
+		i40e_error(i40e, "Failed to stop ring %u", itrq->itrq_index);
+	}
 }
 
 /* ARGSUSED */
@@ -528,7 +547,7 @@ i40e_fill_rx_ring(void *arg, mac_ring_type_t rtype, const int group_index,
 	itrq->itrq_macrxring = rh;
 	infop->mri_driver = (mac_ring_driver_t)itrq;
 	infop->mri_start = i40e_ring_start;
-	infop->mri_stop = NULL;
+	infop->mri_stop = i40e_ring_stop;
 	infop->mri_poll = i40e_ring_rx_poll;
 	infop->mri_stat = i40e_rx_ring_stat;
 	mintr->mi_handle = (mac_intr_handle_t)itrq;
@@ -565,7 +584,7 @@ i40e_fill_rx_group(void *arg, mac_ring_type_t rtype, const int index,
 	infop->mgi_addmac = i40e_group_add_mac;
 	infop->mgi_remmac = i40e_group_remove_mac;
 
-	ASSERT(i40e->i40e_num_rx_groups <= I40E_GROUP_MAX);
+	ASSERT3U(i40e->i40e_num_rx_groups, <=, I40E_MAX_NUM_RX_GROUPS);
 	infop->mgi_count = i40e->i40e_num_trqpairs_per_vsi;
 }
 

@@ -29,7 +29,17 @@
  */
 
 /*
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #ifndef _VMX_H_
@@ -40,44 +50,34 @@
 struct pmap;
 
 struct vmxctx {
-	register_t	guest_rdi;		/* Guest state */
-	register_t	guest_rsi;
-	register_t	guest_rdx;
-	register_t	guest_rcx;
-	register_t	guest_r8;
-	register_t	guest_r9;
-	register_t	guest_rax;
-	register_t	guest_rbx;
-	register_t	guest_rbp;
-	register_t	guest_r10;
-	register_t	guest_r11;
-	register_t	guest_r12;
-	register_t	guest_r13;
-	register_t	guest_r14;
-	register_t	guest_r15;
-	register_t	guest_cr2;
-	register_t	guest_dr0;
-	register_t	guest_dr1;
-	register_t	guest_dr2;
-	register_t	guest_dr3;
-	register_t	guest_dr6;
+	uint64_t	guest_rdi;		/* Guest state */
+	uint64_t	guest_rsi;
+	uint64_t	guest_rdx;
+	uint64_t	guest_rcx;
+	uint64_t	guest_r8;
+	uint64_t	guest_r9;
+	uint64_t	guest_rax;
+	uint64_t	guest_rbx;
+	uint64_t	guest_rbp;
+	uint64_t	guest_r10;
+	uint64_t	guest_r11;
+	uint64_t	guest_r12;
+	uint64_t	guest_r13;
+	uint64_t	guest_r14;
+	uint64_t	guest_r15;
+	uint64_t	guest_cr2;
+	uint64_t	guest_dr0;
+	uint64_t	guest_dr1;
+	uint64_t	guest_dr2;
+	uint64_t	guest_dr3;
+	uint64_t	guest_dr6;
 
-#ifdef __FreeBSD__
-	register_t	host_r15;		/* Host state */
-	register_t	host_r14;
-	register_t	host_r13;
-	register_t	host_r12;
-	register_t	host_rbp;
-	register_t	host_rsp;
-	register_t	host_rbx;
-#endif /* __FreeBSD__ */
-
-	register_t	host_dr0;
-	register_t	host_dr1;
-	register_t	host_dr2;
-	register_t	host_dr3;
-	register_t	host_dr6;
-	register_t	host_dr7;
+	uint64_t	host_dr0;
+	uint64_t	host_dr1;
+	uint64_t	host_dr2;
+	uint64_t	host_dr3;
+	uint64_t	host_dr6;
+	uint64_t	host_dr7;
 	uint64_t	host_debugctl;
 	int		host_tf;
 
@@ -146,11 +146,13 @@ struct vmx {
 	uint64_t	host_msrs[VM_MAXCPU][GUEST_MSR_NUM];
 	uint64_t	tsc_offset_active[VM_MAXCPU];
 	vmcs_state_t	vmcs_state[VM_MAXCPU];
+	uintptr_t	vmcs_pa[VM_MAXCPU];
 #endif
 	struct vmxctx	ctx[VM_MAXCPU];
 	struct vmxcap	cap[VM_MAXCPU];
 	struct vmxstate	state[VM_MAXCPU];
 	uint64_t	eptp;
+	enum vmx_caps	vmx_caps;
 	struct vm	*vm;
 	long		eptgen[MAXCPU];		/* cached pmap->pm_eptgen */
 };
@@ -158,16 +160,43 @@ CTASSERT((offsetof(struct vmx, vmcs) & PAGE_MASK) == 0);
 CTASSERT((offsetof(struct vmx, msr_bitmap) & PAGE_MASK) == 0);
 CTASSERT((offsetof(struct vmx, pir_desc[0]) & 63) == 0);
 
+static __inline bool
+vmx_cap_en(const struct vmx *vmx, enum vmx_caps cap)
+{
+	return ((vmx->vmx_caps & cap) == cap);
+}
+
+
+/*
+ * Section 5.2 "Conventions" from Intel Architecture Manual 2B.
+ *
+ *			error
+ * VMsucceed		  0
+ * VMFailInvalid	  1
+ * VMFailValid		  2	see also VMCS VM-Instruction Error Field
+ */
+#define	VM_SUCCESS		0
+#define	VM_FAIL_INVALID		1
+#define	VM_FAIL_VALID		2
+#define	VMX_SET_ERROR_CODE_ASM \
+	"	jnc 1f;"						\
+	"	mov $1, %[error];"	/* CF: error = 1 */		\
+	"	jmp 3f;"						\
+	"1:	jnz 2f;"						\
+	"	mov $2, %[error];"	/* ZF: error = 2 */		\
+	"	jmp 3f;"						\
+	"2:	mov $0, %[error];"					\
+	"3:"
+
+
 #define	VMX_GUEST_VMEXIT	0
 #define	VMX_VMRESUME_ERROR	1
 #define	VMX_VMLAUNCH_ERROR	2
 #define	VMX_INVEPT_ERROR	3
 #define	VMX_VMWRITE_ERROR	4
+
 int	vmx_enter_guest(struct vmxctx *ctx, struct vmx *vmx, int launched);
 void	vmx_call_isr(uintptr_t entry);
-
-u_long	vmx_fix_cr0(u_long cr0);
-u_long	vmx_fix_cr4(u_long cr4);
 
 int	vmx_set_tsc_offset(struct vmx *vmx, int vcpu, uint64_t offset);
 

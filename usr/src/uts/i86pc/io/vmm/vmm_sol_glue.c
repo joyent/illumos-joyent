@@ -181,7 +181,7 @@ vmm_alloc_check(mod_hash_key_t key, mod_hash_val_t *val, void *unused)
 {
 	struct kmem_item *i = (struct kmem_item *)val;
 
-	cmn_err(CE_PANIC, "!vmm_alloc_check: hash not empty: %p, %d", i->addr,
+	cmn_err(CE_PANIC, "!vmm_alloc_check: hash not empty: %p, %lu", i->addr,
 	    i->size);
 
 	return (MH_WALK_TERMINATE);
@@ -572,7 +572,7 @@ vmm_sol_glue_cleanup(void)
  */
 
 #define	FEBRUARY	2
-#define	days_in_year(y) 	(leapyear(y) ? 366 : 365)
+#define	days_in_year(y)		(leapyear(y) ? 366 : 365)
 #define	days_in_month(y, m) \
 	(month_days[(m) - 1] + (m == FEBRUARY ? leapyear(y) : 0))
 /* Day of week. Days are counted from 1/1/1970, which was a Thursday */
@@ -644,7 +644,7 @@ clock_ct_to_ts(struct clocktime *ct, struct timespec *ts)
 
 	/* Months */
 	for (i = 1; i < ct->mon; i++)
-	  	days += days_in_month(year, i);
+		days += days_in_month(year, i);
 	days += (ct->day - 1);
 
 	ts->tv_sec = (((time_t)days * 24 + ct->hour) * 60 + ct->min) * 60 +

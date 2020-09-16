@@ -54,6 +54,7 @@ struct vm;
 struct vm_exception;
 struct seg_desc;
 struct vm_exit;
+struct vie;
 struct vm_run;
 struct vhpet;
 struct vioapic;
@@ -73,7 +74,7 @@ typedef int	(*vmm_init_func_t)(int ipinum);
 typedef int	(*vmm_cleanup_func_t)(void);
 typedef void	(*vmm_resume_func_t)(void);
 typedef void *	(*vmi_init_func_t)(struct vm *vm, struct pmap *pmap);
-typedef int	(*vmi_run_func_t)(void *vmi, int vcpu, register_t rip,
+typedef int	(*vmi_run_func_t)(void *vmi, int vcpu, uint64_t rip,
 		    struct pmap *pmap, struct vm_eventinfo *info);
 typedef void	(*vmi_cleanup_func_t)(void *vmi);
 typedef int	(*vmi_get_register_t)(void *vmi, int vcpu, int num,
@@ -171,7 +172,7 @@ int vm_get_seg_desc(struct vm *vm, int vcpu, int reg,
 		    struct seg_desc *ret_desc);
 int vm_set_seg_desc(struct vm *vm, int vcpu, int reg,
 		    struct seg_desc *desc);
-int vm_run(struct vm *vm, struct vm_run *vmrun);
+int vm_run(struct vm *vm, int vcpuid, const struct vm_entry *);
 int vm_suspend(struct vm *vm, enum vm_suspend_how how);
 int vm_inject_nmi(struct vm *vm, int vcpu);
 int vm_nmi_pending(struct vm *vm, int vcpuid);
@@ -191,11 +192,17 @@ int vm_activate_cpu(struct vm *vm, int vcpu);
 int vm_suspend_cpu(struct vm *vm, int vcpu);
 int vm_resume_cpu(struct vm *vm, int vcpu);
 struct vm_exit *vm_exitinfo(struct vm *vm, int vcpuid);
+struct vie *vm_vie_ctx(struct vm *vm, int vcpuid);
 void vm_exit_suspended(struct vm *vm, int vcpuid, uint64_t rip);
 void vm_exit_debug(struct vm *vm, int vcpuid, uint64_t rip);
 void vm_exit_runblock(struct vm *vm, int vcpuid, uint64_t rip);
 void vm_exit_astpending(struct vm *vm, int vcpuid, uint64_t rip);
 void vm_exit_reqidle(struct vm *vm, int vcpuid, uint64_t rip);
+int vm_service_mmio_read(struct vm *vm, int cpuid, uint64_t gpa, uint64_t *rval,
+    int rsize);
+int vm_service_mmio_write(struct vm *vm, int cpuid, uint64_t gpa, uint64_t wval,
+    int wsize);
+void vm_req_spinup_ap(struct vm *vm, int req_vcpuid, uint64_t req_rip);
 
 #ifdef _SYS__CPUSET_H_
 cpuset_t vm_active_cpus(struct vm *vm);

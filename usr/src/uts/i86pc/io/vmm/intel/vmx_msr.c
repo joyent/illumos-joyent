@@ -62,13 +62,6 @@ vmx_ctl_allows_zero_setting(uint64_t msr_val, int bitpos)
 	return ((msr_val & (1UL << bitpos)) == 0);
 }
 
-uint32_t
-vmx_revision(void)
-{
-
-	return (rdmsr(MSR_VMX_BASIC) & 0xffffffff);
-}
-
 /*
  * Generate a bitmask to be used for the VMCS execution control fields.
  *
@@ -451,7 +444,7 @@ vmx_wrmsr(struct vmx *vmx, int vcpuid, u_int num, uint64_t val, bool *retu)
 	uint64_t *guest_msrs;
 	uint64_t changed;
 	int error;
-	
+
 	guest_msrs = vmx->guest_msrs[vcpuid];
 	error = 0;
 

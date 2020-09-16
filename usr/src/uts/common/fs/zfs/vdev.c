@@ -1365,7 +1365,7 @@ vdev_probe_done(zio_t *zio)
 		} else {
 			ASSERT(zio->io_error != 0);
 			vdev_dbgmsg(vd, "failed probe");
-			zfs_ereport_post(FM_EREPORT_ZFS_PROBE_FAILURE,
+			(void) zfs_ereport_post(FM_EREPORT_ZFS_PROBE_FAILURE,
 			    spa, vd, NULL, NULL, 0, 0);
 			zio->io_error = SET_ERROR(ENXIO);
 		}
@@ -1717,7 +1717,8 @@ vdev_open(vdev_t *vd)
 		 */
 		if (ashift > vd->vdev_top->vdev_ashift &&
 		    vd->vdev_ops->vdev_op_leaf) {
-			zfs_ereport_post(FM_EREPORT_ZFS_DEVICE_BAD_ASHIFT,
+			(void) zfs_ereport_post(
+			    FM_EREPORT_ZFS_DEVICE_BAD_ASHIFT,
 			    spa, vd, NULL, NULL, 0, 0);
 		}
 
@@ -2135,7 +2136,7 @@ vdev_hold(vdev_t *vd)
 	for (int c = 0; c < vd->vdev_children; c++)
 		vdev_hold(vd->vdev_child[c]);
 
-	if (vd->vdev_ops->vdev_op_leaf)
+	if (vd->vdev_ops->vdev_op_leaf && vd->vdev_ops->vdev_op_hold != NULL)
 		vd->vdev_ops->vdev_op_hold(vd);
 }
 
@@ -2148,7 +2149,7 @@ vdev_rele(vdev_t *vd)
 	for (int c = 0; c < vd->vdev_children; c++)
 		vdev_rele(vd->vdev_child[c]);
 
-	if (vd->vdev_ops->vdev_op_leaf)
+	if (vd->vdev_ops->vdev_op_leaf && vd->vdev_ops->vdev_op_rele != NULL)
 		vd->vdev_ops->vdev_op_rele(vd);
 }
 
@@ -4408,7 +4409,7 @@ vdev_set_state(vdev_t *vd, boolean_t isopen, vdev_state_t state, vdev_aux_t aux)
 				class = FM_EREPORT_ZFS_DEVICE_UNKNOWN;
 			}
 
-			zfs_ereport_post(class, spa, vd, NULL, NULL,
+			(void) zfs_ereport_post(class, spa, vd, NULL, NULL,
 			    save_state, 0);
 		}
 
@@ -4438,7 +4439,6 @@ vdev_children_are_offline(vdev_t *vd)
 /*
  * Check the vdev configuration to ensure that it's capable of supporting
  * a root pool. We do not support partial configuration.
- * In addition, only a single top-level vdev is allowed.
  */
 boolean_t
 vdev_is_bootable(vdev_t *vd)
@@ -4446,23 +4446,7 @@ vdev_is_bootable(vdev_t *vd)
 	if (!vd->vdev_ops->vdev_op_leaf) {
 		char *vdev_type = vd->vdev_ops->vdev_op_type;
 
-		if (strcmp(vdev_type, VDEV_TYPE_ROOT) == 0 &&
-		    vd->vdev_children > 1) {
-			int non_indirect = 0;
-
-			for (int c = 0; c < vd->vdev_children; c++) {
-				vdev_type =
-				    vd->vdev_child[c]->vdev_ops->vdev_op_type;
-				if (strcmp(vdev_type, VDEV_TYPE_INDIRECT) != 0)
-					non_indirect++;
-			}
-			/*
-			 * non_indirect > 1 means we have more than one
-			 * top-level vdev, so we stop here.
-			 */
-			if (non_indirect > 1)
-				return (B_FALSE);
-		} else if (strcmp(vdev_type, VDEV_TYPE_MISSING) == 0) {
+		if (strcmp(vdev_type, VDEV_TYPE_MISSING) == 0) {
 			return (B_FALSE);
 		}
 	}

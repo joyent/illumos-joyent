@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
  */
 
 #include <sys/param.h>
@@ -475,6 +475,8 @@ again:
 		host = NULL;
 		goto out;
 	}
+
+	host->flags = dci->Flags;
 
 	(void) mutex_lock(&smb_ads_cached_host_mtx);
 	if (!smb_ads_cached_host_info)
@@ -1286,8 +1288,8 @@ smb_ads_getfqhostname(smb_ads_handle_t *ah, char *fqhost, int len)
 	if (smb_gethostname(fqhost, len, SMB_CASE_LOWER) != 0)
 		return (-1);
 
-	(void) snprintf(fqhost, len, "%s.%s", fqhost,
-	    ah->domain);
+	(void) strlcat(fqhost, ".", len);
+	(void) strlcat(fqhost, ah->domain, len);
 
 	return (0);
 }
@@ -1974,6 +1976,7 @@ smb_ads_lookup_msdcs(char *fqdn, smb_dcinfo_t *dci)
 
 	(void) strlcpy(dci->dc_name, hinfo->name, sizeof (dci->dc_name));
 	dci->dc_addr = hinfo->ipaddr;
+	dci->dc_flags = hinfo->flags;
 
 	free(hinfo);
 	return (NT_STATUS_SUCCESS);

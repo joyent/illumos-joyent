@@ -36,11 +36,10 @@
  * A full copy of the text of the CDDL should have accompanied this
  * source.  A copy of the CDDL is also available via the Internet at
  * http://www.illumos.org/license/CDDL.
- */
-
-/*
+ *
  * Copyright 2015 Pluribus Networks Inc.
  * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #include <sys/cdefs.h>
@@ -358,13 +357,19 @@ dump_vm_run_exitcode(struct vm_exit *vmexit, int vcpu)
 	switch (vmexit->exitcode) {
 	case VM_EXITCODE_INOUT:
 		printf("\treason\t\tINOUT\n");
-		printf("\tdirection\t%s\n", vmexit->u.inout.in ? "IN" : "OUT");
+		printf("\tdirection\t%s\n",
+		    (vmexit->u.inout.flags & INOUT_IN) ? "IN" : "OUT");
 		printf("\tbytes\t\t%d\n", vmexit->u.inout.bytes);
-		printf("\tflags\t\t%s%s\n",
-			vmexit->u.inout.string ? "STRING " : "",
-			vmexit->u.inout.rep ? "REP " : "");
 		printf("\tport\t\t0x%04x\n", vmexit->u.inout.port);
 		printf("\teax\t\t0x%08x\n", vmexit->u.inout.eax);
+		break;
+	case VM_EXITCODE_MMIO:
+		printf("\treason\t\tMMIO\n");
+		printf("\toperation\t%s\n",
+		    vmexit->u.mmio.read ? "READ" : "WRITE");
+		printf("\tbytes\t\t%d\n", vmexit->u.mmio.bytes);
+		printf("\tgpa\t\t0x%08x\n", vmexit->u.mmio.gpa);
+		printf("\tdata\t\t0x%08x\n", vmexit->u.mmio.data);
 		break;
 	case VM_EXITCODE_VMX:
 		printf("\treason\t\tVMX\n");
@@ -395,6 +400,7 @@ dump_vm_run_exitcode(struct vm_exit *vmexit, int vcpu)
 #define MSR_AMD7TH_START	0xC0010000
 #define MSR_AMD7TH_END		0xC0011FFF
 
+#ifdef __FreeBSD__
 static const char *
 msr_name(uint32_t msr)
 {
@@ -558,7 +564,23 @@ vm_set_vmcs_field(struct vmctx *ctx, int vcpu, int field, uint64_t val)
 
 	return (vm_set_register(ctx, vcpu, VMCS_IDENT(field), val));
 }
+#else /* __FreeBSD__ */
+/* VMCS does not allow arbitrary reads/writes */
+static int
+vm_get_vmcs_field(struct vmctx *ctx, int vcpu, int field, uint64_t *ret_val)
+{
+	*ret_val = 0;
+	return (0);
+}
 
+static int
+vm_set_vmcs_field(struct vmctx *ctx, int vcpu, int field, uint64_t val)
+{
+	return (EINVAL);
+}
+#endif /* __FreeBSD__ */
+
+#ifdef __FreeBSD__
 static int
 vm_get_vmcb_field(struct vmctx *ctx, int vcpu, int off, int bytes,
 	uint64_t *ret_val)
@@ -574,6 +596,23 @@ vm_set_vmcb_field(struct vmctx *ctx, int vcpu, int off, int bytes,
 	
 	return (vm_set_register(ctx, vcpu, VMCB_ACCESS(off, bytes), val));
 }
+#else /* __FreeBSD__ */
+/* Arbitrary VMCB read/write is not allowed */
+static int
+vm_get_vmcb_field(struct vmctx *ctx, int vcpu, int off, int bytes,
+	uint64_t *ret_val)
+{
+	*ret_val = 0;
+	return (0);
+}
+
+static int
+vm_set_vmcb_field(struct vmctx *ctx, int vcpu, int off, int bytes,
+	uint64_t val)
+{
+	return (EINVAL);
+}
+#endif /* __FreeBSD__ */
 
 enum {
 	VMNAME = 1000,	/* avoid collision with return values from getopt */
@@ -2177,8 +2216,15 @@ main(int argc, char *argv[])
 						  &addr);
 		}
 
+#ifdef __FreeBSD__
 		if (error == 0)
 			error = dump_msr_bitmap(vcpu, addr, cpu_intel);
+#else
+		/*
+		 * Skip dumping the MSR bitmap since raw access to the VMCS is
+		 * currently not possible.
+		 */
+#endif /* __FreeBSD__ */
 	}
 
 	if (!error && (get_vpid_asid || get_all)) {
@@ -2366,7 +2412,11 @@ main(int argc, char *argv[])
 	}
 
 	if (!error && run) {
-		error = vm_run(ctx, vcpu, &vmexit);
+		struct vm_entry entry;
+
+		bzero(&entry, sizeof (entry));
+
+		error = vm_run(ctx, vcpu, &entry, &vmexit);
 		if (error == 0)
 			dump_vm_run_exitcode(&vmexit, vcpu);
 		else
