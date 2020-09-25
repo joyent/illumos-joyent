@@ -23,6 +23,7 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/systm.h>
@@ -85,9 +86,9 @@ ltos_open_flags(int input)
 
 	/*
 	 * Linux uses the LX_O_DIRECT flag to do raw, synchronous I/O to the
-	 * device backing the fd in question.  Illumos doesn't have similar
-	 * functionality, but we can attempt to simulate it using the flags
-	 * (O_RSYNC|O_SYNC) and directio(3C).
+	 * device backing the fd in question.  illumos has O_DIRECT but
+	 * we additionally need O_RSYNC|O_SYNC to simulate the Linux
+	 * semantics as far as possible.
 	 *
 	 * The LX_O_DIRECT flag also requires that the transfer size and
 	 * alignment of I/O buffers be a multiple of the logical block size for
@@ -102,7 +103,7 @@ ltos_open_flags(int input)
 	 * system block size will be test suites.
 	 */
 	if (input & LX_O_DIRECT)
-		flags |= (O_RSYNC|O_SYNC);
+		flags |= (O_RSYNC|O_SYNC|O_DIRECT);
 
 	return (flags);
 }
@@ -126,11 +127,6 @@ lx_open_postprocess(int fd, int fmode)
 		 * arrived here if some one is hammering away with close().
 		 */
 		return (EIO);
-	}
-
-	if (fmode & LX_O_DIRECT && error == 0) {
-		(void) VOP_IOCTL(fp->f_vnode, _FIODIRECTIO, DIRECTIO_ON,
-		    fp->f_flag, fp->f_cred, &rv, NULL);
 	}
 
 	if (fmode & LX_O_ASYNC && error == 0) {
