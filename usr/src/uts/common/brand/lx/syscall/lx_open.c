@@ -108,7 +108,7 @@ ltos_open_flags(int input)
 	return (flags);
 }
 
-#define	LX_POSTPROCESS_OPTS	(LX_O_DIRECT | LX_O_ASYNC | LX_O_PATH)
+#define	LX_POSTPROCESS_OPTS	(LX_O_ASYNC | LX_O_PATH)
 
 static int
 lx_open_postprocess(int fd, int fmode)
