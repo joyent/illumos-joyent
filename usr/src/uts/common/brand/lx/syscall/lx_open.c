@@ -114,7 +114,7 @@ static int
 lx_open_postprocess(int fd, int fmode)
 {
 	file_t *fp;
-	int rv, error = 0;
+	int error = 0;
 
 	if ((fmode & LX_POSTPROCESS_OPTS) == 0) {
 		/* Skip out early, if possible */
