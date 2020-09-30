@@ -22,6 +22,7 @@
  * Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright (c) 2017, Joyent, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -43,6 +44,7 @@
 #include <sys/autoconf.h>
 #include <sys/atomic.h>
 #include <sys/sdt.h>
+#include <sys/id_space.h>
 
 /* for doors */
 #include <sys/pathname.h>
@@ -972,16 +974,14 @@ open_channel(char *channel_name)
 	 * Subscriber id 0 is never allocated, but is used as a reserved id
 	 * by libsysevent
 	 */
-	if ((chan->scd_subscriber_cache = vmem_create(channel_name, (void *)1,
-	    MAX_SUBSCRIBERS + 1, 1, NULL, NULL, NULL, 0,
-	    VM_NOSLEEP | VMC_IDENTIFIER)) == NULL) {
+	if ((chan->scd_subscriber_cache = id_space_create_nosleep(channel_name, 1,
+	    MAX_SUBSCRIBERS)) == NULL) {
 		kmem_free(chan, sizeof (sysevent_channel_descriptor_t));
 		return (-1);
 	}
-	if ((chan->scd_publisher_cache = vmem_create(channel_name, (void *)1,
-	    MAX_PUBLISHERS + 1, 1, NULL, NULL, NULL, 0,
-	    VM_NOSLEEP | VMC_IDENTIFIER)) == NULL) {
-		vmem_destroy(chan->scd_subscriber_cache);
+	if ((chan->scd_publisher_cache = id_space_create_nosleep(channel_name, 1,
+	    MAX_PUBLISHERS)) == NULL) {
+		id_space_destroy(chan->scd_subscriber_cache);
 		kmem_free(chan, sizeof (sysevent_channel_descriptor_t));
 		return (-1);
 	}
@@ -1027,8 +1027,8 @@ close_channel(char *channel_name)
 		return;
 
 	free_channel_registration(chan);
-	vmem_destroy(chan->scd_subscriber_cache);
-	vmem_destroy(chan->scd_publisher_cache);
+	id_space_destroy(chan->scd_subscriber_cache);
+	id_space_destroy(chan->scd_publisher_cache);
 	kmem_free(chan->scd_channel_name,
 	    strlen(chan->scd_channel_name) + 1);
 	if (registered_channels[hash_index] == chan)
@@ -1045,14 +1045,12 @@ bind_common(sysevent_channel_descriptor_t *chan, int type)
 	id_t id;
 
 	if (type == SUBSCRIBER) {
-		id = (id_t)(uintptr_t)vmem_alloc(chan->scd_subscriber_cache, 1,
-		    VM_NOSLEEP | VM_NEXTFIT);
+		id = id_alloc_nosleep(chan->scd_subscriber_cache);
 		if (id <= 0 || id > MAX_SUBSCRIBERS)
 			return (0);
 		chan->scd_subscriber_ids[id] = 1;
 	} else {
-		id = (id_t)(uintptr_t)vmem_alloc(chan->scd_publisher_cache, 1,
-		    VM_NOSLEEP | VM_NEXTFIT);
+		id = id_alloc_nosleep(chan->scd_publisher_cache);
 		if (id <= 0 || id > MAX_PUBLISHERS)
 			return (0);
 		chan->scd_publisher_ids[id] = 1;
@@ -1071,14 +1069,14 @@ unbind_common(sysevent_channel_descriptor_t *chan, int type, id_t id)
 			return (0);
 		(void) remove_all_class(chan, id);
 		chan->scd_subscriber_ids[id] = 0;
-		vmem_free(chan->scd_subscriber_cache, (void *)(uintptr_t)id, 1);
+		id_free(chan->scd_subscriber_cache, id);
 	} else {
 		if (id <= 0 || id > MAX_PUBLISHERS)
 			return (0);
 		if (chan->scd_publisher_ids[id] == 0)
 			return (0);
 		chan->scd_publisher_ids[id] = 0;
-		vmem_free(chan->scd_publisher_cache, (void *)(uintptr_t)id, 1);
+		id_free(chan->scd_publisher_cache, id);
 	}
 
 	return (1);
