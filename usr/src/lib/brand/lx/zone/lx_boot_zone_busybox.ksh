@@ -37,13 +37,13 @@ depend() {
 }
 start() {
 EOF
-# Only alter resolve.conf if we're getting info from zonecfg(1M).
+# Only alter resolv.conf if we're getting info from zonecfg(1M).
 zonecfg -z $ZONENAME info attr name=resolvers | grep -q resolvers
 if [[ $? == 0 ]]; then
     cat > $tmpfile <<EOF
     if [ ! -e /etc/resolv.conf ]; then
         echo "# AUTOMATIC ZONE CONFIG" > /etc/resolv.conf
-    EOF
+EOF
     zonecfg -z $ZONENAME info attr name=resolvers |
     awk '
     {

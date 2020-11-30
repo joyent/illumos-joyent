@@ -36,7 +36,7 @@ safe_dir /etc/rc6.d
 safe_dir /etc/rcS.d
 safe_opt_dir /etc/selinux
 
-# Populate resolve.conf setup files IF we have resolvers information.
+# Populate resolv.conf setup files IF we have resolvers information.
 zonecfg -z $ZONENAME info attr name=resolvers | grep -q resolvers
 if [[ $? == 0 ]]; then
     zonecfg -z $ZONENAME info attr name=resolvers | awk '
