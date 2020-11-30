@@ -73,12 +73,12 @@ EOF
     fi
     return 0
     }
-    EOF
+EOF
 else
     cat >> $tmpfile <<EOF
     return 0
     }
-    EOF
+EOF
 fi
 
 cat >> $tmpfile <<EOF

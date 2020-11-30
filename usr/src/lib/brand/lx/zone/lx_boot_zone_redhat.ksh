@@ -12,7 +12,7 @@
 
 #
 # Copyright 2015 Joyent, Inc.
-# Copyright 2015 OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
 #
 
 #
@@ -68,7 +68,7 @@ if [[ $? == 0 ]]; then
             rm -f /etc/resolv.conf
         fi
         echo "# AUTOMATIC ZONE CONFIG" > /etc/resolv.conf
-    EOF
+EOF
     zonecfg -z $ZONENAME info attr name=resolvers |
     awk '
     {
@@ -96,7 +96,7 @@ if [[ $? == 0 ]]; then
     ' >> $tmpfile
     cat >> $tmpfile <<EOF
     fi
-    EOF
+EOF
 fi
 
 cat >> $tmpfile <<EOF
@@ -182,7 +182,7 @@ if ! egrep -s "NETWORKING=yes" $fnm; then
 		cat > $fnm <<- EOF
 		NETWORKING=yes
 		HOSTNAME=$cfghnm
-		EOF
+EOF
 	fi
 fi
 
@@ -292,7 +292,7 @@ if [[ ! -f $ZONEROOT/etc/init/tty.override ]]; then
 	respawn
 	instance console
 	exec /sbin/mingetty console
-	EOF
+EOF
 fi
 
 if [[ ! -f $ZONEROOT/etc/init/start-ttys.override ]]; then
@@ -306,7 +306,7 @@ if [[ ! -f $ZONEROOT/etc/init/start-ttys.override ]]; then
 	script
 		initctl start tty
 	end script
-	EOF
+EOF
 fi
 
 #
