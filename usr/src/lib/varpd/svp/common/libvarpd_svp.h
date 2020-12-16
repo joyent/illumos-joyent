@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #ifndef _LIBVARPD_SVP_H
@@ -141,7 +141,7 @@ typedef struct svp_conn_out {
 } svp_conn_out_t;
 
 typedef struct svp_conn_in {
-	svp_query_t 		*sci_query;
+	svp_query_t		*sci_query;
 	svp_req_t		sci_req;
 	size_t			sci_offset;
 } svp_conn_in_t;
@@ -168,7 +168,7 @@ struct svp_conn {
 
 typedef enum svp_remote_state {
 	SVP_RS_LOOKUP_SCHEDULED		= 0x01,	/* On the DNS Queue */
-	SVP_RS_LOOKUP_INPROGRESS 	= 0x02,	/* Doing a DNS lookup */
+	SVP_RS_LOOKUP_INPROGRESS	= 0x02,	/* Doing a DNS lookup */
 	SVP_RS_LOOKUP_VALID		= 0x04	/* addrinfo valid */
 } svp_remote_state_t;
 
@@ -216,7 +216,7 @@ struct svp_remote {
 	cond_t			sr_cond;
 	svp_remote_state_t	sr_state;
 	svp_degrade_state_t	sr_degrade;
-	struct addrinfo 	*sr_addrinfo;
+	struct addrinfo	*sr_addrinfo;
 	avl_tree_t		sr_tree;
 	uint_t			sr_count;	/* active count */
 	uint_t			sr_gen;
@@ -248,6 +248,7 @@ typedef void (*svp_shootdown_f)(svp_t *, const uint8_t *,
 
 typedef struct svp_cb {
 	svp_vl2_lookup_f	scb_vl2_lookup;
+	svp_vl3_lookup_f	scb_arp_lookup;
 	svp_vl3_lookup_f	scb_vl3_lookup;
 	svp_vl2_invalidation_f	scb_vl2_invalidate;
 	svp_vl3_inject_f	scb_vl3_inject;
@@ -262,7 +263,7 @@ struct svp {
 	varpd_provider_handle_t	*svp_hdl;	/* RO */
 	svp_cb_t		svp_cb;		/* RO */
 	uint64_t		svp_vid;	/* RO */
-	avl_node_t 		svp_rlink;	/* Owned by svp_remote */
+	avl_node_t		svp_rlink;	/* Owned by svp_remote */
 	svp_remote_t		*svp_remote;	/* RO iff started */
 	mutex_t			svp_lock;
 	char			*svp_host;	/* svp_lock */
@@ -279,6 +280,8 @@ extern int svp_remote_find(char *, uint16_t, struct in6_addr *,
 extern int svp_remote_attach(svp_remote_t *, svp_t *);
 extern void svp_remote_detach(svp_t *);
 extern void svp_remote_release(svp_remote_t *);
+extern void svp_remote_arp_lookup(svp_t *, svp_query_t *,
+    const struct sockaddr *, void *);
 extern void svp_remote_vl3_lookup(svp_t *, svp_query_t *,
     const struct sockaddr *, void *);
 extern void svp_remote_vl2_lookup(svp_t *, svp_query_t *, const uint8_t *,

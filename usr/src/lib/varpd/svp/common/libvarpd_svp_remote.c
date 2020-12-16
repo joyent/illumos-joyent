@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -38,7 +38,7 @@
 typedef struct svp_shoot_vl3 {
 	svp_query_t		ssv_query;
 	struct sockaddr_in6	ssv_sock;
-	svp_log_vl3_t 		*ssv_vl3;
+	svp_log_vl3_t		*ssv_vl3;
 	svp_sdlog_t		*ssv_log;
 } svp_shoot_vl3_t;
 
@@ -239,8 +239,8 @@ svp_remote_attach(svp_remote_t *srp, svp_t *svp)
 	 */
 	if (svp->svp_cb.scb_vl2_lookup == NULL)
 		libvarpd_panic("missing callback scb_vl2_lookup");
-	if (svp->svp_cb.scb_vl3_lookup == NULL)
-		libvarpd_panic("missing callback scb_vl3_lookup");
+	if (svp->svp_cb.scb_arp_lookup == NULL)
+		libvarpd_panic("missing callback scb_arp_lookup");
 	if (svp->svp_cb.scb_vl2_invalidate == NULL)
 		libvarpd_panic("missing callback scb_vl2_invalidate");
 	if (svp->svp_cb.scb_vl3_inject == NULL)
@@ -352,6 +352,21 @@ svp_remote_vl2_lookup(svp_t *svp, svp_query_t *sqp, const uint8_t *mac,
 }
 
 static void
+svp_remote_arp_lookup_cb(svp_query_t *sqp, void *arg)
+{
+	svp_t *svp = sqp->sq_svp;
+	svp_vl3_ack_t *vl3a = (svp_vl3_ack_t *)sqp->sq_wdata;
+
+	if (sqp->sq_status == SVP_S_OK)
+		svp->svp_cb.scb_arp_lookup(svp, sqp->sq_status, vl3a->sl3a_mac,
+		    (struct in6_addr *)vl3a->sl3a_uip, ntohs(vl3a->sl3a_uport),
+		    arg);
+	else
+		svp->svp_cb.scb_arp_lookup(svp, sqp->sq_status, NULL, NULL, 0,
+		    arg);
+}
+
+static void
 svp_remote_vl3_lookup_cb(svp_query_t *sqp, void *arg)
 {
 	svp_t *svp = sqp->sq_svp;
@@ -368,7 +383,7 @@ svp_remote_vl3_lookup_cb(svp_query_t *sqp, void *arg)
 
 static void
 svp_remote_vl3_common(svp_remote_t *srp, svp_query_t *sqp,
-    const struct sockaddr *addr,  svp_query_f func, void *arg, uint32_t vid)
+    const struct sockaddr *addr, svp_query_f func, void *arg, uint32_t vid)
 {
 	svp_vl3_req_t *vl3r = &sqp->sq_rdun.sdq_vl3r;
 
@@ -424,6 +439,17 @@ svp_remote_vl3_logreq(svp_remote_t *srp, svp_query_t *sqp, uint32_t vid,
     const struct sockaddr *addr, svp_query_f func, void *arg)
 {
 	svp_remote_vl3_common(srp, sqp, addr, func, arg, vid);
+}
+
+void
+svp_remote_arp_lookup(svp_t *svp, svp_query_t *sqp,
+    const struct sockaddr *addr, void *arg)
+{
+	svp_remote_t *srp = svp->svp_remote;
+
+	sqp->sq_svp = svp;
+	svp_remote_vl3_common(srp, sqp, addr, svp_remote_arp_lookup_cb,
+	    arg, svp->svp_vid);
 }
 
 void

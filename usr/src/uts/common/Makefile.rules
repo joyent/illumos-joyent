@@ -1711,6 +1711,10 @@ $(OBJS_DIR)/bz2%.o:		$(COMMONBASE)/bzip2/%.c
 	$(COMPILE.c) -o $@ -I$(COMMONBASE)/bzip2 $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/qqcache/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 BZ2LINT = -erroff=%all -I$(UTSBASE)/common/bzip2
 
 $(LINTS_DIR)/bz2%.ln:		$(COMMONBASE)/bzip2/%.c

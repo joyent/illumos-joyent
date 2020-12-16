@@ -71,6 +71,7 @@ GENUNIX_SRCS =		\
 	nvpair.c	\
 	pci.c		\
 	pg.c		\
+	qqcache.c	\
 	rctl.c		\
 	refhash.c	\
 	refstr.c	\

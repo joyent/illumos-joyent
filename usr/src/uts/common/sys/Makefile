@@ -21,14 +21,13 @@
 
 #
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 # Copyright 2013 Garrett D'Amore <garrett@damore.org>
 # Copyright 2013 Saso Kiselkov. All rights reserved.
 # Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 # Copyright 2017 Nexenta Systems, Inc.
 # Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
 # Copyright 2019 Peter Tribble.
-# Copyright 2015, Joyent, Inc. All rights reserved.
 #
 
 include $(SRC)/uts/Makefile.uts
@@ -440,6 +439,7 @@ CHKHDRS=			\
 	openpromio.h		\
 	overlay.h		\
 	overlay_common.h	\
+	overlay_router.h	\
 	overlay_target.h	\
 	panic.h			\
 	param.h			\
@@ -491,6 +491,8 @@ CHKHDRS=			\
 	ptem.h			\
 	ptms.h			\
 	ptyvar.h		\
+	qqcache.h		\
+	qqcache_impl.h		\
 	raidioctl.h		\
 	ramdisk.h		\
 	random.h		\

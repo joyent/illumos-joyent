@@ -300,6 +300,7 @@ COMMON_SUBDIRS=		\
 	oamuser		\
 	oawk		\
 	od		\
+	ovroute		\
 	pack		\
 	pagesize	\
 	passmgmt	\

@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -31,22 +31,22 @@
  *
  *    VL3
  *
- * 	A VL3 address, or virtual layer 3, refers to the layer three addreses
- * 	that are used by entities on an overlay network. As far as we're
- * 	concerned that means that this is the IP address of an interface on an
- * 	overlay network.
+ *	A VL3 address, or virtual layer 3, refers to the layer three addreses
+ *	that are used by entities on an overlay network. As far as we're
+ *	concerned that means that this is the IP address of an interface on an
+ *	overlay network.
  *
  *    VL2
  *
- *    	A VL2 address, or a virtual layer 2, referes to the link-layer addresses
- *    	that are used by entities on an overlay network. As far as we're
- *    	concerned that means that this is the MAC addresses of an interface on
- *    	an overlay network.
+ *	A VL2 address, or a virtual layer 2, referes to the link-layer addresses
+ *	that are used by entities on an overlay network. As far as we're
+ *	concerned that means that this is the MAC addresses of an interface on
+ *	an overlay network.
  *
  *    UL3
  *
- *    	A UL3, or underlay layer 3, refers to the layer three (IP) address on
- *    	the underlay network.
+ *	A UL3, or underlay layer 3, refers to the layer three (IP) address on
+ *	the underlay network.
  *
  * The svp plugin provides lookups from VL3->VL2, eg. the equivalent of an ARP
  * or NDP query, and then also provides VL2->UL3 lookups.
@@ -184,11 +184,11 @@
  * backoff for each peer and will attempt to reconect immediately before backing
  * off. The following are the valid states that a connection can be in:
  *
- * 	SVP_CS_ERROR		An OS error has occurred on this connection,
- * 				such as failure to create a socket or associate
- * 				the socket with an event port. We also
- * 				transition all connections to this state before
- * 				we destroy them.
+ *	SVP_CS_ERROR		An OS error has occurred on this connection,
+ *				such as failure to create a socket or associate
+ *				the socket with an event port. We also
+ *				transition all connections to this state before
+ *				we destroy them.
  *
  *	SVP_CS_INITIAL		This is the initial state of a connection, all
  *				that should exist is an unbound socket.
@@ -360,7 +360,8 @@ static umem_cache_t *svp_lookup_cache;
 typedef enum svp_lookup_type {
 	SVP_L_UNKNOWN	= 0x0,
 	SVP_L_VL2	= 0x1,
-	SVP_L_VL3	= 0x2
+	SVP_L_ARP	= 0x2,
+	SVP_L_VL3	= 0x3,
 } svp_lookup_type_t;
 
 typedef struct svp_lookup {
@@ -370,9 +371,13 @@ typedef struct svp_lookup {
 			varpd_query_handle_t	*svl_handle;
 			overlay_target_point_t	*svl_point;
 		} svl_vl2;
-		struct svl_lookup_vl3 {
+		struct svl_lookup_arp {
 			varpd_arp_handle_t	*svl_vah;
 			uint8_t			*svl_out;
+		} svl_arp;
+		struct svl_lookup_vl3 {
+			varpd_query_handle_t	*svl_handle;
+			overlay_target_point_t	*svl_point;
 		} svl_vl3;
 	} svl_u;
 	svp_query_t				svl_query;
@@ -426,7 +431,7 @@ svp_vl2_lookup_cb(svp_t *svp, svp_status_t status, const struct in6_addr *uip,
 }
 
 static void
-svp_vl3_lookup_cb(svp_t *svp, svp_status_t status, const uint8_t *vl2mac,
+svp_arp_lookup_cb(svp_t *svp, svp_status_t status, const uint8_t *vl2mac,
     const struct in6_addr *uip, const uint16_t uport, void *arg)
 {
 	overlay_target_point_t point;
@@ -436,7 +441,7 @@ svp_vl3_lookup_cb(svp_t *svp, svp_status_t status, const uint8_t *vl2mac,
 	assert(svl != NULL);
 
 	if (status != SVP_S_OK) {
-		libvarpd_plugin_arp_reply(svl->svl_u.svl_vl3.svl_vah,
+		libvarpd_plugin_arp_reply(svl->svl_u.svl_arp.svl_vah,
 		    VARPD_LOOKUP_DROP);
 		umem_cache_free(svp_lookup_cache, svl);
 		return;
@@ -447,9 +452,40 @@ svp_vl3_lookup_cb(svp_t *svp, svp_status_t status, const uint8_t *vl2mac,
 	point.otp_port = uport;
 	libvarpd_inject_varp(svp->svp_hdl, vl2mac, &point);
 
-	bcopy(vl2mac, svl->svl_u.svl_vl3.svl_out, ETHERADDRL);
-	libvarpd_plugin_arp_reply(svl->svl_u.svl_vl3.svl_vah,
+	bcopy(vl2mac, svl->svl_u.svl_arp.svl_out, ETHERADDRL);
+	libvarpd_plugin_arp_reply(svl->svl_u.svl_arp.svl_vah,
 	    VARPD_LOOKUP_OK);
+	umem_cache_free(svp_lookup_cache, svl);
+}
+
+static void
+svp_vl3_lookup_cb(svp_t *svp, svp_status_t status, const uint8_t *vl2mac,
+    const struct in6_addr *uip, const uint16_t uport, void *arg)
+{
+	svp_lookup_t *svl = arg;
+	overlay_target_point_t *otp;
+	overlay_target_point_t l2_point = { 0 };
+
+	assert(svp != NULL);
+	assert(svl != NULL);
+
+	if (status != SVP_S_OK) {
+		libvarpd_plugin_query_reply(svl->svl_u.svl_vl3.svl_handle,
+		    VARPD_LOOKUP_DROP);
+		umem_cache_free(svp_lookup_cache, svl);
+		return;
+	}
+
+	/* Inject the L2 mapping before the L3 */
+	bcopy(uip, &l2_point.otp_ip, sizeof (struct in6_addr));
+	l2_point.otp_port = uport;
+	libvarpd_inject_varp(svp->svp_hdl, vl2mac, &l2_point);
+
+	otp = svl->svl_u.svl_vl3.svl_point;
+	bcopy(vl2mac, otp->otp_mac, ETHERADDRL);
+	libvarpd_plugin_query_reply(svl->svl_u.svl_vl3.svl_handle,
+	    VARPD_LOOKUP_OK);
+
 	umem_cache_free(svp_lookup_cache, svl);
 }
 
@@ -486,13 +522,14 @@ svp_shootdown_cb(svp_t *svp, const uint8_t *vl2mac, const struct in6_addr *uip,
     const uint16_t uport)
 {
 	/*
-	 * We should probably do a conditional invlaidation here.
+	 * We should probably do a conditional invalidation here.
 	 */
 	libvarpd_inject_varp(svp->svp_hdl, vl2mac, NULL);
 }
 
 static svp_cb_t svp_defops = {
 	svp_vl2_lookup_cb,
+	svp_arp_lookup_cb,
 	svp_vl3_lookup_cb,
 	svp_vl2_invalidate_cb,
 	svp_vl3_inject_cb,
@@ -587,23 +624,22 @@ varpd_svp_destroy(void *arg)
 }
 
 static void
-varpd_svp_lookup(void *arg, varpd_query_handle_t *vqh,
+varpd_svp_l2lookup(svp_t *svp, varpd_query_handle_t *vqh,
     const overlay_targ_lookup_t *otl, overlay_target_point_t *otp)
 {
 	svp_lookup_t *slp;
-	svp_t *svp = arg;
 
 	/*
 	 * Check if this is something that we need to proxy, eg. arp or ndp.
 	 */
-	if (otl->otl_sap == ETHERTYPE_ARP) {
+	if (otl->otl_u.otl_l2.otl2_sap == ETHERTYPE_ARP) {
 		libvarpd_plugin_proxy_arp(svp->svp_hdl, vqh, otl);
 		return;
 	}
 
-	if (otl->otl_dstaddr[0] == 0x33 &&
-	    otl->otl_dstaddr[1] == 0x33) {
-		if (otl->otl_sap == ETHERTYPE_IPV6) {
+	if (otl->otl_u.otl_l2.otl2_dstaddr[0] == 0x33 &&
+	    otl->otl_u.otl_l2.otl2_dstaddr[1] == 0x33) {
+		if (otl->otl_u.otl_l2.otl2_sap == ETHERTYPE_IPV6) {
 			libvarpd_plugin_proxy_ndp(svp->svp_hdl, vqh, otl);
 		} else {
 			libvarpd_plugin_query_reply(vqh, VARPD_LOOKUP_DROP);
@@ -617,8 +653,8 @@ varpd_svp_lookup(void *arg, varpd_query_handle_t *vqh,
 	 * handle broadcast and if the multicast bit is set, lowest bit of the
 	 * first octet of the MAC, then we drop it now.
 	 */
-	if (bcmp(otl->otl_dstaddr, svp_bcast, ETHERADDRL) == 0 ||
-	    (otl->otl_dstaddr[0] & 0x01) == 0x01) {
+	if (bcmp(otl->otl_u.otl_l2.otl2_dstaddr, svp_bcast, ETHERADDRL) == 0 ||
+	    (otl->otl_u.otl_l2.otl2_dstaddr[0] & 0x01) == 0x01) {
 		libvarpd_plugin_query_reply(vqh, VARPD_LOOKUP_DROP);
 		return;
 	}
@@ -639,7 +675,66 @@ varpd_svp_lookup(void *arg, varpd_query_handle_t *vqh,
 	slp->svl_u.svl_vl2.svl_handle = vqh;
 	slp->svl_u.svl_vl2.svl_point = otp;
 
-	svp_remote_vl2_lookup(svp, &slp->svl_query, otl->otl_dstaddr, slp);
+	svp_remote_vl2_lookup(svp, &slp->svl_query,
+	    otl->otl_u.otl_l2.otl2_dstaddr, slp);
+}
+
+static void
+varpd_svp_l3lookup(svp_t *svp, varpd_query_handle_t *vqh,
+    const overlay_targ_lookup_t *otl, overlay_target_point_t *otp)
+{
+	svp_lookup_t *svl;
+	struct sockaddr_storage saddr = { 0 };
+	const struct sockaddr *addrp = (const struct sockaddr *)&saddr;
+
+	/*
+	 * If we have a failure to allocate memory for this, that's not good.
+	 * However, telling the kernel to just drop this packet is much better
+	 * than the alternative at this moment. At least we'll try again and we
+	 * may have something more available to us in a little bit.
+	 */
+	svl = umem_cache_alloc(svp_lookup_cache, UMEM_DEFAULT);
+	if (svl == NULL) {
+		libvarpd_plugin_query_reply(vqh, VARPD_LOOKUP_DROP);
+		return;
+	}
+
+	svl->svl_type = SVP_L_VL3;
+	svl->svl_u.svl_vl3.svl_handle = vqh;
+	svl->svl_u.svl_vl3.svl_point = otp;
+	if (IN6_IS_ADDR_V4MAPPED(&otl->otl_u.otl_l3.otl3_dest)) {
+		struct sockaddr_in *sin = (struct sockaddr_in *)&saddr;
+
+		sin->sin_family = AF_INET;
+		IN6_V4MAPPED_TO_INADDR(&otl->otl_u.otl_l3.otl3_dest,
+		    &sin->sin_addr);
+	} else {
+		struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&saddr;
+
+		sin6->sin6_family = AF_INET6;
+		bcopy(&otl->otl_u.otl_l3.otl3_dest, &sin6->sin6_addr,
+		    sizeof (struct in6_addr));
+	}
+
+	/*
+	 * svp_remove_vl3_lookup copies the address (i.e. doesn't keep a
+	 * copy of the pointer, so we can pass a pointer to the address on
+	 * the stack.
+	 */
+	svp_remote_vl3_lookup(svp, &svl->svl_query, addrp, svl);
+}
+
+static void
+varpd_svp_lookup(void *arg, varpd_query_handle_t *vqh,
+    const overlay_targ_lookup_t *otl, overlay_target_point_t *otp)
+{
+	svp_t *svp = arg;
+
+	if (otl->otl_l3lookup) {
+		return (varpd_svp_l3lookup(svp, vqh, otl, otp));
+	} else {
+		return (varpd_svp_l2lookup(svp, vqh, otl, otp));
+	}
 }
 
 /* ARGSUSED */
@@ -1000,10 +1095,10 @@ varpd_svp_arp(void *arg, varpd_arp_handle_t *vah, int type,
 		return;
 	}
 
-	svl->svl_type = SVP_L_VL3;
-	svl->svl_u.svl_vl3.svl_vah = vah;
-	svl->svl_u.svl_vl3.svl_out = out;
-	svp_remote_vl3_lookup(svp, &svl->svl_query, sock, svl);
+	svl->svl_type = SVP_L_ARP;
+	svl->svl_u.svl_arp.svl_vah = vah;
+	svl->svl_u.svl_arp.svl_out = out;
+	svp_remote_arp_lookup(svp, &svl->svl_query, sock, svl);
 }
 
 static const varpd_plugin_ops_t varpd_svp_ops = {

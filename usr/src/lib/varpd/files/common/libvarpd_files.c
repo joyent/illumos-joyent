@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -28,7 +28,7 @@
  * The plug-in only has a single property, which is the location of the JSON
  * file. The JSON file itself looks something like:
  *
- * 	{
+ *	{
  *		"aa:bb:cc:dd:ee:ff": {
  *			"arp": "10.23.69.1",
  *			"ndp": "2600:3c00::f03c:91ff:fe96:a264",
@@ -238,25 +238,26 @@ varpd_files_lookup(void *arg, varpd_query_handle_t *qh,
 		return;
 	}
 
-	if (otl->otl_sap == ETHERTYPE_ARP) {
+	if (otl->otl_u.otl_l2.otl2_sap == ETHERTYPE_ARP) {
 		libvarpd_plugin_proxy_arp(vaf->vaf_hdl, qh, otl);
 		return;
 	}
 
-	if (otl->otl_sap == ETHERTYPE_IPV6 &&
-	    otl->otl_dstaddr[0] == 0x33 &&
-	    otl->otl_dstaddr[1] == 0x33) {
+	if (otl->otl_u.otl_l2.otl2_sap == ETHERTYPE_IPV6 &&
+	    otl->otl_u.otl_l2.otl2_dstaddr[0] == 0x33 &&
+	    otl->otl_u.otl_l2.otl2_dstaddr[1] == 0x33) {
 		libvarpd_plugin_proxy_ndp(vaf->vaf_hdl, qh, otl);
 		return;
 	}
 
-	if (otl->otl_sap == ETHERTYPE_IP &&
-	    bcmp(otl->otl_dstaddr, bcast, ETHERADDRL) == 0) {
+	if (otl->otl_u.otl_l2.otl2_sap == ETHERTYPE_IP &&
+	    bcmp(otl->otl_u.otl_l2.otl2_dstaddr, bcast, ETHERADDRL) == 0) {
 		char *mac;
 		struct ether_addr a, *addr;
 
 		addr = &a;
-		if (ether_ntoa_r((struct ether_addr *)otl->otl_srcaddr,
+		if (ether_ntoa_r(
+		    (struct ether_addr *)otl->otl_u.otl_l2.otl2_srcaddr,
 		    macstr) == NULL) {
 			libvarpd_plugin_query_reply(qh, VARPD_LOOKUP_DROP);
 			return;
@@ -281,7 +282,7 @@ varpd_files_lookup(void *arg, varpd_query_handle_t *qh,
 		return;
 	}
 
-	if (ether_ntoa_r((struct ether_addr *)otl->otl_dstaddr,
+	if (ether_ntoa_r((struct ether_addr *)otl->otl_u.otl_l2.otl2_dstaddr,
 	    macstr) == NULL) {
 		libvarpd_plugin_query_reply(qh, VARPD_LOOKUP_DROP);
 		return;
@@ -543,7 +544,7 @@ varpd_files_proxy_dhcp(void *arg, varpd_dhcp_handle_t *vdh, int type,
 		return;
 	}
 
-	if (ether_ntoa_r((struct ether_addr *)otl->otl_srcaddr,
+	if (ether_ntoa_r((struct ether_addr *)otl->otl_u.otl_l2.otl2_srcaddr,
 	    macstr) == NULL) {
 		libvarpd_plugin_dhcp_reply(vdh, VARPD_LOOKUP_DROP);
 		return;

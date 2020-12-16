@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2020 Joyent, Inc. All rights reserved.
  * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  */
 
@@ -141,6 +141,7 @@ sdt_provider_t sdt_providers[] = {
 	{ "srp", "__srp_", &fc_attr },
 	{ "sysevent", "__sysevent_", &stab_attr },
 	{ "vnd", "__vnd_", &stab_attr },
+	{ "overlay", "__overlay_", &stab_attr },
 	{ "sdt", NULL, &sdt_attr },
 	{ NULL }
 };
@@ -1499,6 +1500,24 @@ sdt_argdesc_t sdt_args[] = {
 	{ "vnd", "recv", 2, 2, "void *", "ipinfo_t *" },
 	{ "vnd", "recv", 3, 3, "vnd_str_t *", "ifinfo_t *" },
 	{ "vnd", "recv", 4, 4, "mblk_t *", "etherinfo_t *" },
+
+	{ "overlay", "freemsg", 0, 0, "mblk_t *", "pktinfo_t *" },
+	{ "overlay", "freemsg", 1, 1, "const char *", "const char *" },
+	{ "overlay", "pullupmsg", 0, 0, "mblk_t *", "pkginfo_t *" },
+	{ "overlay", "pullupmsg", 1, 1, "const char *", "const char *" },
+	{ "overlay", "vl2-lookup-req", 0, 0, "uintptr_t", "uintptr_t" },
+	{ "overlay", "vl2-lookup-req", 1, 1, "uint64_t", "uint64_t" },
+	{ "overlay", "vl2-lookup-req", 2, 2, "uint8_t *", "uint8_t *" },
+	{ "overlay", "vl3-lookup-req", 0, 0, "uintptr_t", "uintptr_t" },
+	{ "overlay", "vl3-lookup-req", 1, 1, "uint64_t", "uint64_t" },
+	{ "overlay", "vl3-lookup-req", 2, 2, "struct in6_addr *",
+	    "struct in6_addr *" },
+	{ "overlay", "vl2-lookup-resp", 0, 0, "uintptr_t", "uintptr_t" },
+	{ "overlay", "vl2-lookup-req", 1, 1, "struct in6_addr *",
+	    "struct in6_addr *" },
+	{ "overlay", "vl2-lookup-resp", 2, 2, "uint16_t", "uint16_t" },
+	{ "overlay", "vl3-lookup-resp", 0, 0, "uintptr_t", "uintptr_t" },
+	{ "overlay", "vl3-lookup-resp", 1, 1, "uint8_t *", "uint8_t *" },
 
 	{ NULL }
 };

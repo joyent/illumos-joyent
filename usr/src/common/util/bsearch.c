@@ -27,17 +27,18 @@
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/* Copyright 2020 Joyent, Inc. */
 
 /*
  * Binary search algorithm, generalized from Knuth (6.2.1) Algorithm B.
  */
 
-#if !defined(_BOOT) && !defined(_KMDB)
-#include "lint.h"
-#endif /* !_BOOT && !_KMDB */
+#ifndef _KERNEL
 #include <stddef.h>
 #include <stdlib.h>
+#else
+#include <sys/null.h>
+#endif
 #include <sys/types.h>
 
 void *

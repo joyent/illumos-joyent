@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #ifndef _LIBVARPD_IMPL_H
@@ -234,7 +234,7 @@ extern int libvarpd_overlay_cache_get(varpd_instance_t *, const uint8_t *,
     varpd_client_cache_entry_t *);
 extern int libvarpd_overlay_cache_set(varpd_instance_t *, const uint8_t *,
     const varpd_client_cache_entry_t *);
-extern int libvarpd_overlay_cache_walk_fill(varpd_instance_t *, uint64_t *,
+extern int libvarpd_overlay_cache_walk_fill(varpd_instance_t *, void *,
     uint64_t *, overlay_targ_cache_entry_t *);
 
 extern void libvarpd_persist_init(varpd_impl_t *);

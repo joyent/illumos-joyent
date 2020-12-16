@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -31,13 +31,12 @@
 #include <sys/strsubr.h>
 #include <sys/strsun.h>
 #include <sys/tihdr.h>
+#include <sys/vlan.h>
+
+#include <inet/ip.h>
+#include <netinet/ip6.h>
 
 #include <sys/overlay_impl.h>
-
-#include <sys/sdt.h>
-
-#define	OVERLAY_FREEMSG(mp, reason) \
-    DTRACE_PROBE2(overlay__fremsg, mblk_t *, mp, char *, reason)
 
 static list_t overlay_mux_list;
 static kmutex_t overlay_mux_lock;
@@ -71,6 +70,81 @@ overlay_mux_comparator(const void *a, const void *b)
 		return (0);
 }
 
+static void
+overlay_rx(mac_handle_t mh, overlay_target_t *ott, overlay_router_t *orr,
+    mblk_t *mp)
+{
+	const char *reason;
+	overlay_net_t *ont = NULL;
+	struct ether_vlan_header *eth = NULL;
+	overlay_pkt_t op;
+	uint16_t pri, cfi, vlan;
+
+	/*
+	 * If this vnet doesn't have any router instances, no further checking
+	 * is necessary and we can just send this mblk_t on up.
+	 */
+	if (orr == NULL) {
+		mac_rx(mh, NULL, mp);
+		return;
+	}
+
+	if (overlay_pkt_init(&op, mh, mp, &reason) != 0) {
+		OVERLAY_FREEMSG(mp, reason);
+		freemsg(mp);
+		return;
+	}
+
+	if (!op.op_mhi.mhi_istagged) {
+		OVERLAY_FREEMSG(op.op_mblk, "untagged packet");
+		freemsg(op.op_mblk);
+		return;
+	}
+
+	pri = VLAN_PRI(op.op_mhi.mhi_tci);
+	cfi = VLAN_CFI(op.op_mhi.mhi_tci);
+	vlan = VLAN_ID(op.op_mhi.mhi_tci);
+
+	switch (OPKT_ETYPE(&op)) {
+	case ETHERTYPE_IP:
+		ont = overlay_hold_net_by_ip(orr,
+		    op.op2_u.op2_ipv4->ipha_dst);
+		break;
+	case ETHERTYPE_IPV6:
+		ont = overlay_hold_net_by_ip6(orr, &op.op_dstaddr);
+		break;
+	default:
+		/*
+		 * Non IPv4/IPv6 packets are not routed, so we can always
+		 * pass those up.
+		 */
+		goto done;
+	}
+
+	if (ont == NULL) {
+		OVERLAY_FREEMSG(op.op_mblk, "no destination net found");
+		freemsg(op.op_mblk);
+		return;
+	}
+
+	/* If the vlans match, no routing done, just pass up */
+	if (ont->ont_vlan == vlan)
+		goto done;
+
+	/*
+	 * Set the source MAC to the router MAC and adjust the vlan to
+	 * the net vlan. The destination MAC should have already been set
+	 * by the source host.
+	 */
+	eth = (struct ether_vlan_header *)op.op_mblk->b_rptr;
+	bcopy(ont->ont_mac, &eth->ether_shost, ETHERADDRL);
+	eth->ether_tci = htons(VLAN_TCI(pri, cfi, ont->ont_vlan));
+
+done:
+	mac_rx(mh, NULL, op.op_mblk);
+	overlay_net_rele(ont);
+}
+
 /*
  * This is the central receive data path. We need to decode the packet, if we
  * can, and then deliver it to the appropriate overlay.
@@ -93,6 +167,7 @@ overlay_mux_recv(ksocket_t ks, mblk_t *mpchain, size_t msgsize, int oob,
 		struct T_unitdata_ind *tudi;
 		ovep_encap_info_t infop;
 		overlay_dev_t od, *odd;
+		overlay_router_t *orr;
 		int ret;
 
 		nmp = mp->b_next;
@@ -125,6 +200,18 @@ overlay_mux_recv(ksocket_t ks, mblk_t *mpchain, size_t msgsize, int oob,
 		fmp = mp;
 		mp = fmp->b_cont;
 		freeb(fmp);
+
+		/*
+		 * In cases of looped-back vxlan, that tends to have a
+		 * prepended IP+UDP-only mblk, followed by the data.  Parsing
+		 * would've made that mblk a zero-length one (rptr == wptr).
+		 */
+		if (mp->b_rptr == mp->b_wptr && mp->b_cont != NULL) {
+			/* Ended up with zero-length mblk, lose it! */
+			fmp = mp;
+			mp = fmp->b_cont;
+			freeb(fmp);
+		}
 
 		/*
 		 * Until we have VXLAN-or-other-decap HW acceleration support
@@ -192,11 +279,23 @@ overlay_mux_recv(ksocket_t ks, mblk_t *mpchain, size_t msgsize, int oob,
 			freemsg(mp);
 			continue;
 		}
+
+		/*
+		 * If the router isn't active, set orr to NULL so to allow
+		 * overlay_rx() to bypass the routing checks.
+		 */
+		mutex_enter(&odd->odd_router->orr_lock);
+		if (overlay_router_active(odd->odd_router))
+			orr = odd->odd_router;
+		else
+			orr = NULL;
+		mutex_exit(&odd->odd_router->orr_lock);
+
 		overlay_io_start(odd, OVERLAY_F_IN_RX);
 		mutex_exit(&odd->odd_lock);
 		mutex_exit(&mux->omux_lock);
 
-		mac_rx(odd->odd_mh, NULL, mp);
+		overlay_rx(odd->odd_mh, odd->odd_target, orr, mp);
 
 		mutex_enter(&odd->odd_lock);
 		overlay_io_done(odd, OVERLAY_F_IN_RX);
@@ -364,8 +463,10 @@ overlay_mux_tx(overlay_mux_t *mux, struct msghdr *hdr, mblk_t *mp)
 	 * b_cont of mp post-call).  We can't hold up this message (it's a
 	 * datagram), so we drop, and let the caller cope.
 	 */
-	if (ret != 0)
+	if (ret != 0) {
+		OVERLAY_FREEMSG(mp, "ksocket_sendmblk failed");
 		freemsg(mp);
+	}
 
 	return (ret);
 }

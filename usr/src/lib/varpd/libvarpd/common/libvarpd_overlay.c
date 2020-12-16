@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -459,7 +459,7 @@ libvarpd_overlay_cache_set(varpd_instance_t *inst, const uint8_t *key,
 }
 
 int
-libvarpd_overlay_cache_walk_fill(varpd_instance_t *inst, uint64_t *markerp,
+libvarpd_overlay_cache_walk_fill(varpd_instance_t *inst, void *markerp,
     uint64_t *countp, overlay_targ_cache_entry_t *ents)
 {
 	int ret;
@@ -477,7 +477,7 @@ libvarpd_overlay_cache_walk_fill(varpd_instance_t *inst, uint64_t *markerp,
 		return (ENOMEM);
 
 	iter->otci_linkid = inst->vri_linkid;
-	iter->otci_marker = *markerp;
+	bcopy(markerp, &iter->otci_marker, sizeof (iter->otci_marker));
 	iter->otci_count = *countp;
 	ret = ioctl(vip->vdi_overlayfd, OVERLAY_TARG_CACHE_ITER, iter);
 	if (ret != 0 && errno == EFAULT)
@@ -487,7 +487,7 @@ libvarpd_overlay_cache_walk_fill(varpd_instance_t *inst, uint64_t *markerp,
 		goto out;
 	}
 
-	*markerp = iter->otci_marker;
+	bcopy(&iter->otci_marker, markerp, sizeof (iter->otci_marker));
 	*countp = iter->otci_count;
 	bcopy(iter->otci_ents, ents,
 	    *countp * sizeof (overlay_targ_cache_entry_t));

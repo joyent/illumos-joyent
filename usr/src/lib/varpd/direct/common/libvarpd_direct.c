@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2016 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -48,7 +48,7 @@ typedef struct varpd_direct {
 	mutex_t			vad_lock;	/* Protects the rest */
 	boolean_t		vad_hip;
 	boolean_t		vad_hport;
-	struct in6_addr 	vad_ip;
+	struct in6_addr	vad_ip;
 	uint16_t		vad_port;
 } varpd_direct_t;
 

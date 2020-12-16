@@ -1,0 +1,582 @@
+.\"
+.\" This file and its contents are supplied under the terms of the
+.\" Common Development and Distribution License ("CDDL"), version 1.0.
+.\" You may only use this file in accordance with the terms of version
+.\" 1.0 of the CDDL.
+.\"
+.\" A full copy of the text of the CDDL should have accompanied this
+.\" source.  A copy of the CDDL is also available via the Internet at
+.\" http://www.illumos.org/license/CDDL.
+.\"
+.\"
+.\" Copyright 2020 Joyent, Inc.
+.\"
+.Dd October 26, 2020
+.Dt OVROUTE 1M
+.Os
+.Sh NAME
+.Nm ovroute
+.Nd overlay router management
+.Sh SYNOPSIS
+.\"
+.\" ovroute router create ...
+.\"
+.Nm
+.Cm router create
+.Fl d Ar overlay
+.Fl m Ar macaddr
+.Fl v Ar vlan
+.Fl a Ar address/mask
+.Oo Fl a Ar address/mask Oc
+.Oo Fl r Ar route_table_id Oc
+.Ar router_id
+.\"
+.\" router delete
+.\"
+.Nm
+.Cm router delete
+.Fl d Ar overlay
+.Ar router_id
+.\"
+.\" router get
+.\"
+.Nm
+.Cm router get
+.Fl d Ar overlay
+.Oo Fl o Ar field Ns Oo ,... Oc Oo Fl p Oc Oc
+.Oo Ar router_id Ns ... Oc
+.\"
+.\" set-routing-table
+.\"
+.Nm
+.Cm router set-routing-table
+.Fl d Ar overlay
+.Fl r Ar route_table_id
+.Ar router_id
+.\"
+.\" route-table create
+.\"
+.Nm
+.Cm route-table create
+.Fl d Ar overlay
+.Ar route_table_id
+.\"
+.\" route-table delete
+.\"
+.Nm
+.Cm route-table delete
+.Fl d Ar overlay
+.Ar route_table_id
+.\"
+.\" route-table get
+.\"
+.Nm
+.Cm route-table get
+.Fl d Ar overlay
+.Ar route_table_id
+.Oo Fl o Ar field Ns Oo ,... Oc Oo Fl p Oc Oc
+.Oo Ar route_table_id Ns ... Oc
+.\"
+.\" route-table set-default
+.\"
+.Nm
+.Cm route-table set-default
+.Fl d Ar overlay
+.Ar route_table_id
+.\"
+.\" route-table add
+.\"
+.Nm
+.Cm route-table add
+.Fl d Ar overlay
+.Fl i Ar route_table_id
+.Ar destination
+.Ar target
+.\"
+.\" route-table del
+.\"
+.Nm
+.Cm route-table del
+.Fl d Ar overlay
+.Fl i Ar route_table_id
+.Ar destination
+.Ar target
+.\"
+.\" ================================
+.Sh DESCRIPTION
+.\" ================================
+The
+.Nm
+utility is used to manage routers within an
+.Xr overlay 5
+network.
+.Xr overlay 5
+routers are used to move packets within an overlay network off the virtual
+layer two (VL2) network.
+.Pp
+For example, two VL2 subnets may wish to route packets to each other,
+regardless of which physical system instances using those VL2 networks reside.
+As long as the underlay IPs
+.Po
+the UL3 address ka the IP address of the underlying interface the overlay
+instance sits on, e.g. the IP address of
+.Ql sdc_underlay0
+.Pc of the source and destination systems are reachable to each other,
+and the virtual layer three (VL3) \(-> virtual layer two (VL2) mappings
+for the source and destination VL3 IPs, the
+.Nm
+command can be run to setup routing between these two subnets.
+Normally, these entries are managed automatically \(em e.g. by the Triton
+.Ql net-agent
+process, and should normally not need to be altered by an operator.
+.Pp
+To route packets between VL2 subnets, an
+.Xr overlay 5
+router instance is created for each VL2 network where packets are intended to
+be routed.
+A
+.Xr overlay 5
+router instance should be created on any physical machine where the
+corresponding VL2 subnet is in use.
+.Pp
+For example, if a subnet with a vlan id of
+.Ql 2112
+and an address range of
+.Ql 192.168.1.0/24
+on overlay
+.Ql sdc_underlay42
+exists, then any machine that houses an instance with an IP address within
+.Ql 192.168.1.0/24
+should have an overlay router instance for the
+.Ql 192.168.1.0/24
+subnet created on it.
+The
+.Ar address/mask
+and
+.Ar macaddr
+parameters should be the same for all such systems.
+It is also recommended, but not required, that the router id used also
+match.
+It is not necessary to create an
+.Xr overlay 5
+router instance on a machine if the corresponding subnet is not in use
+(no instances have IP assigned to the subnet) on that machine.
+.Pp
+Additionally, an
+.Xr overlay 5
+route table must be associated with each
+.Xr overlay 5
+router instance before any routing will occur.
+Multiple router instances in a given
+.Xr overlay 5
+instance can share the same route table.
+Both the source and destination systems must be configured with
+.Xr overlay 5
+router instances for any VL2 networks that wish to route packets between each
+other.
+Failure to do so will result in dropped packets.
+.Pp
+Once the router instances and router tables have been created, any
+packets sent to the VL3 router IP by the instance (using the instance's routing
+table), will then have the destination VL3 IP matched in the
+.Xr overlay 5
+routing table for the router instance that received the packet.
+The match is a longest prefix match, similar to how
+.Xr route 7P
+works for traditional IP forwarding.
+If the target address is the
+.Dq any
+.Po
+.Ql 0.0.0.0
+or
+.Ql ::0
+.Pc
+address, the packets are routed to the destination subnet and the destionation
+machine.
+If another address in the
+.Xr overlay 5
+routing table is the longest prefix match for the VL3 destination IP, the
+corresponding target IP:port value is the underlay IP address where the
+encapsulated packet is sent.
+This is normally used for features such as EIP, NAT or ELB.
+If there is no matching destination, the packet is dropped.
+.\"
+.\" =====================================
+.Sh OPTIONS
+.\" =====================================
+The following options are supported:
+.Bl -tag -width overlay
+.\"
+.It Xo Nm Cm router create
+.\" ----------------------
+.Fl d Ar overlay
+.Fl m Ar macaddr
+.Fl v Ar vlan
+.Fl a Ar address/mask
+.Oo Fl a Ar address/mask Oc
+.Oo Fl r route_table_id Oc
+.Ar router_id
+.Xc
+.Pp
+Create an
+.Xr overlay 5
+router instance on the overlay device
+.Ar overlay
+with an id of
+.Ar router_id .
+The
+.Ar router_id
+must be a unique identifer across all the
+.Xr overlay 5
+router instances for the given
+.Xr overlay 5
+instance.
+Valid id values consists of characters from the set [A-Za-z0-9.-].
+The MAC address for the router instance is specified by
+.Ar macaddr
+and the vlan id of the network for the router is given by
+.Ar vlan .
+The IP address and subnet mask the router instance listens on is given by
+.Ar address/mask .
+If the subnet has both an IPv4 and IPv6 address, an additional
+.Fl a Ar address/mask
+option may be specified, but at most only 1 IPv4 and 1 IPv6 address may be
+given (and at least 1 address must be specified).
+.Pp
+Optionally, if an
+.Xr overlay 5
+routing table has already been defined, the
+.Fl r Ar route_table_id
+option can be specified to associate the the VL2 subnet to the given
+.Xr overlay 5
+route table.
+If no route table is specified, the default route table for the
+.Xr overlay 5
+device (if set) will be used.
+.\"
+.It Xo Nm Cm router delete
+.\" ----------------------
+.Fl d Ar overlay
+.Ar router_id
+.Xc
+Delete the
+.Xr overlay 5
+router instance denoted by
+.Ar router_id .
+.\"
+.It Xo Nm Cm router get
+.\" -------------------
+.Fl d Ar overlay
+.Oo Fl o Ar field Ns Oo ,... Oc Oo Fl p Oc Oc
+.Oo Ar router_id Ns ... Oc
+.Xc
+Get the information about
+.Xr overlay 5
+router
+.Ar router_id .
+If no
+.Ar router_id
+is specified, all
+.Xr overlay 5
+router instances defined for
+.Ar overlay
+are printed.
+If the
+.Fl o
+option is specified, the output is limited to the comma separated list of
+fields given by the
+.Ar field
+arguments(s):
+.Bl -tag -offset indent -width "NETWORK-V6"
+.It id
+The
+.Ar router_id
+as passed in to the
+.Nm Cm router create
+command.
+.It network
+The overlay IPv4 network and CIDR mask the router listens on, e\.g\.
+.Ql 192.168.1.0/24 .
+.It network-v6
+The overlay IPv6 network and CIDR mask the router listens on.
+.It vlan
+The VLAN id of the subnet the overlay router instance is listening on.
+.It mac
+The MAC address the overlay router instance uses for the given subnet.
+.It rtable
+The overlay routing table associated with this subnet (if any).
+.El
+.Pp
+Additionally, the
+.Fl p
+option may be passed with the
+.Fl o
+option to indicate the output should be in a machine parsable (colon delimited)
+format.
+The
+.Fl p
+option requires specifying the
+.Fl o
+option to indicate the fields to output.
+.\"
+.It Xo Nm Cm router set-routing-table
+.\" ---------------------------------
+.Fl d Ar overlay
+.Fl r Ar route_table_id
+.Ar router_id
+.Xc
+Set the the routing table for
+.Ar router_id
+on overlay
+.Ar overlay
+to
+.Ar route_table_id .
+.Ar route_table_id
+must already exist, or the command will return an error.
+.\"
+.It Xo Nm Cm route-table create
+.\" ---------------------------
+.Fl d Ar overlay
+.Fl r Ar route_table_id
+.Ar router_id
+.Xc
+Creates an empty
+.Xr overlay 5
+router table with an id
+Ar route_table_id
+for overlay
+.Ar overlay .
+If the route table already exists, an error is returned.
+.\"
+.It Xo Nm Cm route-table delete
+.\" ---------------------------
+.Fl d Ar overlay
+.Ar route_table_id
+.Xc
+Deletes the route table
+.Ar route_table_id
+on overlay
+.Ar overlay .
+.\"
+.It Xo Nm Cm route-table get
+.\" ------------------------
+.Fl d Ar overlay
+.Oo Fl o Ar field Ns Oo ,... Oc Oo Fl p Oc Oc
+.Oo Ar route_table_id Ns ... Oc
+.Xc
+Display the routing table
+.Ar route_table_id
+on overlay
+.Ar overlay .
+If more than one
+.Ar route_table_id
+is specified, each route table is displayed.
+If no route tables are specified, all route tables on
+.Ar overlay
+are displayed.
+If the
+.Fl o
+option is specified, a comma separated list of fields must be specified to
+indicate the fields to display.
+The
+.Ar field
+values may be any combination of:
+.Bl -tag -offset indent -width "destination"
+.It id
+The overlay route table id as is given in the
+.Nm Cm route-table create
+command.
+.It destination
+The virtual layer three (VL3) address of the destination in CIDR format.
+In other words, the destination subnet and CIDR mask as seen by instances in
+the overlay network.
+.It target
+The underlay layer three (UL3) address and port to send the matching traffic.
+In other words, the destination address of the encapsulated packet.
+.El
+.Pp
+Additionally, the
+.Fl p
+option may be given with the
+.Fl o
+option to generate output in machine parsable (colon delimited) format.
+.\"
+.It Xo Nm Cm route-table set-default
+.\" --------------------------------
+.Fl d Ar overlay
+.Ar route_table_id
+.Xc
+Set the default routing table for
+.Ar overlay
+to
+.Ar route_table_id .
+If
+.Ar route_table_id
+doesn't exist, an error is returned.
+.\"
+.It Xo Nm Cm route-table add
+.\" ------------------------
+.Fl d Ar overlay
+.Fl i Ar route_table_id
+.Ar destination
+.Ar target
+.Xc
+Adds an route table entry to the route table
+.Ar route_table_id
+in overlay
+.Ar overlay .
+.It Xo Nm Cm route-table del
+.Fl d Ar overlay
+.Fl i Ar route_table_id
+.Ar destination
+.Ar target
+.Xc
+Removes a route table entry from the route table
+.Ar route_table_id
+in overlay
+.Ar overlay .
+.El
+.\"
+.\" ================================
+.Sh OPERANDS
+.\" ================================
+The following operands are supported:
+.Bl -tag -width Ar
+.It Ar overlay
+.\" ----------
+The overlay device to operate on.
+For example
+.Ql sdc_underlay1234 .
+.It Ar macaddr
+.\" ----------
+A MAC address such as
+.Ql 90:01:02:03:04:05 .
+.It Ar vlan
+.\" -------
+A VLAN id.
+Valid VLAN ids range from 1 - 4096.
+.It Ar address/mask
+An IPv4 or IPv6 address and CIDR mask length, e.g.
+.Ql 192.168.1.0/24 .
+.It Ar route_table_id
+.\" -----------------
+A routing table id.
+.It Ar router_id
+.\" ------------
+An
+.Xr overlay 5
+router id.
+.It Ar destination
+.\" --------------
+The virtual layer three (VL3) destination CIDR block for an
+.Xr overlay 5
+route table entry.
+For example,
+.Ql 10.1.2.0/24
+or
+.Ql 2001::1/96 .
+.It Ar target
+.\" ---------
+The underlay layer three (UL3) address and port that receives the encapsulated
+virtual packet.
+For IPv4 addresses this in the form of
+.Ql IP addr:port .
+For IPv6 addresses, to disambiguate the address from the port, the address
+must be in the form of
+.Ql [IPv6 addr]:port .
+The IPv4 address can optionally be given in this form as well, but it is not
+required.
+An
+.Dq any
+.Po
+e.g.
+.Ql 0.0.0.0/0
+or
+.Ql ::0/0
+.Pc
+address (with no port) indicates the encapsulated packet should be routed and
+delivered to the machine that contains the VL3 destination address of the
+packet.
+.El
+.\" ================================
+.Sh EXIT STATUS
+.\" ================================
+.Ex -std
+.\" ================================
+.Sh EXAMPLES
+.\" ================================
+.Bl -inset
+.It Example 1
+.Pp
+In this setup, we have the following hosts, all using an overlay instance
+.Ql sdc_overlay7224243
+with a vnet ID of
+.Ql 7224243 :
+.TS
+box tab (@);
+c | c | c
+l | l | l.
+HOST@VLAN@SUBNET
+_
+hostA@42@192.168.1.0/24
+_
+hostB@2112@192.168.2.0/24
+_
+hostC@42@192.168.1.0/24
+@2112@192.168.2.0/24
+.TE
+.Pp
+The router instances will be as follows:
+.TS
+box tab (@);
+c | c | c
+l | l | l.
+SUBNET@ROUTER IP@ROUTER MAC
+_
+192.168.1.0/24@192.168.1.1@90:b8:d0:17:f7:be
+_
+192.168.2.0/24@192.168.2.2@90:b8:d0:7f:36:ac
+.TE
+.Pp
+To enable all three vnics to route traffic between the two subnets, the
+appropriate router instances must be created on each host.
+Additionally, a routing table must be created to indicate that the traffic sent
+to the router IP should be routed to the other subnets.
+.Pp
+The following commands are run on the respective hosts to enable this:
+.Bd -literal
+hostA# ovroute router create -d sdc_overlay7224243 -m 90:b8:d0:17:f7:be -v 42 -a 192.168.1.1/24 router-42
+hostA# ovroute route-table create -d sdc_overlay7224243 rtab-default
+hostA# ovroute route-table set-default -d sdc_overlay7224243 rtab-default
+hostA# ovroute route-table add -d sdc_overlay7224243 -i rtab-default 0.0.0.0/0 0.0.0.0
+
+hostB# ovroute router create -d sdc_overlay7224243 -m 90:b8:d0:7f:36:ac -v 2112 -a 192.168.2.1/24 router-2112
+hostB# ovroute route-table create -d sdc_overlay7224243 rtab-default
+hostB# ovroute route-table set-default -d sdc_overlay7224243 rtab-default
+hostB# ovroute route-table add -d sdc_overlay7224243 -i rtab-default 0.0.0.0/0 0.0.0.0
+
+hostC# ovroute router create -d sdc_overlay7224243 -m 90:b8:d0:17:f7:be -v 42 -a 192.168.1.1/24 router-42
+hostC# ovroute router create -d sdc_overlay7224243 -m 90:b8:d0:7f:36:ac -v 2112 -a 192.168.2.1/24 router-2112
+hostC# ovroute route-table create -d sdc_overlay7224243 rtab-default
+hostC# ovroute route-table set-default -d sdc_overlay7224243 rtab-default
+hostC# ovroute route-table add -d sdc_overlay7224243 -i rtab-default 0.0.0.0/0 0.0.0.0
+.Ed
+.Pp
+Note that
+.Ql 192.168.0.0/16 0.0.0.0
+or similar could also have been used in the routing table to route the
+traffic.
+As long as the destination network and mask match the traffic.
+.El
+.\" ================================
+.Sh INTERFACE STABILITY
+.\" ================================
+Private
+.Pp
+This is intented to be an internal Triton utility, and it's command line
+interface may change without notice.
+.\" ================================
+.Sh SEE ALSO
+.\" ================================
+.Xr overlay 5 ,
+.Xr route 7P

@@ -98,6 +98,7 @@
 #include "nvpair.h"
 #include "pci.h"
 #include "pg.h"
+#include "qqcache.h"
 #include "rctl.h"
 #include "refhash.h"
 #include "sobj.h"
@@ -4787,6 +4788,12 @@ static const mdb_walker_t walkers[] = {
 	/* from pci.c */
 	{ "pcie_bus", "walk all pcie_bus_t's", pcie_bus_walk_init,
 		pcie_bus_walk_step, NULL },
+
+	/* from qqcache.c */
+	{ QQCACHE_WALK_NAME, QQCACHE_WALK_DESC,
+		qqcache_walk_init_cache, qqcache_walk_step, qqcache_walk_fini },
+	{ QQCACHE_HASH_WALK_NAME, QQCACHE_HASH_WALK_DESC,
+		qqcache_walk_init_hash, qqcache_walk_step, qqcache_walk_fini },
 
 	/* from rctl.c */
 	{ "rctl_dict_list", "walk all rctl_dict_entry_t's from rctl_lists",

@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2016 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -185,46 +185,46 @@
  *
  * The following are the supported types of properties:
  *
- * 	OVERLAY_PROP_T_INT
+ *	OVERLAY_PROP_T_INT
  *
- * 		A signed integer, its length is 8 bytes, corresponding to a
- * 		int64_t.
+ *		A signed integer, its length is 8 bytes, corresponding to a
+ *		int64_t.
  *
- * 	OVERLAY_PROP_T_UINT
+ *	OVERLAY_PROP_T_UINT
  *
- * 		An unsigned integer, its length is 8 bytes, corresponding to a
- * 		uint64_t.
+ *		An unsigned integer, its length is 8 bytes, corresponding to a
+ *		uint64_t.
  *
- * 	OVERLAY_PROP_T_IP
+ *	OVERLAY_PROP_T_IP
  *
- * 		A struct in6_addr, it has a fixed size.
+ *		A struct in6_addr, it has a fixed size.
  *
- * 	OVERLAY_PROP_T_STRING
+ *	OVERLAY_PROP_T_STRING
  *
- * 		A null-terminated character string encoded in either ASCII or
- * 		UTF-8. Note that the size of the string includes the null
- * 		terminator.
+ *		A null-terminated character string encoded in either ASCII or
+ *		UTF-8. Note that the size of the string includes the null
+ *		terminator.
  *
  * The next thing that we apply to a property is its permission. The permissions
  * are put together by the bitwise or of the following flags and values.
  *
- * 	OVERLAY_PROP_PERM_REQ
+ *	OVERLAY_PROP_PERM_REQ
  *
- * 		This indicates a required property. A property that is required
- * 		must be set by a consumer before the device can be created. If a
- * 		required property has a default property, this constraint is
- * 		loosened because the default property defines the value.
+ *		This indicates a required property. A property that is required
+ *		must be set by a consumer before the device can be created. If a
+ *		required property has a default property, this constraint is
+ *		loosened because the default property defines the value.
  *
- * 	OVERLAY_PORP_PERM_READ
+ *	OVERLAY_PORP_PERM_READ
  *
- * 		This indicates that a property can be read. All properties will
- * 		have this value set.
+ *		This indicates that a property can be read. All properties will
+ *		have this value set.
  *
- * 	OVERLAY_PROP_PERM_WRITE
+ *	OVERLAY_PROP_PERM_WRITE
  *
- * 		This indicates that a property can be written to and thus
- * 		updated by userland. Properties that are only intended to
- * 		display information, will not have OVERLAY_PROP_PERM_WRITE set.
+ *		This indicates that a property can be written to and thus
+ *		updated by userland. Properties that are only intended to
+ *		display information, will not have OVERLAY_PROP_PERM_WRITE set.
  *
  * In addition, a few additional values are defined as a convenience to
  * consumers. The first, OVERLAY_PROP_PERM_RW, is a combination of
@@ -260,19 +260,19 @@
  * summarized in the type overlay_point_t. Any combination of these is
  * supported.
  *
- * 	OVERLAY_PLUGIN_D_ETHERNET
+ *	OVERLAY_PLUGIN_D_ETHERNET
  *
- * 		An Ethernet MAC address is required.
+ *		An Ethernet MAC address is required.
  *
- * 	OVERLAY_PLUGIN_D_IP
+ *	OVERLAY_PLUGIN_D_IP
  *
- * 		An IP address is required. All IP addresses used by the overlay
- * 		system are transmitted as IPv6 addresses. IPv4 addresses can be
- * 		represented by using IPv4-mapped IPv6 addresses.
+ *		An IP address is required. All IP addresses used by the overlay
+ *		system are transmitted as IPv6 addresses. IPv4 addresses can be
+ *		represented by using IPv4-mapped IPv6 addresses.
  *
- * 	OVERLAY_PLUGIN_D_PORT
+ *	OVERLAY_PLUGIN_D_PORT
  *
- * 		A TCP/UDP port is required.
+ *		A TCP/UDP port is required.
  *
  * A kernel encapsulation plugin declares which of these that it requires, it's
  * a static set. On the other hand, a userland lookup plugin can be built to
@@ -287,20 +287,20 @@
  * determines how they interact with the broader system and how look ups are
  * performed. These types are:
  *
- * 	OVERLAY_TARGET_POINT
+ *	OVERLAY_TARGET_POINT
  *
- * 		A point to point plugin has a single static definition for where
- * 		to send all traffic. Every packet in the system always gets sent
- * 		to the exact same destination which is programmed into the
- * 		kernel when the general device is activated.
+ *		A point to point plugin has a single static definition for where
+ *		to send all traffic. Every packet in the system always gets sent
+ *		to the exact same destination which is programmed into the
+ *		kernel when the general device is activated.
  *
- * 	OVERLAY_TARGET_DYNAMIC
+ *	OVERLAY_TARGET_DYNAMIC
  *
- * 		A dynamic plugin does not have a single static definition.
- * 		Instead, for each destination, the kernel makes an asynchronous
- * 		request to varpd to determine where the packet should be routed,
- * 		and if a specific destination is found, then that destination is
- * 		cached in the overlay device's target cache.
+ *		A dynamic plugin does not have a single static definition.
+ *		Instead, for each destination, the kernel makes an asynchronous
+ *		request to varpd to determine where the packet should be routed,
+ *		and if a specific destination is found, then that destination is
+ *		cached in the overlay device's target cache.
  *
  * This distinction, while important for the general overlay device's operation,
  * is not important to the encapsulation plugins. They don't need to know about
@@ -312,7 +312,7 @@
  * always sends encapsulated packets to that address. When the target type is of
  * OVERLAY_TARGET_DYNAMIC, then the kernel maintains a cache of all such
  * destinations. These destinations are kept around in an instance of a
- * reference hash that is specific to the given overlay device. Entries in the
+ * 2Q hash that is specific to the given overlay device. Entries in the
  * cache can be invalidated and replaced by varpd and its lookup plugins.
  *
  * ----------------------------------
@@ -346,59 +346,78 @@
  *           | void *           -----+---> plugin private data
  *           | overlay_target_t * ---+---------------------+
  *           | overlay_plugin_t * ---+---------+           |
- *           +-----------------------+         |           |
- *                           ^                 |           |
- *   +--------------------+  |                 |           |
- *   | Kernel Socket      |  |                 |           |
- *   | Multiplexor        |  |                 |           |
- *   | overlay_mux_t      |  |                 |           |
- *   |                    |  |                 |           |
- *   | avl_tree_t        -+--+                 |           |
- *   | uint_t            -+--> socket family   |           |
- *   | uint_t            -+--> socket type     |           |
- *   | uint_t            -+--> socket protocol |           |
- *   | ksocket_t         -+--> I/O socket      |           |
- *   | struct sockaddr * -+--> ksocket address |           |
- *   | overlay_plugin_t --+--------+           |           |
- *   +--------------------+        |           |           |
- *                                 |           |           |
- *   +-------------------------+   |           |           |
- *   | Encap Plugin            |<--+-----------+           |
- *   | overlay_plugin_t        |                           |
- *   |                         |                           |
- *   | char *               ---+--> plugin name            |
- *   | overlay_plugin_ops_t * -+--> plugin downcalls       |
- *   | char ** (props)      ---+--> property list          |
- *   | uint_t               ---+--> id length              |
- *   | overlay_plugin_flags_t -+--> plugin flags           |
- *   | overlay_plugin_dest_t --+--> destination type       v
- *   +-------------------------+                    +-------------------------+
- *                                                  |   Target Cache          |
- *                                                  |   overlay_target_t      |
- *                                                  |                         |
- *                                    cache mode <--+- overlay_target_mode_t  |
- *                                     dest type <--+- overlay_plugin_dest_t  |
- *                                   cache flags <--+- overlay_target_flag_t  |
- *                                     varpd id  <--+- uint64_t               |
- *                       outstanding varpd reqs. <--+- uint_t                 |
- *                   OVERLAY_TARGET_POINT state  <--+- overlay_target_point_t |
- *               OVERLAY_TARGET_DYNAMIC state <-+---+- overlay_target_dyn_t   |
- *                                              |   +-------------------------+
- *                      +-----------------------+
- *                      |
- *                      v
- *   +-------------------------------+   +------------------------+
- *   | Target Entry                  |-->| Target Entry           |--> ...
- *   | overlay_target_entry_t        |   | overlay_target_entry_t |
- *   |                               |   +------------------------+
- *   |                               |
- *   | overlay_target_entry_flags_t -+--> Entry flags
- *   | uint8_t[ETHERADDRL]        ---+--> Target MAC address
- *   | overlay_target_point_t     ---+--> Target underlay address
- *   | mblk_t *                   ---+--> outstanding mblk head
- *   | mblk_t *                   ---+--> outstanding mblk tail
- *   | size_t                     ---+--> outstanding mblk size
- *   +-------------------------------+
+ *           | overlay_router_t * ---+--------------------------------------+
+ *           +-----------------------+         |           |                |
+ *                           ^                 |           |                |
+ *   +--------------------+  |                 |           |                |
+ *   | Kernel Socket      |  |                 |           |                |
+ *   | Multiplexor        |  |                 |           |                |
+ *   | overlay_mux_t      |  |                 |           |                |
+ *   |                    |  |                 |           |                |
+ *   | avl_tree_t        -+--+                 |           |                |
+ *   | uint_t            -+--> socket family   |           |                |
+ *   | uint_t            -+--> socket type     |           |                |
+ *   | uint_t            -+--> socket protocol |           |                |
+ *   | ksocket_t         -+--> I/O socket      |           |                |
+ *   | struct sockaddr * -+--> ksocket address |           |                |
+ *   | overlay_plugin_t --+--------+           |           |                |
+ *   +--------------------+        |           |           |                |
+ *                                 |           |           |                |
+ *   +-------------------------+   |           |           |                |
+ *   | Encap Plugin            |<--+-----------+           |                |
+ *   | overlay_plugin_t        |                           |                |
+ *   |                         |                           |                |
+ *   | char *               ---+--> plugin name            |                |
+ *   | overlay_plugin_ops_t * -+--> plugin downcalls       |                |
+ *   | char ** (props)      ---+--> property list          |                |
+ *   | uint_t               ---+--> id length              |                |
+ *   | overlay_plugin_flags_t -+--> plugin flags           |                |
+ *   | overlay_plugin_dest_t --+--> destination type       |                |
+ *   +-------------------------+                           |                |
+ *                                                         |                |
+ *                                                         v                |
+ *                                              +-------------------------+ |
+ *                                              |   Target Cache          | |
+ *                                              |   overlay_target_t      | |
+ *                                              |                         | |
+ *                                cache mode <--+- overlay_target_mode_t  | |
+ *                                 dest type <--+- overlay_plugin_dest_t  | |
+ *                               cache flags <--+- overlay_target_flag_t  | |
+ *                                 varpd id  <--+- uint64_t               | |
+ *                   outstanding varpd reqs. <--+- uint_t                 | |
+ *               OVERLAY_TARGET_POINT state  <--+- overlay_target_point_t | |
+ *           OVERLAY_TARGET_DYNAMIC state <-+---+- overlay_target_dyn_t   | |
+ *                                          |   +-------------------------+ |
+ *                  +-----------------------+                               |
+ *                  |                                                       |
+ *                  v                                                       |
+ *   +-------------------------------+   +------------------------+         |
+ *   | Target Entry                  |-->| Target Entry           |--> ...  |
+ *   | overlay_target_entry_t        |   | overlay_target_entry_t |         |
+ *   |                               |   +------------------------+         |
+ *   |                               |                                      |
+ *   | overlay_target_entry_flags_t -+--> Entry flags                       |
+ *   | uint8_t[ETHERADDRL]        ---+--> Target MAC address                |
+ *   | overlay_target_point_t     ---+--> Target underlay address           |
+ *   | mblk_t *                   ---+--> outstanding mblk head             |
+ *   | mblk_t *                   ---+--> outstanding mblk tail             |
+ *   | size_t                     ---+--> outstanding mblk size             |
+ *   +-------------------------------+                                      |
+ *                                                                          |
+ *                  +-------------------------------------------------------+
+ *                  |
+ *                  v
+ *   +------------------------+
+ *   | Router                 |
+ *   | overlay_router_t       |
+ *   |                        |
+ *   | list_t              ---+--> Overlay route tables for this overlay inst
+ *   | avl_tree_t          ---+--> Local subnets (indexed by router MAC)
+ *   | avl_tree_t          ---+--> Local subnets (indexed by router IPv4 addr)
+ *   | avl_tree_t          ---+--> Local subnets (indexed by router IPv6 addr)
+ *   | overlay_routetab_t  ---+--> Default overlay route table for overlay inst
+ *   +------------------------+
+ *
  *
  * The primary entries that we care about are the overlay_dev_t, which
  * correspond to each overlay device that is created with dladm(1M). Globally,
@@ -451,7 +470,7 @@
  * cache is to cache where we should send a packet on the underlay network,
  * given its mac address. The target cache operates in two modes depending on
  * whether the lookup module was declared to OVERLAY_TARGET_POINT or
- * OVERLAY_TARGET_DYANMIC.
+ * OVERLAY_TARGET_DYNAMIC.
  *
  * In the case where the target cache has been programmed to be
  * OVERLAY_TARGET_POINT, then we only maintain a single overlay_target_point_t
@@ -461,12 +480,14 @@
  * On the other hand, when we have an instance of OVERLAY_TARGET_DYNAMIC, things
  * are much more interesting and as a result, more complicated. We primarily
  * store lists of overlay_target_entry_t's which are stored in both an avl tree
- * and a refhash_t. The primary look up path uses the refhash_t and the avl tree
+ * and a qqcache_t. The primary look up path uses the qqcache_t and the avl tree
  * is only used for a few of the target ioctls used to dump data such that we
  * can get a consistent iteration order for things like dladm show-overlay -t.
  * The key that we use for the reference hashtable is based on the mac address
  * in the cache and currently we just do a simple CRC32 to transform it into a
- * hash.
+ * hash. The qqcache allows us to set a limit on the number of entries that
+ * are stored in the kernel, using the 2Q algorithm to age out old entries.
+ * The size of the cache can be adjusted dynamically using dladm.
  *
  * Each entry maintains a set of flags to indicate the current status of the
  * request. The flags may indicate one of three states: that current cache entry
@@ -485,6 +506,84 @@
  * packets. Once we get an answer indicating a valid destination, we transmit
  * any outstanding data to that place. For the full story on how we look that up
  * will be discussed in the section on the Target Cache Lifecycle.
+ *
+ * To support additional overlay services such as routing between subnets, EIP,
+ * etc. we extend the 'layer 2' operation above. In addition to sending packets
+ * between hosts on the same VL2 (i.e. the apparent layer two network seen
+ * by instances created over an overlay instance), an optional 'router' IP
+ * and MAC can be created for a VL2 network. This is designed to mimic the
+ * appearance of a traditional layer 3 router as much as is reasonable.
+ *
+ * When an overlay is configured for dynamic target mode, an overlay_router_t
+ * instance is also allocated. Any local overlay subnets (i.e. the subnets
+ * that contain the vnic instances created on top of an overlay instance)
+ * participating in these additional services have an overlay_net_t instance
+ * that defines a router MAC, router IP (IPv4 and/or IPv6), and a vlan ID for
+ * the subnet.
+ *
+ * Additionally, a 'overlay route table' needs to be present. Overlay route
+ * tables determine the handling of 'non-local' (same subnet) packets.
+ * They work similar to a traditional route table in that the destination
+ * address (the VL3 destination) is used to lookup the longest prefix match
+ * destination entry(ies). The corresponding target is then the UL3 (underlay)
+ * address/port where the encapsulated packet should be sent. An 'any'
+ * target (0.0.0.0/::0) indicates the packet should be routed to the
+ * destination network.
+ *
+ * Routing occurs in three steps. First, the packets destination to 'non-local'
+ * destinations are identified. This looks very much like the traditional layer
+ * three routing seen with physical machines. The routing table inside the
+ * instance sends non-local packets to its local subnet's router IP. The usual
+ * ARP resolution process is used to resolve the routers MAC address (that is,
+ * varpd will respond with the subnet's router MAC when a query for who has
+ * the router's IP is send). The overlay device checks the target MAC of each
+ * packet against its router MACs. If a match is found, the corresponding
+ * overlay_net_t is used to locate the appropriate overlay routing table. If
+ * the overlay_net_t does not have an overlay routing table associated with it,
+ * the default routing table for the overlay instance is used (if none is
+ * defined, the packet is dropped). If the longest prefix match is the ANY
+ * target, a lookup is performed in the overlay_target_t for the destination
+ * MAC address using the destination IP address.
+ *
+ * Second, a VL3->VL2 lookup is performed. The overlay target maintains a
+ * qqcache_t of VL3->VL2 mappings along with the VL2->UL3 mappings (a future
+ * enhancement could be to utilize the VL3->VL2 map to answer ARP and NDP
+ * queries for known destinations, leaving varpd to handle unknown entries and
+ * invalidation of entries). If no matching entry is found, a VL3->VL2 query is
+ * performed by varpd. This VL3 query looks a lot like the varpd handling an
+ * ARP request, except once varpd has a response, instead of injecting an ARP
+ * reply packet and instructing the overlay device to drop the queued ARP
+ * request packet, varpd replies to the overlay device with the MAC
+ * corresponding to the destination VL3 IP address. As part of this, varpd
+ * also injects the VL2->UL3 entry prior to responding to the VL3->VL2 query
+ * (since it's almost certainly going to be required in the immediate future).
+ * With the VL3->VL2 mapping available, the VL2 destination MAC is changed
+ * from the router MAC to the destination VL2 MAC, and the packet is sent
+ * back through the target lookup/send framework to be sent to the destination.
+ * Non-IPv4/IPv6 packets are never routed, and non IPv4/IPv6 packets sent to
+ * the router MAC are dropped.
+ *
+ * Third, upon reception on the destination system, the destination VL3 address
+ * (IPv4/IPv6) is used to locate the corresponding overlay_net_t entry that
+ * contains the address. If none is found, the packet is dropped unless
+ * there are no overlay_net_ts defined at all for the overlay device
+ * (indicating that no routing or additional features are enabled for the
+ * overlay device). If the VL2 VNET id of the packet doesn't match the VLAN
+ * id from the overlay_net_t, the source VL2 MAC address is changed to the
+ * MAC address of the MAC router for that overlay_net_t, and the VLAN id
+ * in the VL2 ethernet header is changed to the VLAN id of the overlay_net_t
+ * before sending the packet upstack for processing.
+ *
+ * Splitting the routing handling between the source and destination allows
+ * observation within any instances to look like routing on a physical network.
+ * Packets from off-subnet appear on the (V)L2 network from the router.
+ * Additionally, each physical host only needs knowledge of the subnets being
+ * used by the instances on the local machine, and don't require knowledge
+ * of all of the subnets defined for the virtual network (vnet). Since both
+ * VL3->VL2 and VL2->UL3 mappings are contained in qqcache_ts, the number of
+ * entries are capped, and will age out for large networks, preventing
+ * large virtual networks from consuming excessive kernel memory.
+ *
  *
  * ------------------------
  * FMA and Degraded Devices
@@ -583,7 +682,7 @@
  *     | de:ad:be:ef:00:00 |		and only exists in the target cache.
  *     +-------------------+
  *
- * 	~~~~
+ *	~~~~
  *
  *     +---------------------+
  *     | Global list_t       |		A mblk_t comes in for an entry. We
@@ -596,7 +695,7 @@
  *             | 42:5e:1a:10:d6:2d |      | de:ad:be:ef:00:00 |
  *             +-------------------+      +-------------------+
  *
- * 	~~~~
+ *	~~~~
  *
  *     +--------------------------+
  *     | /dev/overlay minor state |	User land said that it would look up an
@@ -610,7 +709,7 @@
  *            | 90:b8:d0:79:02:dd |      | de:ad:be:ef:00:00 |
  *            +-------------------+      +-------------------+
  *
- * 	~~~~
+ *	~~~~
  *
  *     +-------------------+
  *     | Valid Entry       |		varpd returned an answer with
@@ -823,27 +922,55 @@
 dev_info_t *overlay_dip;
 static kmutex_t overlay_dev_lock;
 static list_t overlay_dev_list;
-static uint8_t overlay_macaddr[ETHERADDRL] =
+uint8_t overlay_macaddr[ETHERADDRL] =
 	{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+uint8_t overlay_bcast[ETHERADDRL] =
+	{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
 typedef enum overlay_dev_prop {
 	OVERLAY_DEV_P_MTU = 0,
 	OVERLAY_DEV_P_VNETID,
 	OVERLAY_DEV_P_ENCAP,
-	OVERLAY_DEV_P_VARPDID
+	OVERLAY_DEV_P_VARPDID,
+	OVERLAY_DEV_P_CACHE_SIZE,
+	OVERLAY_DEV_P_CACHE_A,
 } overlay_dev_prop_t;
 
-#define	OVERLAY_DEV_NPROPS	4
 static const char *overlay_dev_props[] = {
 	"mtu",
 	"vnetid",
 	"encap",
-	"varpd/id"
+	"varpd/id",
+	"cache_size",
+	"cache_a",
 };
+#define	OVERLAY_DEV_NPROPS	ARRAY_SIZE(overlay_dev_props)
 
 #define	OVERLAY_MTU_MIN	576
 #define	OVERLAY_MTU_DEF	1400
 #define	OVERLAY_MTU_MAX	8900
+
+/*
+ * The qqcache 'a' parameter is a percentage of the cache size -- specifically
+ * the percentage of the cache that holds MFU entries. We only support
+ * integral values of a (that should be granular enough). By default
+ * we bias the cache towards holding more MFU entries, though this is a
+ * arbitrary number, and might need to be adjusted based on real-world
+ * experience.
+ */
+#define	OVERLAY_CACHE_A_MAX	100
+#define	OVERLAY_CACHE_A_DEF	75
+#define	OVERLAY_CACHE_A_MIN	0
+
+/*
+ * The cache limits are also somewhat arbitrary. 1 million entries would
+ * result in around 200Mb of kernel memory, and a single fabric with
+ * 1 million entries is well beyond the expected size of any fabric.
+ */
+#define	OVERLAY_CACHE_MIN	0
+#define	OVERLAY_CACHE_MAX	10000000
+#define	OVERLAY_CACHE_DEF	1024
 
 overlay_dev_t *
 overlay_hold_by_dlid(datalink_id_t id)
@@ -1044,10 +1171,51 @@ overlay_m_unicast(void *arg, const uint8_t *macaddr)
 	return (0);
 }
 
+static int
+overlay_tx(overlay_dev_t *odd, overlay_net_t *ont, overlay_pkt_t *pkt,
+    struct sockaddr *addr, socklen_t *slenp)
+{
+	const uint8_t *daddr = pkt->op_mhi.mhi_daddr;
+
+	/*
+	 * No router instance defined for this network, so just perform VL2
+	 * processing.
+	 */
+	if (ont == NULL)
+		return (overlay_target_lookup(odd, pkt, B_FALSE, addr, slenp));
+
+	/*
+	 * If we handle an ARP request or a neighbor request for our
+	 * router IP, drop the original message.
+	 */
+	switch (OPKT_ETYPE(pkt)) {
+	case ETHERTYPE_ARP:
+		if (overlay_router_arp(odd, ont, pkt)) {
+			return (OVERLAY_TARGET_DROP);
+		}
+		break;
+	case ETHERTYPE_IPV6:
+		if (daddr[0] == 0x33 && daddr[1] == 0x33 &&
+		    pkt->op_l3proto == IPPROTO_ICMPV6 &&
+		    overlay_router_ndp(odd, ont, pkt)) {
+			return (OVERLAY_TARGET_DROP);
+		}
+		break;
+	}
+
+	/* If sent to our router MAC, do routing processing */
+	if (bcmp(daddr, ont->ont_mac, ETHERADDRL) == 0)
+		return (overlay_route(odd, ont, pkt, addr, slenp));
+
+	/* Otherwise, just do VL2 processing */
+	return (overlay_target_lookup(odd, pkt, B_FALSE, addr, slenp));
+}
+
 mblk_t *
 overlay_m_tx(void *arg, mblk_t *mp_chain)
 {
 	overlay_dev_t *odd = arg;
+	overlay_router_t *orr = odd->odd_router;
 	mblk_t *mp, *ep;
 	int ret;
 	ovep_encap_info_t einfo;
@@ -1069,6 +1237,9 @@ overlay_m_tx(void *arg, mblk_t *mp_chain)
 	einfo.ovdi_id = odd->odd_vid;
 	mp = mp_chain;
 	while (mp != NULL) {
+		const char *reason;
+		overlay_net_t *ont;
+		overlay_pkt_t pkt;
 		socklen_t slen;
 		struct sockaddr_storage storage;
 
@@ -1076,11 +1247,27 @@ overlay_m_tx(void *arg, mblk_t *mp_chain)
 		mp->b_next = NULL;
 		ep = NULL;
 
-		ret = overlay_target_lookup(odd, mp,
-		    (struct sockaddr *)&storage, &slen);
+		ret = overlay_pkt_init(&pkt, odd->odd_mh, mp, &reason);
+		if (ret != 0) {
+			OVERLAY_FREEMSG(mp, reason);
+			freemsg(mp);
+			mp = mp_chain;
+			continue;
+		}
+
+		ont = overlay_hold_net_by_vlan(orr,
+			    VLAN_ID(pkt.op_mhi.mhi_tci));
+
+		ret = overlay_tx(odd, ont, &pkt, (struct sockaddr *)&storage,
+		    &slen);
+
+		if (ont != NULL)
+			overlay_net_rele(ont);
+
 		if (ret != OVERLAY_TARGET_OK) {
 			if (ret == OVERLAY_TARGET_DROP)
-				freemsg(mp);
+				freemsg(pkt.op_mblk);
+
 			mp = mp_chain;
 			continue;
 		}
@@ -1088,10 +1275,12 @@ overlay_m_tx(void *arg, mblk_t *mp_chain)
 		hdr.msg_name = &storage;
 		hdr.msg_namelen = slen;
 
-		ret = odd->odd_plugin->ovp_ops->ovpo_encap(odd->odd_mh, mp,
-		    &einfo, &ep);
+		ret = odd->odd_plugin->ovp_ops->ovpo_encap(odd->odd_mh,
+		    pkt.op_mblk, &einfo, &ep);
 		if (ret != 0 || ep == NULL) {
-			freemsg(mp);
+			OVERLAY_FREEMSG(pkt.op_mblk,
+			    "overlay encapsulation failed");
+			freemsg(pkt.op_mblk);
 			goto out;
 		}
 
@@ -1260,6 +1449,9 @@ overlay_i_create(void *karg, intptr_t arg, int mode, cred_t *cred, int *rvalp)
 		return (EINVAL);
 	}
 	odd->odd_vid = oicp->oic_vnetid;
+
+	odd->odd_cachesz = OVERLAY_CACHE_DEF;
+	odd->odd_cachea = OVERLAY_CACHE_A_DEF;
 
 	mac = mac_alloc(MAC_VERSION);
 	if (mac == NULL) {
@@ -1523,6 +1715,7 @@ overlay_i_delete(void *karg, intptr_t arg, int mode, cred_t *cred, int *rvalp)
 	cv_destroy(&odd->odd_iowait);
 	mutex_destroy(&odd->odd_lock);
 	overlay_target_free(odd);
+	overlay_router_free(odd->odd_router);
 	odd->odd_plugin->ovp_ops->ovpo_fini(odd->odd_pvoid);
 	overlay_plugin_rele(odd->odd_plugin);
 	kmem_free(odd, sizeof (overlay_dev_t));
@@ -1616,6 +1809,7 @@ overlay_i_propinfo(void *karg, intptr_t arg, int mode, cred_t *cred,
 	uint_t propid = UINT_MAX;
 	overlay_ioc_propinfo_t *oip = karg;
 	overlay_prop_handle_t phdl = (overlay_prop_handle_t)oip;
+	uint32_t def = 0;
 
 	odd = overlay_hold_by_dlid(oip->oipi_linkid);
 	if (odd == NULL)
@@ -1695,6 +1889,22 @@ overlay_i_propinfo(void *karg, intptr_t arg, int mode, cred_t *cred,
 		overlay_prop_set_prot(phdl, OVERLAY_PROP_PERM_READ);
 		overlay_prop_set_type(phdl, OVERLAY_PROP_T_UINT);
 		overlay_prop_set_nodefault(phdl);
+		break;
+	case OVERLAY_DEV_P_CACHE_SIZE:
+		def = OVERLAY_CACHE_DEF;
+		overlay_prop_set_prot(phdl, OVERLAY_PROP_PERM_RW);
+		overlay_prop_set_type(phdl, OVERLAY_PROP_T_UINT);
+		overlay_prop_set_default(phdl, &def, sizeof (def));
+		overlay_prop_set_range_uint32(phdl, OVERLAY_CACHE_MIN,
+		    OVERLAY_CACHE_MAX);
+		break;
+	case OVERLAY_DEV_P_CACHE_A:
+		def = OVERLAY_CACHE_A_DEF;
+		overlay_prop_set_prot(phdl, OVERLAY_PROP_PERM_RW);
+		overlay_prop_set_type(phdl, OVERLAY_PROP_T_UINT);
+		overlay_prop_set_default(phdl, &def, sizeof (def));
+		overlay_prop_set_range_uint32(phdl, OVERLAY_CACHE_A_MIN,
+		    OVERLAY_CACHE_A_MAX);
 		break;
 	default:
 		overlay_hold_rele(odd);
@@ -1805,6 +2015,20 @@ overlay_i_getprop(void *karg, intptr_t arg, int mode, cred_t *cred,
 		}
 		mutex_exit(&odd->odd_lock);
 		break;
+	case OVERLAY_DEV_P_CACHE_SIZE:
+		mutex_enter(&odd->odd_lock);
+		bcopy(&odd->odd_cachesz, oip->oip_value,
+		    sizeof (odd->odd_cachesz));
+		mutex_exit(&odd->odd_lock);
+		oip->oip_size = sizeof (odd->odd_cachesz);
+		break;
+	case OVERLAY_DEV_P_CACHE_A:
+		mutex_enter(&odd->odd_lock);
+		bcopy(&odd->odd_cachea, oip->oip_value,
+		    sizeof (odd->odd_cachea));
+		mutex_exit(&odd->odd_lock);
+		oip->oip_size = sizeof (odd->odd_cachea);
+		break;
 	default:
 		ret = ENOENT;
 	}
@@ -1846,6 +2070,83 @@ overlay_setprop_vnetid(overlay_dev_t *odd, uint64_t vnetid)
 	mutex_exit(&odd->odd_lock);
 }
 
+static int
+overlay_setprop_cache_size(overlay_dev_t *odd, uint32_t size)
+{
+	overlay_target_t *ott;
+	int ret = 0;
+
+	if (size == 0)
+		size = OVERLAY_CACHE_DEF;
+
+	/*
+	 * Since the minimum cache size is currently 0, some compilers will
+	 * complain about a comparison of 'size < 0' for an unsigned type
+	 * since it's always true. As a result, we only check the max size.
+	 * If the min value is changed to a non-zero value, a check should be
+	 * added for the minimum bound as well.
+	 */
+	if (size > OVERLAY_CACHE_MAX)
+		return (EINVAL);
+
+	mutex_enter(&odd->odd_lock);
+	ott = odd->odd_target;
+
+	/*
+	 * If ott != NULL, ott->ott_mode is read only, and we don't
+	 * need to acquire the lock to check the value of ott_mode.
+	 */
+	if (ott != NULL && ott->ott_mode == OVERLAY_TARGET_DYNAMIC) {
+		mutex_enter(&ott->ott_lock);
+		ret = qqcache_adjust_size(ott->ott_u.ott_dyn.ott_cache, size);
+		mutex_exit(&ott->ott_lock);
+	}
+
+	if (ret == 0)
+		odd->odd_cachesz = size;
+
+	mutex_exit(&odd->odd_lock);
+
+	return (ret);
+}
+
+static int
+overlay_setprop_cache_a(overlay_dev_t *odd, uint32_t a)
+{
+	overlay_target_t *ott;
+	int ret = 0;
+
+	/*
+	 * Similar to the cache size, since the range of a is an integral
+	 * percent (0-100), we omit a 'a < 0' comparison when validating
+	 * the value (and only validate the upper bound) of a since some
+	 * compilers will complain about the tautology.
+	 */
+	if (a > OVERLAY_CACHE_A_MAX)
+		return (EINVAL);
+
+	mutex_enter(&odd->odd_lock);
+	ott = odd->odd_target;
+
+	/*
+	 * If ott != NULL, ott->ott_mode is read only, and we don't
+	 * need to acquire the lock to check the value of ott_mode.
+	 */
+	if (ott != NULL && ott->ott_mode == OVERLAY_TARGET_DYNAMIC) {
+		mutex_enter(&ott->ott_lock);
+		ret = qqcache_adjust_a(ott->ott_u.ott_dyn.ott_cache, a);
+		mutex_exit(&ott->ott_lock);
+	}
+
+	if (ret == 0)
+		odd->odd_cachea = a;
+
+	mutex_exit(&odd->odd_lock);
+
+	return (ret);
+
+}
+
 /* ARGSUSED */
 static int
 overlay_i_setprop(void *karg, intptr_t arg, int mode, cred_t *cred,
@@ -1856,7 +2157,7 @@ overlay_i_setprop(void *karg, intptr_t arg, int mode, cred_t *cred,
 	overlay_ioc_prop_t *oip = karg;
 	uint_t propid = UINT_MAX;
 	mac_perim_handle_t mph;
-	uint64_t maxid, *vidp;
+	uint64_t maxid, *vidp, *sizep, *ap;
 
 	if (oip->oip_size > OVERLAY_PROP_SIZEMAX)
 		return (EINVAL);
@@ -1878,8 +2179,9 @@ overlay_i_setprop(void *karg, intptr_t arg, int mode, cred_t *cred,
 		int i;
 
 		for (i = 0; i < OVERLAY_DEV_NPROPS; i++) {
-			if (strcmp(overlay_dev_props[i], oip->oip_name) == 0)
+			if (strcmp(overlay_dev_props[i], oip->oip_name) == 0) {
 				break;
+			}
 			if (i == OVERLAY_DEV_NPROPS) {
 				ret = odd->odd_plugin->ovp_ops->ovpo_setprop(
 				    odd->odd_pvoid, oip->oip_name,
@@ -1941,6 +2243,22 @@ overlay_i_setprop(void *karg, intptr_t arg, int mode, cred_t *cred,
 	case OVERLAY_DEV_P_ENCAP:
 	case OVERLAY_DEV_P_VARPDID:
 		ret = EPERM;
+		break;
+	case OVERLAY_DEV_P_CACHE_SIZE:
+		if (oip->oip_size != sizeof (uint64_t)) {
+			ret = EINVAL;
+			break;
+		}
+		sizep = (uint64_t *)oip->oip_value;
+		ret = overlay_setprop_cache_size(odd, *sizep);
+		break;
+	case OVERLAY_DEV_P_CACHE_A:
+		if (oip->oip_size != sizeof (uint64_t)) {
+			ret = EINVAL;
+			break;
+		}
+		ap = (uint64_t *)oip->oip_value;
+		ret = overlay_setprop_cache_a(odd, *ap);
 		break;
 	default:
 		ret = ENOENT;
@@ -2020,11 +2338,18 @@ overlay_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	ddi_fm_init(dip, &fmcap, NULL);
 
 	if (ddi_create_minor_node(dip, OVERLAY_CTL, S_IFCHR,
-	    ddi_get_instance(dip), DDI_PSEUDO, 0) == DDI_FAILURE)
+	    OVERLAY_TARGET_MINOR, DDI_PSEUDO, 0) == DDI_FAILURE)
 		return (DDI_FAILURE);
+
+	if (ddi_create_minor_node(dip, OVERLAY_ROUTER_CTL, S_IFCHR,
+	    OVERLAY_ROUTER_MINOR, DDI_PSEUDO, 0) == DDI_FAILURE) {
+		ddi_remove_minor_node(dip, OVERLAY_CTL);
+		return (DDI_FAILURE);
+	}
 
 	if (dld_ioc_register(OVERLAY_IOC, overlay_ioc_list,
 	    DLDIOCCNT(overlay_ioc_list)) != 0) {
+		ddi_remove_minor_node(dip, OVERLAY_ROUTER_CTL);
 		ddi_remove_minor_node(dip, OVERLAY_CTL);
 		return (DDI_FAILURE);
 	}
@@ -2071,21 +2396,76 @@ overlay_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 
 	dld_ioc_unregister(OVERLAY_IOC);
+	ddi_remove_minor_node(dip, OVERLAY_ROUTER_CTL);
 	ddi_remove_minor_node(dip, OVERLAY_CTL);
 	ddi_fm_fini(dip);
 	overlay_dip = NULL;
 	return (DDI_SUCCESS);
 }
 
+/*
+ * For minor numbers, minor 0 (OVERLAY_TARGET_MINOR) is used as a
+ * control device, and used to instantiate additional minor instances for
+ * varpd. minor 1 (OVERLAY_ROUTER_MINOR) is used to manage the
+ * overlay router data. It's likely we'll add additional minor numbers
+ * (e.g. overlay nat/flow) in the future.
+ */
+static int
+overlay_open(dev_t *devp, int flags, int otype, cred_t *credp)
+{
+	/*
+	 * XXX: It might make sense in the future to separate this
+	 * out from PRIV_DL_CONFIG, but for now we use it.
+	 */
+	if (secpolicy_dl_config(credp) != 0)
+		return (EPERM);
+
+	switch (getminor(*devp)) {
+	case OVERLAY_TARGET_MINOR:
+		return (overlay_target_open(devp, flags, otype, credp));
+	case OVERLAY_ROUTER_MINOR:
+		return (overlay_router_open(devp, flags, otype, credp));
+	default:
+		return (ENXIO);
+	}
+}
+
+static int
+overlay_close(dev_t dev, int flags, int otype, cred_t *credp)
+{
+	switch (getminor(dev)) {
+	case OVERLAY_ROUTER_MINOR:
+		return (overlay_router_close(dev, flags, otype, credp));
+	case OVERLAY_TARGET_MINOR:
+	default:
+		return (overlay_target_close(dev, flags, otype, credp));
+	}
+}
+
+static int
+overlay_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
+    int *rvalp)
+{
+	switch (getminor(dev)) {
+	case OVERLAY_ROUTER_MINOR:
+		return (overlay_router_ioctl(dev, cmd, arg, mode, credp,
+		    rvalp));
+	case OVERLAY_TARGET_MINOR:
+	default:
+		return (overlay_target_ioctl(dev, cmd, arg, mode, credp,
+		    rvalp));
+	}
+}
+
 static struct cb_ops overlay_cbops = {
-	overlay_target_open,	/* cb_open */
-	overlay_target_close,	/* cb_close */
+	overlay_open,		/* cb_open */
+	overlay_close,		/* cb_close */
 	nodev,			/* cb_strategy */
 	nodev,			/* cb_print */
 	nodev,			/* cb_dump */
 	nodev,			/* cb_read */
 	nodev,			/* cb_write */
-	overlay_target_ioctl,	/* cb_ioctl */
+	overlay_ioctl,		/* cb_ioctl */
 	nodev,			/* cb_devmap */
 	nodev,			/* cb_mmap */
 	nodev,			/* cb_segmap */
@@ -2133,6 +2513,7 @@ overlay_init(void)
 	overlay_mux_init();
 	overlay_plugin_init();
 	overlay_target_init();
+	overlay_router_init();
 
 	return (DDI_SUCCESS);
 }
@@ -2140,6 +2521,7 @@ overlay_init(void)
 static void
 overlay_fini(void)
 {
+	overlay_router_fini();
 	overlay_target_fini();
 	overlay_plugin_fini();
 	overlay_mux_fini();

@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -43,7 +43,7 @@ typedef struct varpd_arp_query {
 	varpd_query_handle_t		*vaq_query;
 	const overlay_targ_lookup_t	*vaq_otl;
 	ip6_t				*vaq_ip6;
-	nd_neighbor_solicit_t 		*vaq_ns;
+	nd_neighbor_solicit_t		*vaq_ns;
 } varpd_arp_query_t;
 
 typedef struct varpd_dhcp_query {
@@ -75,7 +75,7 @@ libvarpd_plugin_proxy_arp(varpd_provider_handle_t *hdl,
 	}
 	vaq->vaq_bsize = sizeof (vaq->vaq_buf);
 
-	if (otl->otl_sap != ETHERTYPE_ARP) {
+	if (otl->otl_u.otl_l2.otl2_sap != ETHERTYPE_ARP) {
 		libvarpd_plugin_query_reply(vqh, VARPD_LOOKUP_DROP);
 		umem_free(vaq, sizeof (varpd_arp_query_t));
 		return;
@@ -248,8 +248,8 @@ libvarpd_plugin_proxy_ndp(varpd_provider_handle_t *hdl,
 	}
 	vaq->vaq_bsize = sizeof (vaq->vaq_buf);
 
-	if (otl->otl_dstaddr[0] != 0x33 ||
-	    otl->otl_dstaddr[1] != 0x33) {
+	if (otl->otl_u.otl_l2.otl2_dstaddr[0] != 0x33 ||
+	    otl->otl_u.otl_l2.otl2_dstaddr[1] != 0x33) {
 		libvarpd_plugin_query_reply(vqh, VARPD_LOOKUP_DROP);
 		umem_free(vaq, sizeof (varpd_arp_query_t));
 		return;
@@ -505,13 +505,14 @@ libvarpd_plugin_proxy_dhcp(varpd_provider_handle_t *hdl,
 	}
 	vdq->vdq_bsize = sizeof (vdq->vdq_buf);
 
-	if (otl->otl_sap != ETHERTYPE_IP) {
+	if (otl->otl_u.otl_l2.otl2_sap != ETHERTYPE_IP) {
 		libvarpd_plugin_query_reply(vqh, VARPD_LOOKUP_DROP);
 		umem_free(vdq, sizeof (varpd_dhcp_query_t));
 		return;
 	}
 
-	if (bcmp(otl->otl_dstaddr, libvarpd_arp_bcast, ETHERADDRL) != 0) {
+	if (bcmp(otl->otl_u.otl_l2.otl2_dstaddr, libvarpd_arp_bcast,
+	    ETHERADDRL) != 0) {
 		libvarpd_plugin_query_reply(vqh, VARPD_LOOKUP_DROP);
 		umem_free(vdq, sizeof (varpd_dhcp_query_t));
 		return;
