@@ -142,7 +142,15 @@ ADMIN_NIC_TAG=${CONFIG_admin_tag:-"admin"}
 # from $tagv back to the link.
 nic="${tagv[$ADMIN_NIC_TAG]}"
 if [[ -z "${aggr_links[$nic]}" ]]; then
-	nic=${mac_to_link[$nic]}
+    if !valid_mac "$nic"; then
+        fatal "ERROR: admin mac address $nic not found on system"
+    fi
+
+    _nic=${mac_to_link[$nic]}
+    if [[ -z "$_nic" ]]; then
+        fatal "ERROR: Invalid value of ${ADMIN_NIC_TAG}_nic ($nic)"
+    fi
+    nic=$_nic
 fi
 
 # If there are other nic tags configured on the same link as
@@ -186,12 +194,6 @@ if [[ -n "${aggr_links[$nic]}" ]]; then
 
     echo "Creating aggr: $nic (mode=$mode, links=${links})"
     dladm create-aggr -l ${links// / -l } -L $mode $nic
-elif valid_mac "$nic"; then
-    [[ -n "${mac_to_link[$nic]}" ]] || \
-        fatal "ERROR: admin mac address $nic not found on system"
-    nic=${mac_to_link[$nic]}
-else
-    fatal "ERROR: Invalid value of ${ADMIN_NIC_TAG}_nic ($nic)"
 fi
 
 if [[ -n "$dlmtu" ]]; then
