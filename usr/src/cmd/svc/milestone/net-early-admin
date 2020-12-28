@@ -12,7 +12,7 @@
 #
 
 #
-# Copyright 2019 Joyent, Inc.
+# Copyright 2020 Joyent, Inc.
 #
 
 # Traditionally, when a Triton compute node boots, the network is not
@@ -134,12 +134,22 @@ ADMIN_NIC_TAG=${CONFIG_admin_tag:-"admin"}
 [[ -n "${tagv[$ADMIN_NIC_TAG]}" ]] || \
     fatal "ERROR: admin nic tag '$ADMIN_NIC_TAG' not present"
 
+# Set $nic to the link that has the admin nic tag. For unfortunate
+# historic reasons, for aggrs, the MAC address and link name of an aggr
+# are the same value by net-boot-config (and the source of many errors).
+# If ${aggr_links[$nic]} is non-empty, it means $nic isn't a MAC address
+# but an aggr name (and we're done). Otherwise we must map the MAC address
+# from $tagv back to the link.
 nic="${tagv[$ADMIN_NIC_TAG]}"
+if [[ -z "${aggr_links[$nic]}" ]]; then
+	nic=${mac_to_link[$nic]}
+fi
 
 # If there are other nic tags configured on the same link as
 # the admin tag, find the largest MTU to use to set the
 # datalink MTU
 dlmtu="${mtu[$ADMIN_NIC_TAG]}"
+
 for tag in ${tags[@]}; do
     tagmac="${tagv[$tag]}"
 
@@ -189,7 +199,7 @@ if [[ -n "$dlmtu" ]]; then
         fatal "ERROR: Failed to set mtu on aggr $nic to $dlmtu"
 fi
 
-driver=${nic%%[0-9]*}
+driver=${nic%%+([0-9])}
 get_link_state $nic
 if [[ "$link_state" == "down" ]]; then
     echo "admin nic '${nic}' is down: unplumbing"
