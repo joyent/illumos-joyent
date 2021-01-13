@@ -218,6 +218,7 @@ struct vdev {
 	uint64_t	vdev_min_asize;	/* min acceptable asize		*/
 	uint64_t	vdev_max_asize;	/* max acceptable asize		*/
 	uint64_t	vdev_ashift;	/* block alignment shift	*/
+	uint64_t	vdev_ashift_af;	/* adv. format fallback shift	*/
 	uint64_t	vdev_state;	/* see VDEV_STATE_* #defines	*/
 	uint64_t	vdev_prevstate;	/* used when reopening a vdev	*/
 	vdev_ops_t	*vdev_ops;	/* vdev operations		*/

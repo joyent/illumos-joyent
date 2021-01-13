@@ -689,10 +689,30 @@ skip_open:
 		VDEV_DEBUG("vdev_disk_open(\"%s\"): "
 		    "both DKIOCGMEDIAINFO{,EXT} calls failed, %d\n",
 		    vd->vdev_path, error);
-		pbsize = DEV_BSIZE;
+		blksz = pbsize = DEV_BSIZE;
 	}
 
 	*ashift = highbit64(MAX(pbsize, SPA_MINBLOCKSIZE)) - 1;
+
+	/*
+	 * Advanced Format (512e) disks have a 4KB physical sector size, but
+	 * also report a 512 byte logical sector size (through emulation in the
+	 * firmware) to better support legacy operating systems.  While we
+	 * generally wish to create new pools with a 4KB block size, we also
+	 * need to allow people to use AF disks in their existing 512 byte
+	 * pools, even if not completely optimal.
+	 */
+	if (blksz != 0 && blksz < pbsize) {
+		/*
+		 * The logical block size is smaller than the reported physical
+		 * block size.  Record the logical ashift so that
+		 * spa_vdev_attach() can use it as a fallback.
+		 */
+		vd->vdev_ashift_af = highbit64(MAX(blksz,
+		    SPA_MINBLOCKSIZE)) - 1;
+	} else {
+		vd->vdev_ashift_af = 0;
+	}
 
 	if (vd->vdev_wholedisk == 1) {
 		int wce = 1;

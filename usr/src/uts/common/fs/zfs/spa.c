@@ -6319,11 +6319,15 @@ spa_vdev_attach(spa_t *spa, uint64_t guid, nvlist_t *nvroot, int replacing)
 		return (spa_vdev_exit(spa, newrootvd, txg, EOVERFLOW));
 
 	/*
-	 * The new device cannot have a higher alignment requirement
-	 * than the top-level vdev.
+	 * The new device cannot have a higher alignment requirement than the
+	 * top-level vdev.  If this is an Advanced Format (e.g. 512e) disk, we
+	 * also need to check the fallback logical ashift value.
 	 */
-	if (newvd->vdev_ashift > oldvd->vdev_top->vdev_ashift)
+	if (newvd->vdev_ashift > oldvd->vdev_top->vdev_ashift &&
+	    (newvd->vdev_ashift_af == 0 ||
+	    newvd->vdev_ashift_af > oldvd->vdev_top->vdev_ashift)) {
 		return (spa_vdev_exit(spa, newrootvd, txg, EDOM));
+	}
 
 	/*
 	 * If this is an in-place replacement, update oldvd's path and devid
