@@ -229,7 +229,7 @@ i40e_m_promisc(void *arg, boolean_t on)
 
 
 	ret = i40e_aq_set_vsi_unicast_promiscuous(hw, I40E_DEF_VSI_SEID(i40e),
-	    on, NULL, B_FALSE);
+	    on, NULL, B_TRUE);
 	if (ret != I40E_SUCCESS) {
 		i40e_error(i40e, "failed to %s unicast promiscuity on "
 		    "the default VSI: %d", on == B_TRUE ? "enable" : "disable",
@@ -259,7 +259,7 @@ i40e_m_promisc(void *arg, boolean_t on)
 		 * to be in.
 		 */
 		ret = i40e_aq_set_vsi_unicast_promiscuous(hw,
-		    I40E_DEF_VSI_SEID(i40e), !on, NULL, B_FALSE);
+		    I40E_DEF_VSI_SEID(i40e), !on, NULL, B_TRUE);
 		if (ret != I40E_SUCCESS) {
 			i40e_error(i40e, "failed to %s unicast promiscuity on "
 			    "the default VSI after toggling multicast failed: "
