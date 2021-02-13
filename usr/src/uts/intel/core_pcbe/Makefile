@@ -22,6 +22,7 @@
 # Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
 #
 # Copyright 2019, Joyent, Inc.
+# Copyright 2021 Oxide Computer Company
 #
 # This Makefile builds
 # the Intel Core Architecture Performance Counter BackEnd (PCBE).
@@ -43,6 +44,7 @@ CPCGEN_OBJS	= \
 	core_pcbe_glp.o		\
 	core_pcbe_hsw.o		\
 	core_pcbe_hsx.o		\
+	core_pcbe_icl.o		\
 	core_pcbe_ivb.o		\
 	core_pcbe_ivt.o		\
 	core_pcbe_jkt.o		\
@@ -52,6 +54,8 @@ CPCGEN_OBJS	= \
 	core_pcbe_skx.o		\
 	core_pcbe_slm.o		\
 	core_pcbe_snb.o		\
+	core_pcbe_snr.o		\
+	core_pcbe_tgl.o		\
 	core_pcbe_wsm_ep_dp.o	\
 	core_pcbe_wsm_ep_sp.o	\
 	core_pcbe_wsm_ex.o
@@ -66,7 +70,7 @@ CPCGEN_SRCS	= $(CPCGEN_OBJS:%.o=%.c) core_pcbe_cpcgen.h
 MODULE		= pcbe.GenuineIntel.6.15
 OBJECTS		= $(CORE_PCBE_OBJS:%=$(OBJS_DIR)/%)
 OBJECTS		+= $(CPCGEN_OBJS:%=$(OBJS_DIR)/%)
-ROOTMODULE	= $(USR_PCBE_DIR)/$(MODULE)
+ROOTMODULE	= $(ROOT_PSM_PCBE_DIR)/$(MODULE)
 
 #
 # This order matches the families declared in uts/intel/sys/x86_archext.h.
@@ -98,6 +102,8 @@ SOFTLINKS	= \
 		pcbe.GenuineIntel.6.94	\
 		pcbe.GenuineIntel.6.142	\
 		pcbe.GenuineIntel.6.158	\
+		pcbe.GenuineIntel.6.165	\
+		pcbe.GenuineIntel.6.166	\
 		pcbe.GenuineIntel.6.28	\
 		pcbe.GenuineIntel.6.38	\
 		pcbe.GenuineIntel.6.39	\
@@ -108,7 +114,11 @@ SOFTLINKS	= \
 		pcbe.GenuineIntel.6.76	\
 		pcbe.GenuineIntel.6.92	\
 		pcbe.GenuineIntel.6.95	\
-		pcbe.GenuineIntel.6.122
+		pcbe.GenuineIntel.6.122 \
+		pcbe.GenuineIntel.6.126 \
+		pcbe.GenuineIntel.6.134 \
+		pcbe.GenuineIntel.6.140 \
+		pcbe.GenuineIntel.6.141
 
 ROOTSOFTLINKS	= $(SOFTLINKS:%=$(ROOT_PSM_PCBE_DIR)/%)
 

@@ -109,17 +109,15 @@ struct vlapic;
  * (x) initialized before use
  */
 struct vcpu {
-	struct mtx	mtx;		/* (o) protects 'state' and 'hostcpu' */
+	/* (o) protects state, run_state, hostcpu, sipi_vector */
+	struct mtx	mtx;
+
 	enum vcpu_state	state;		/* (o) vcpu state */
-#ifndef __FreeBSD__
+	enum vcpu_run_state run_state;	/* (i) vcpu init/sipi/run state */
 	kcondvar_t	vcpu_cv;	/* (o) cpu waiter cv */
 	kcondvar_t	state_cv;	/* (o) IDLE-transition cv */
-#endif /* __FreeBSD__ */
 	int		hostcpu;	/* (o) vcpu's current host cpu */
-#ifndef __FreeBSD__
 	int		lastloccpu;	/* (o) last host cpu localized to */
-#endif
-	uint_t		runblock;	/* (i) block vcpu from run state */
 	int		reqidle;	/* (i) request vcpu to idle */
 	struct vlapic	*vlapic;	/* (i) APIC device model */
 	enum x2apic_state x2apic_state;	/* (i) APIC mode */
@@ -130,15 +128,14 @@ struct vcpu {
 	int	exc_vector;		/* (x) exception collateral */
 	int	exc_errcode_valid;
 	uint32_t exc_errcode;
+	uint8_t		sipi_vector;	/* (i) SIPI vector */
 	struct savefpu	*guestfpu;	/* (a,i) guest fpu state */
 	uint64_t	guest_xcr0;	/* (i) guest %xcr0 register */
 	void		*stats;		/* (a,i) statistics */
 	struct vm_exit	exitinfo;	/* (x) exit reason and collateral */
 	uint64_t	nextrip;	/* (x) next instruction to execute */
 	struct vie	*vie_ctx;	/* (x) instruction emulation context */
-#ifndef __FreeBSD__
 	uint64_t	tsc_offset;	/* (x) offset from host TSC */
-#endif
 };
 
 #define	vcpu_lock_initialized(v) mtx_initialized(&((v)->mtx))
@@ -198,17 +195,9 @@ struct vm {
 	uint16_t	cores;			/* (o) num of cores/socket */
 	uint16_t	threads;		/* (o) num of threads/core */
 	uint16_t	maxcpus;		/* (o) max pluggable cpus */
+	uint64_t	boot_tsc_offset;	/* (i) TSC offset at VM boot */
 
 	struct ioport_config ioports;		/* (o) ioport handling */
-
-	bool		sipi_req;		/* (i) SIPI requested */
-	int		sipi_req_vcpu;		/* (i) SIPI destination */
-	uint64_t	sipi_req_rip;		/* (i) SIPI start %rip */
-
-	/* Miscellaneous VM-wide statistics and counters */
-	struct vm_wide_stats {
-		uint64_t sipi_supersede;
-	} stats;
 };
 
 static int vmm_initialized;
@@ -249,8 +238,8 @@ static struct vmm_ops *ops = &vmm_ops_null;
 #define	VMM_RESUME()			((*ops->resume)())
 
 #define	VMINIT(vm, pmap)		((*ops->vminit)(vm, pmap))
-#define	VMRUN(vmi, vcpu, rip, pmap, evinfo) \
-	((*ops->vmrun)(vmi, vcpu, rip, pmap, evinfo))
+#define	VMRUN(vmi, vcpu, rip, pmap) \
+	((*ops->vmrun)(vmi, vcpu, rip, pmap))
 #define	VMCLEANUP(vmi)			((*ops->vmcleanup)(vmi))
 #define	VMSPACE_ALLOC(min, max)		((*ops->vmspace_alloc)(min, max))
 #define	VMSPACE_FREE(vmspace)		((*ops->vmspace_free)(vmspace))
@@ -292,6 +281,8 @@ static int trace_guest_exceptions;
 static void vm_free_memmap(struct vm *vm, int ident);
 static bool sysmem_mapping(struct vm *vm, struct mem_map *mm);
 static void vcpu_notify_event_locked(struct vcpu *vcpu, vcpu_notify_t);
+static bool vcpu_sleep_bailout_checks(struct vm *vm, int vcpuid);
+static int vcpu_vector_sipi(struct vm *vm, int vcpuid, uint8_t vector);
 
 #ifndef __FreeBSD__
 static void vm_clear_memseg(struct vm *, int);
@@ -370,9 +361,9 @@ vcpu_init(struct vm *vm, int vcpu_id, bool create)
 		bzero(&vcpu->exitinfo, sizeof (vcpu->exitinfo));
 	}
 
+	vcpu->run_state = VRS_HALT;
 	vcpu->vlapic = VLAPIC_INIT(vm->cookie, vcpu_id);
 	vm_set_x2apic_state(vm, vcpu_id, X2APIC_DISABLED);
-	vcpu->runblock = 0;
 	vcpu->reqidle = 0;
 	vcpu->exitintinfo = 0;
 	vcpu->nmi_pending = 0;
@@ -381,6 +372,7 @@ vcpu_init(struct vm *vm, int vcpu_id, bool create)
 	vcpu->guest_xcr0 = XFEATURE_ENABLED_X87;
 	fpu_save_area_reset(vcpu->guestfpu);
 	vmm_stat_init(vcpu->stats);
+	vcpu->tsc_offset = 0;
 }
 
 int
@@ -481,9 +473,6 @@ static void
 vm_init(struct vm *vm, bool create)
 {
 	int i;
-#ifndef __FreeBSD__
-	uint64_t tsc_off;
-#endif
 
 	vm->cookie = VMINIT(vm, vmspace_pmap(vm->vmspace));
 	vm->iommu = NULL;
@@ -506,12 +495,16 @@ vm_init(struct vm *vm, bool create)
 	for (i = 0; i < vm->maxcpus; i++)
 		vcpu_init(vm, i, create);
 
-#ifndef __FreeBSD__
-	tsc_off = (uint64_t)(-(int64_t)rdtsc());
-	for (i = 0; i < vm->maxcpus; i++) {
-		vm->vcpu[i].tsc_offset = tsc_off;
-	}
-#endif /* __FreeBSD__ */
+	/*
+	 * Configure the VM-wide TSC offset so that the call to vm_init()
+	 * represents the boot time (when the TSC(s) read 0).  Each vCPU will
+	 * have its own offset from this, which is altered if/when the guest
+	 * writes to MSR_TSC.
+	 *
+	 * The TSC offsetting math is all unsigned, using overflow for negative
+	 * offets.  A reading of the TSC is negated to form the boot offset.
+	 */
+	vm->boot_tsc_offset = (uint64_t)(-(int64_t)rdtsc_offset());
 }
 
 /*
@@ -1233,7 +1226,7 @@ vm_get_seg_desc(struct vm *vm, int vcpu, int reg, struct seg_desc *desc)
 }
 
 int
-vm_set_seg_desc(struct vm *vm, int vcpu, int reg, struct seg_desc *desc)
+vm_set_seg_desc(struct vm *vm, int vcpu, int reg, const struct seg_desc *desc)
 {
 	if (vcpu < 0 || vcpu >= vm->maxcpus)
 		return (EINVAL);
@@ -1243,6 +1236,49 @@ vm_set_seg_desc(struct vm *vm, int vcpu, int reg, struct seg_desc *desc)
 
 	return (VMSETDESC(vm->cookie, vcpu, reg, desc));
 }
+
+int
+vm_get_run_state(struct vm *vm, int vcpuid, uint32_t *state, uint8_t *sipi_vec)
+{
+	struct vcpu *vcpu;
+
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus) {
+		return (EINVAL);
+	}
+
+	vcpu = &vm->vcpu[vcpuid];
+
+	vcpu_lock(vcpu);
+	*state = vcpu->run_state;
+	*sipi_vec = vcpu->sipi_vector;
+	vcpu_unlock(vcpu);
+
+	return (0);
+}
+
+int
+vm_set_run_state(struct vm *vm, int vcpuid, uint32_t state, uint8_t sipi_vec)
+{
+	struct vcpu *vcpu;
+
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus) {
+		return (EINVAL);
+	}
+	if (!VRS_IS_VALID(state)) {
+		return (EINVAL);
+	}
+
+	vcpu = &vm->vcpu[vcpuid];
+
+	vcpu_lock(vcpu);
+	vcpu->run_state = state;
+	vcpu->sipi_vector = sipi_vec;
+	vcpu_notify_event_locked(vcpu, VCPU_NOTIFY_EXIT);
+	vcpu_unlock(vcpu);
+
+	return (0);
+}
+
 
 static void
 restore_guest_fpustate(struct vcpu *vcpu)
@@ -1354,16 +1390,6 @@ vcpu_set_state_locked(struct vm *vm, int vcpuid, enum vcpu_state newstate,
 		break;
 	}
 
-	if (newstate == VCPU_RUNNING) {
-		while (vcpu->runblock != 0) {
-#ifdef __FreeBSD__
-			msleep_spin(&vcpu->state, &vcpu->mtx, "vcpublk", 0);
-#else
-			cv_wait(&vcpu->state_cv, &vcpu->mtx.m);
-#endif
-		}
-	}
-
 	if (error)
 		return (EBUSY);
 
@@ -1376,8 +1402,7 @@ vcpu_set_state_locked(struct vm *vm, int vcpuid, enum vcpu_state newstate,
 	else
 		vcpu->hostcpu = NOCPU;
 
-	if (newstate == VCPU_IDLE ||
-	    (newstate == VCPU_FROZEN && vcpu->runblock != 0)) {
+	if (newstate == VCPU_IDLE) {
 #ifdef __FreeBSD__
 		wakeup(&vcpu->state);
 #else
@@ -1413,12 +1438,8 @@ static int
 vm_handle_hlt(struct vm *vm, int vcpuid, bool intr_disabled)
 {
 	struct vcpu *vcpu;
-#ifdef __FreeBSD__
-	const char *wmesg;
-#else
-	const char *wmesg __unused;
-#endif
 	int t, vcpu_halted, vm_halted;
+	bool userspace_exit = false;
 
 	KASSERT(!CPU_ISSET(vcpuid, &vm->halted_cpus), ("vcpu already halted"));
 
@@ -1429,17 +1450,12 @@ vm_handle_hlt(struct vm *vm, int vcpuid, bool intr_disabled)
 	vcpu_lock(vcpu);
 	while (1) {
 		/*
-		 * Do a final check for pending NMI or interrupts before
-		 * really putting this thread to sleep. Also check for
-		 * software events that would cause this vcpu to wakeup.
-		 *
-		 * These interrupts/events could have happened after the
-		 * vcpu returned from VMRUN() and before it acquired the
-		 * vcpu lock above.
+		 * Do a final check for pending interrupts (including NMI and
+		 * INIT) before putting this thread to sleep.
 		 */
-		if (vm->suspend || vcpu->reqidle)
-			break;
 		if (vm_nmi_pending(vm, vcpuid))
+			break;
+		if (vcpu_run_state_pending(vm, vcpuid))
 			break;
 		if (!intr_disabled) {
 			if (vm_extint_pending(vm, vcpuid) ||
@@ -1448,12 +1464,15 @@ vm_handle_hlt(struct vm *vm, int vcpuid, bool intr_disabled)
 			}
 		}
 
-		/* Don't go to sleep if the vcpu thread needs to yield */
-		if (vcpu_should_yield(vm, vcpuid))
+		/*
+		 * Also check for software events which would cause a wake-up.
+		 * This will set the appropriate exitcode directly, rather than
+		 * requiring a trip through VM_RUN().
+		 */
+		if (vcpu_sleep_bailout_checks(vm, vcpuid)) {
+			userspace_exit = true;
 			break;
-
-		if (vcpu_debugged(vm, vcpuid))
-			break;
+		}
 
 		/*
 		 * Some Linux guests implement "halt" by having all vcpus
@@ -1462,8 +1481,6 @@ vm_handle_hlt(struct vm *vm, int vcpuid, bool intr_disabled)
 		 * vcpus enter the halted state the virtual machine is halted.
 		 */
 		if (intr_disabled) {
-			wmesg = "vmhalt";
-			VCPU_CTR0(vm, vcpuid, "Halted");
 			if (!vcpu_halted && halt_detection_enabled) {
 				vcpu_halted = 1;
 				CPU_SET_ATOMIC(vcpuid, &vm->halted_cpus);
@@ -1472,25 +1489,11 @@ vm_handle_hlt(struct vm *vm, int vcpuid, bool intr_disabled)
 				vm_halted = 1;
 				break;
 			}
-		} else {
-			wmesg = "vmidle";
 		}
 
 		t = ticks;
 		vcpu_require_state_locked(vm, vcpuid, VCPU_SLEEPING);
-#ifdef __FreeBSD__
-		/*
-		 * XXX msleep_spin() cannot be interrupted by signals so
-		 * wake up periodically to check pending signals.
-		 */
-		msleep_spin(vcpu, &vcpu->mtx, wmesg, hz);
-#else
-		/*
-		 * Fortunately, cv_wait_sig can be interrupted by signals, so
-		 * there is no need to periodically wake up.
-		 */
 		(void) cv_wait_sig(&vcpu->vcpu_cv, &vcpu->mtx.m);
-#endif
 		vcpu_require_state_locked(vm, vcpuid, VCPU_FROZEN);
 		vmm_stat_incr(vm, vcpuid, VCPU_IDLE_TICKS, ticks - t);
 	}
@@ -1503,7 +1506,7 @@ vm_handle_hlt(struct vm *vm, int vcpuid, bool intr_disabled)
 	if (vm_halted)
 		vm_suspend(vm, VM_SUSPEND_HALT);
 
-	return (0);
+	return (userspace_exit ? -1 : 0);
 }
 
 static int
@@ -1832,34 +1835,162 @@ vm_handle_reqidle(struct vm *vm, int vcpuid)
 	return (-1);
 }
 
-#ifndef __FreeBSD__
+static int
+vm_handle_run_state(struct vm *vm, int vcpuid)
+{
+	struct vcpu *vcpu = &vm->vcpu[vcpuid];
+	bool handled = false;
+
+	vcpu_lock(vcpu);
+	while (1) {
+		if ((vcpu->run_state & VRS_PEND_INIT) != 0) {
+			vcpu_unlock(vcpu);
+			VERIFY0(vcpu_arch_reset(vm, vcpuid, true));
+			vcpu_lock(vcpu);
+
+			vcpu->run_state &= ~(VRS_RUN | VRS_PEND_INIT);
+			vcpu->run_state |= VRS_INIT;
+		}
+
+		if ((vcpu->run_state & (VRS_INIT | VRS_RUN | VRS_PEND_SIPI)) ==
+		    (VRS_INIT | VRS_PEND_SIPI)) {
+			const uint8_t vector = vcpu->sipi_vector;
+
+			vcpu_unlock(vcpu);
+			VERIFY0(vcpu_vector_sipi(vm, vcpuid, vector));
+			vcpu_lock(vcpu);
+
+			vcpu->run_state &= ~VRS_PEND_SIPI;
+			vcpu->run_state |= VRS_RUN;
+		}
+
+		/*
+		 * If the vCPU is now in the running state, there is no need to
+		 * wait for anything prior to re-entry.
+		 */
+		if ((vcpu->run_state & VRS_RUN) != 0) {
+			handled = true;
+			break;
+		}
+
+		/*
+		 * Also check for software events which would cause a wake-up.
+		 * This will set the appropriate exitcode directly, rather than
+		 * requiring a trip through VM_RUN().
+		 */
+		if (vcpu_sleep_bailout_checks(vm, vcpuid)) {
+			break;
+		}
+
+		vcpu_require_state_locked(vm, vcpuid, VCPU_SLEEPING);
+		(void) cv_wait_sig(&vcpu->vcpu_cv, &vcpu->mtx.m);
+		vcpu_require_state_locked(vm, vcpuid, VCPU_FROZEN);
+	}
+	vcpu_unlock(vcpu);
+
+	return (handled ? 0 : -1);
+}
+
+static int
+vm_handle_rdmsr(struct vm *vm, int vcpuid, struct vm_exit *vme)
+{
+	const uint32_t code = vme->u.msr.code;
+	uint64_t val = 0;
+
+	switch (code) {
+	case MSR_MCG_CAP:
+	case MSR_MCG_STATUS:
+		val = 0;
+		break;
+
+	case MSR_MTRRcap:
+	case MSR_MTRRdefType:
+	case MSR_MTRR4kBase ... MSR_MTRR4kBase + 8:
+	case MSR_MTRR16kBase ... MSR_MTRR16kBase + 1:
+	case MSR_MTRR64kBase:
+		val = 0;
+		break;
+
+	case MSR_TSC:
+		/*
+		 * In all likelihood, this should always be handled in guest
+		 * context by VMX/SVM rather than taking an exit.  (Both VMX and
+		 * SVM pass through read-only access to MSR_TSC to the guest.)
+		 *
+		 * No physical offset is requested of vcpu_tsc_offset() since
+		 * rdtsc_offset() takes care of that instead.
+		 */
+		val = vcpu_tsc_offset(vm, vcpuid, false) + rdtsc_offset();
+		break;
+
+	default:
+		/*
+		 * Anything not handled at this point will be kicked out to
+		 * userspace for attempted processing there.
+		 */
+		return (-1);
+	}
+
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_RAX,
+	    val & 0xffffffff));
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_RDX,
+	    val >> 32));
+	return (0);
+}
+
 static int
 vm_handle_wrmsr(struct vm *vm, int vcpuid, struct vm_exit *vme)
 {
-	struct vcpu *cpu = &vm->vcpu[vcpuid];
+	struct vcpu *vcpu = &vm->vcpu[vcpuid];
 	const uint32_t code = vme->u.msr.code;
 	const uint64_t val = vme->u.msr.wval;
 
 	switch (code) {
+	case MSR_MCG_CAP:
+	case MSR_MCG_STATUS:
+		/* Ignore writes */
+		break;
+
+	case MSR_MTRRcap:
+		vm_inject_gp(vm, vcpuid);
+		break;
+	case MSR_MTRRdefType:
+	case MSR_MTRR4kBase ... MSR_MTRR4kBase + 8:
+	case MSR_MTRR16kBase ... MSR_MTRR16kBase + 1:
+	case MSR_MTRR64kBase:
+		/* Ignore writes */
+		break;
+
 	case MSR_TSC:
-		cpu->tsc_offset = val - rdtsc();
-		return (0);
+		/*
+		 * The effect of writing the TSC MSR is that a subsequent read
+		 * of the TSC would report that value written (plus any time
+		 * elapsed between the write and the read).  The guest TSC value
+		 * is calculated from a global offset for the guest (which
+		 * effectively makes its TSC read 0 at guest boot) and a
+		 * per-vCPU offset to handle these writes to the MSR.
+		 *
+		 * To calculate that per-vCPU offset, we can work backwards from
+		 * the guest value at the time of write:
+		 *
+		 * value = host TSC + VM boot offset + vCPU offset
+		 *
+		 * so therefore:
+		 *
+		 * value - host TSC - VM boot offset = vCPU offset
+		 */
+		vcpu->tsc_offset = val - vm->boot_tsc_offset - rdtsc_offset();
+		break;
+
+	default:
+		/*
+		 * Anything not handled at this point will be kicked out to
+		 * userspace for attempted processing there.
+		 */
+		return (-1);
 	}
 
-	return (-1);
-}
-#endif /* __FreeBSD__ */
-
-void
-vm_req_spinup_ap(struct vm *vm, int req_vcpuid, uint64_t req_rip)
-{
-	if (vm->sipi_req) {
-		/* This should never occur if userspace is doing its job. */
-		vm->stats.sipi_supersede++;
-	}
-	vm->sipi_req = true;
-	vm->sipi_req_vcpu = req_vcpuid;
-	vm->sipi_req_rip = req_rip;
+	return (0);
 }
 
 int
@@ -1890,66 +2021,17 @@ vm_suspend(struct vm *vm, enum vm_suspend_how how)
 }
 
 void
-vm_exit_suspended(struct vm *vm, int vcpuid, uint64_t rip)
-{
-	struct vm_exit *vmexit;
-
-	KASSERT(vm->suspend > VM_SUSPEND_NONE && vm->suspend < VM_SUSPEND_LAST,
-	    ("vm_exit_suspended: invalid suspend type %d", vm->suspend));
-
-	vmexit = vm_exitinfo(vm, vcpuid);
-	vmexit->rip = rip;
-	vmexit->inst_length = 0;
-	vmexit->exitcode = VM_EXITCODE_SUSPENDED;
-	vmexit->u.suspended.how = vm->suspend;
-}
-
-void
-vm_exit_debug(struct vm *vm, int vcpuid, uint64_t rip)
+vm_exit_run_state(struct vm *vm, int vcpuid, uint64_t rip)
 {
 	struct vm_exit *vmexit;
 
 	vmexit = vm_exitinfo(vm, vcpuid);
 	vmexit->rip = rip;
 	vmexit->inst_length = 0;
-	vmexit->exitcode = VM_EXITCODE_DEBUG;
+	vmexit->exitcode = VM_EXITCODE_RUN_STATE;
+	vmm_stat_incr(vm, vcpuid, VMEXIT_RUN_STATE, 1);
 }
 
-void
-vm_exit_runblock(struct vm *vm, int vcpuid, uint64_t rip)
-{
-	struct vm_exit *vmexit;
-
-	vmexit = vm_exitinfo(vm, vcpuid);
-	vmexit->rip = rip;
-	vmexit->inst_length = 0;
-	vmexit->exitcode = VM_EXITCODE_RUNBLOCK;
-	vmm_stat_incr(vm, vcpuid, VMEXIT_RUNBLOCK, 1);
-}
-
-void
-vm_exit_reqidle(struct vm *vm, int vcpuid, uint64_t rip)
-{
-	struct vm_exit *vmexit;
-
-	vmexit = vm_exitinfo(vm, vcpuid);
-	vmexit->rip = rip;
-	vmexit->inst_length = 0;
-	vmexit->exitcode = VM_EXITCODE_REQIDLE;
-	vmm_stat_incr(vm, vcpuid, VMEXIT_REQIDLE, 1);
-}
-
-void
-vm_exit_astpending(struct vm *vm, int vcpuid, uint64_t rip)
-{
-	struct vm_exit *vmexit;
-
-	vmexit = vm_exitinfo(vm, vcpuid);
-	vmexit->rip = rip;
-	vmexit->inst_length = 0;
-	vmexit->exitcode = VM_EXITCODE_BOGUS;
-	vmm_stat_incr(vm, vcpuid, VMEXIT_ASTPENDING, 1);
-}
 
 #ifndef __FreeBSD__
 /*
@@ -2072,7 +2154,7 @@ vm_entry_actions(struct vm *vm, int vcpuid, const struct vm_entry *entry,
 	case VEC_DISCARD_INSTR:
 		vie_reset(vie);
 		return (0);
-	case VEC_COMPLETE_MMIO:
+	case VEC_FULFILL_MMIO:
 		err = vie_fulfill_mmio(vie, &entry->u.mmio);
 		if (err == 0) {
 			err = vie_emulate_mmio(vie, vm, vcpuid);
@@ -2091,7 +2173,7 @@ vm_entry_actions(struct vm *vm, int vcpuid, const struct vm_entry *entry,
 			}
 		}
 		break;
-	case VEC_COMPLETE_INOUT:
+	case VEC_FULFILL_INOUT:
 		err = vie_fulfill_inout(vie, &entry->u.inout);
 		if (err == 0) {
 			err = vie_emulate_inout(vie, vm, vcpuid);
@@ -2132,25 +2214,12 @@ vm_loop_checks(struct vm *vm, int vcpuid, struct vm_exit *vme)
 		return (-1);
 	}
 
-	if (vcpuid == 0 && vm->sipi_req) {
-		/* The boot vCPU has sent a SIPI to one of the other CPUs */
-		vme->exitcode = VM_EXITCODE_SPINUP_AP;
-		vme->u.spinup_ap.vcpu = vm->sipi_req_vcpu;
-		vme->u.spinup_ap.rip = vm->sipi_req_rip;
-
-		vm->sipi_req = false;
-		vm->sipi_req_vcpu = 0;
-		vm->sipi_req_rip = 0;
-		return (-1);
-	}
-
 	return (0);
 }
 
 int
 vm_run(struct vm *vm, int vcpuid, const struct vm_entry *entry)
 {
-	struct vm_eventinfo evinfo;
 	int error;
 	struct vcpu *vcpu;
 #ifdef	__FreeBSD__
@@ -2177,9 +2246,6 @@ vm_run(struct vm *vm, int vcpuid, const struct vm_entry *entry)
 	pmap = vmspace_pmap(vm->vmspace);
 	vcpu = &vm->vcpu[vcpuid];
 	vme = &vcpu->exitinfo;
-	evinfo.rptr = &vcpu->runblock;
-	evinfo.sptr = &vm->suspend;
-	evinfo.iptr = &vcpu->reqidle;
 
 #ifndef	__FreeBSD__
 	vtc.vtc_vm = vm;
@@ -2221,7 +2287,7 @@ restart:
 	KASSERT(!CPU_ISSET(curcpu, &pmap->pm_active),
 	    ("vm_run: absurd pm_active"));
 
-	tscval = rdtsc();
+	tscval = rdtsc_offset();
 
 #ifdef	__FreeBSD__
 	pcb = PCPU_GET(curpcb);
@@ -2242,7 +2308,7 @@ restart:
 #endif
 
 	vcpu_require_state(vm, vcpuid, VCPU_RUNNING);
-	error = VMRUN(vm->cookie, vcpuid, vcpu->nextrip, pmap, &evinfo);
+	error = VMRUN(vm->cookie, vcpuid, vcpu->nextrip, pmap);
 	vcpu_require_state(vm, vcpuid, VCPU_FROZEN);
 
 #ifdef	__FreeBSD__
@@ -2259,7 +2325,7 @@ restart:
 	thread_affinity_clear(curthread);
 #endif
 
-	vmm_stat_incr(vm, vcpuid, VCPU_TOTAL_RUNTIME, rdtsc() - tscval);
+	vmm_stat_incr(vm, vcpuid, VCPU_TOTAL_RUNTIME, rdtsc_offset() - tscval);
 
 	critical_exit();
 
@@ -2273,14 +2339,15 @@ restart:
 	case VM_EXITCODE_REQIDLE:
 		error = vm_handle_reqidle(vm, vcpuid);
 		break;
+	case VM_EXITCODE_RUN_STATE:
+		error = vm_handle_run_state(vm, vcpuid);
+		break;
 	case VM_EXITCODE_SUSPENDED:
 		error = vm_handle_suspend(vm, vcpuid);
 		break;
 	case VM_EXITCODE_IOAPIC_EOI:
 		vioapic_process_eoi(vm, vcpuid,
 		    vme->u.ioapic_eoi.vector);
-		break;
-	case VM_EXITCODE_RUNBLOCK:
 		break;
 	case VM_EXITCODE_HLT:
 		intr_disabled = ((vme->u.hlt.rflags & PSL_I) == 0);
@@ -2300,18 +2367,17 @@ restart:
 	case VM_EXITCODE_VMINSN:
 		vm_inject_ud(vm, vcpuid);
 		break;
-#ifndef __FreeBSD__
+	case VM_EXITCODE_RDMSR:
+		error = vm_handle_rdmsr(vm, vcpuid, vme);
+		break;
 	case VM_EXITCODE_WRMSR:
-		if (vm_handle_wrmsr(vm, vcpuid, vme) != 0) {
-			error = -1;
-		}
+		error = vm_handle_wrmsr(vm, vcpuid, vme);
 		break;
 
 	case VM_EXITCODE_HT: {
 		affinity_type = CPU_BEST;
 		break;
 	}
-#endif
 
 	case VM_EXITCODE_MTRAP:
 		vm_suspend_cpu(vm, vcpuid);
@@ -2792,6 +2858,196 @@ vm_extint_clear(struct vm *vm, int vcpuid)
 }
 
 int
+vm_inject_init(struct vm *vm, int vcpuid)
+{
+	struct vcpu *vcpu;
+
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
+		return (EINVAL);
+
+	vcpu = &vm->vcpu[vcpuid];
+	vcpu_lock(vcpu);
+	vcpu->run_state |= VRS_PEND_INIT;
+	vcpu_notify_event_locked(vcpu, VCPU_NOTIFY_EXIT);
+	vcpu_unlock(vcpu);
+	return (0);
+}
+
+int
+vm_inject_sipi(struct vm *vm, int vcpuid, uint8_t vector)
+{
+	struct vcpu *vcpu;
+
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
+		return (EINVAL);
+
+	vcpu = &vm->vcpu[vcpuid];
+	vcpu_lock(vcpu);
+	vcpu->run_state |= VRS_PEND_SIPI;
+	vcpu->sipi_vector = vector;
+	/* SIPI is only actionable if the CPU is waiting in INIT state */
+	if ((vcpu->run_state & (VRS_INIT | VRS_RUN)) == VRS_INIT) {
+		vcpu_notify_event_locked(vcpu, VCPU_NOTIFY_EXIT);
+	}
+	vcpu_unlock(vcpu);
+	return (0);
+}
+
+bool
+vcpu_run_state_pending(struct vm *vm, int vcpuid)
+{
+	struct vcpu *vcpu;
+
+	ASSERT(vcpuid >= 0 && vcpuid < vm->maxcpus);
+	vcpu = &vm->vcpu[vcpuid];
+
+	/* Of interest: vCPU not in running state or with pending INIT */
+	return ((vcpu->run_state & (VRS_RUN | VRS_PEND_INIT)) != VRS_RUN);
+}
+
+int
+vcpu_arch_reset(struct vm *vm, int vcpuid, bool init_only)
+{
+	struct seg_desc desc;
+	const enum vm_reg_name clear_regs[] = {
+		VM_REG_GUEST_CR2,
+		VM_REG_GUEST_CR3,
+		VM_REG_GUEST_CR4,
+		VM_REG_GUEST_RAX,
+		VM_REG_GUEST_RBX,
+		VM_REG_GUEST_RCX,
+		VM_REG_GUEST_RSI,
+		VM_REG_GUEST_RDI,
+		VM_REG_GUEST_RBP,
+		VM_REG_GUEST_RSP,
+		VM_REG_GUEST_R8,
+		VM_REG_GUEST_R9,
+		VM_REG_GUEST_R10,
+		VM_REG_GUEST_R11,
+		VM_REG_GUEST_R12,
+		VM_REG_GUEST_R13,
+		VM_REG_GUEST_R14,
+		VM_REG_GUEST_R15,
+		VM_REG_GUEST_DR0,
+		VM_REG_GUEST_DR1,
+		VM_REG_GUEST_DR2,
+		VM_REG_GUEST_DR3,
+		VM_REG_GUEST_EFER,
+	};
+	const enum vm_reg_name data_segs[] = {
+		VM_REG_GUEST_SS,
+		VM_REG_GUEST_DS,
+		VM_REG_GUEST_ES,
+		VM_REG_GUEST_FS,
+		VM_REG_GUEST_GS,
+	};
+	struct vcpu *vcpu = &vm->vcpu[vcpuid];
+
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
+		return (EINVAL);
+
+	for (uint_t i = 0; i < nitems(clear_regs); i++) {
+		VERIFY0(vm_set_register(vm, vcpuid, clear_regs[i], 0));
+	}
+
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_RFLAGS, 2));
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_RIP, 0xfff0));
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_CR0, 0x60000010));
+
+	/*
+	 * The prescribed contents of %rdx differ slightly between the Intel and
+	 * AMD architectural definitions.  The former expects the Extended Model
+	 * in bits 16-19 where the latter expects all the Family, Model, and
+	 * Stepping be there.  Common boot ROMs appear to disregard this
+	 * anyways, so we stick with a compromise value similar to what is
+	 * spelled out in the Intel SDM.
+	 */
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_RDX, 0x600));
+
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_DR6, 0xffff0ff0));
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_DR7, 0x400));
+
+	/* CS: Present, R/W, Accessed */
+	desc.access = 0x0093;
+	desc.base = 0xffff0000;
+	desc.limit = 0xffff;
+	VERIFY0(vm_set_seg_desc(vm, vcpuid, VM_REG_GUEST_CS, &desc));
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_CS, 0xf000));
+
+	/* SS, DS, ES, FS, GS: Present, R/W, Accessed */
+	desc.access = 0x0093;
+	desc.base = 0;
+	desc.limit = 0xffff;
+	for (uint_t i = 0; i < nitems(data_segs); i++) {
+		VERIFY0(vm_set_seg_desc(vm, vcpuid, data_segs[i], &desc));
+		VERIFY0(vm_set_register(vm, vcpuid, data_segs[i], 0));
+	}
+
+	/* GDTR, IDTR */
+	desc.base = 0;
+	desc.limit = 0xffff;
+	VERIFY0(vm_set_seg_desc(vm, vcpuid, VM_REG_GUEST_GDTR, &desc));
+	VERIFY0(vm_set_seg_desc(vm, vcpuid, VM_REG_GUEST_IDTR, &desc));
+
+	/* LDTR: Present, LDT */
+	desc.access = 0x0082;
+	desc.base = 0;
+	desc.limit = 0xffff;
+	VERIFY0(vm_set_seg_desc(vm, vcpuid, VM_REG_GUEST_LDTR, &desc));
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_LDTR, 0));
+
+	/* TR: Present, 32-bit TSS */
+	desc.access = 0x008b;
+	desc.base = 0;
+	desc.limit = 0xffff;
+	VERIFY0(vm_set_seg_desc(vm, vcpuid, VM_REG_GUEST_TR, &desc));
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_TR, 0));
+
+	vlapic_reset(vm_lapic(vm, vcpuid));
+
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_INTR_SHADOW, 0));
+
+	vcpu->exitintinfo = 0;
+	vcpu->exception_pending = 0;
+	vcpu->nmi_pending = 0;
+	vcpu->extint_pending = 0;
+
+	/*
+	 * A CPU reset caused by power-on or system reset clears more state than
+	 * one which is trigged from an INIT IPI.
+	 */
+	if (!init_only) {
+		vcpu->guest_xcr0 = XFEATURE_ENABLED_X87;
+		fpu_save_area_reset(vcpu->guestfpu);
+
+		/* XXX: clear MSRs and other pieces */
+	}
+
+	return (0);
+}
+
+static int
+vcpu_vector_sipi(struct vm *vm, int vcpuid, uint8_t vector)
+{
+	struct seg_desc desc;
+
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
+		return (EINVAL);
+
+	/* CS: Present, R/W, Accessed */
+	desc.access = 0x0093;
+	desc.base = (uint64_t)vector << 12;
+	desc.limit = 0xffff;
+	VERIFY0(vm_set_seg_desc(vm, vcpuid, VM_REG_GUEST_CS, &desc));
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_CS,
+	    (uint64_t)vector << 8));
+
+	VERIFY0(vm_set_register(vm, vcpuid, VM_REG_GUEST_RIP, 0));
+
+	return (0);
+}
+
+int
 vm_get_capability(struct vm *vm, int vcpu, int type, int *retval)
 {
 	if (vcpu < 0 || vcpu >= vm->maxcpus)
@@ -2894,7 +3150,7 @@ vcpu_set_state(struct vm *vm, int vcpuid, enum vcpu_state newstate,
 	struct vcpu *vcpu;
 
 	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
-		panic("vm_set_run_state: invalid vcpuid %d", vcpuid);
+		panic("vcpu_set_state: invalid vcpuid %d", vcpuid);
 
 	vcpu = &vm->vcpu[vcpuid];
 
@@ -2912,7 +3168,7 @@ vcpu_get_state(struct vm *vm, int vcpuid, int *hostcpu)
 	enum vcpu_state state;
 
 	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
-		panic("vm_get_run_state: invalid vcpuid %d", vcpuid);
+		panic("vcpu_get_state: invalid vcpuid %d", vcpuid);
 
 	vcpu = &vm->vcpu[vcpuid];
 
@@ -2925,61 +3181,21 @@ vcpu_get_state(struct vm *vm, int vcpuid, int *hostcpu)
 	return (state);
 }
 
-void
-vcpu_block_run(struct vm *vm, int vcpuid)
-{
-	struct vcpu *vcpu;
-
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
-		panic("vcpu_block_run: invalid vcpuid %d", vcpuid);
-
-	vcpu = &vm->vcpu[vcpuid];
-
-	vcpu_lock(vcpu);
-	vcpu->runblock++;
-	if (vcpu->runblock == 1 && vcpu->state == VCPU_RUNNING) {
-		vcpu_notify_event_locked(vcpu, VCPU_NOTIFY_EXIT);
-	}
-	while (vcpu->state == VCPU_RUNNING) {
-#ifdef __FreeBSD__
-		msleep_spin(&vcpu->state, &vcpu->mtx, "vcpublk", 0);
-#else
-		cv_wait(&vcpu->state_cv, &vcpu->mtx.m);
-#endif
-	}
-	vcpu_unlock(vcpu);
-}
-
-void
-vcpu_unblock_run(struct vm *vm, int vcpuid)
-{
-	struct vcpu *vcpu;
-
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
-		panic("vcpu_block_run: invalid vcpuid %d", vcpuid);
-
-	vcpu = &vm->vcpu[vcpuid];
-
-	vcpu_lock(vcpu);
-	KASSERT(vcpu->runblock != 0, ("expected non-zero runblock"));
-	vcpu->runblock--;
-	if (vcpu->runblock == 0) {
-#ifdef __FreeBSD__
-		wakeup(&vcpu->state);
-#else
-		cv_broadcast(&vcpu->state_cv);
-#endif
-	}
-	vcpu_unlock(vcpu);
-}
-
-#ifndef	__FreeBSD__
 uint64_t
-vcpu_tsc_offset(struct vm *vm, int vcpuid)
+vcpu_tsc_offset(struct vm *vm, int vcpuid, bool phys_adj)
 {
-	return (vm->vcpu[vcpuid].tsc_offset);
+	ASSERT(vcpuid >= 0 && vcpuid < vm->maxcpus);
+
+	uint64_t vcpu_off = vm->boot_tsc_offset + vm->vcpu[vcpuid].tsc_offset;
+
+	if (phys_adj) {
+		/* Include any offset for the current physical CPU too */
+		extern hrtime_t tsc_gethrtime_tick_delta(void);
+		vcpu_off += (uint64_t)tsc_gethrtime_tick_delta();
+	}
+
+	return (vcpu_off);
 }
-#endif /* __FreeBSD__ */
 
 int
 vm_activate_cpu(struct vm *vm, int vcpuid)
@@ -3038,11 +3254,93 @@ vm_resume_cpu(struct vm *vm, int vcpuid)
 	return (0);
 }
 
-int
-vcpu_debugged(struct vm *vm, int vcpuid)
+static bool
+vcpu_bailout_checks(struct vm *vm, int vcpuid, bool on_entry,
+    uint64_t entry_rip)
 {
+	struct vcpu *vcpu = &vm->vcpu[vcpuid];
+	struct vm_exit *vme = &vcpu->exitinfo;
+	bool bail = false;
 
-	return (CPU_ISSET(vcpuid, &vm->debug_cpus));
+	ASSERT(vcpuid >= 0 && vcpuid < vm->maxcpus);
+
+	if (vm->suspend) {
+		if (on_entry) {
+			VERIFY(vm->suspend > VM_SUSPEND_NONE &&
+			    vm->suspend < VM_SUSPEND_LAST);
+
+			vme->exitcode = VM_EXITCODE_SUSPENDED;
+			vme->u.suspended.how = vm->suspend;
+		} else {
+			/*
+			 * Handling VM suspend is complicated, so if that
+			 * condition is detected outside of VM-entry itself,
+			 * just emit a BOGUS exitcode so we take a lap to pick
+			 * up the event during an entry and are directed into
+			 * the vm_handle_suspend() logic.
+			 */
+			vme->exitcode = VM_EXITCODE_BOGUS;
+		}
+		bail = true;
+	}
+	if (vcpu->reqidle) {
+		vme->exitcode = VM_EXITCODE_REQIDLE;
+		vmm_stat_incr(vm, vcpuid, VMEXIT_REQIDLE, 1);
+
+		if (!on_entry) {
+			/*
+			 * A reqidle request detected outside of VM-entry can be
+			 * handled directly by clearing the request (and taking
+			 * a lap to userspace).
+			 */
+			vcpu_assert_locked(vcpu);
+			vcpu->reqidle = 0;
+		}
+		bail = true;
+	}
+	if (vcpu_should_yield(vm, vcpuid)) {
+		vme->exitcode = VM_EXITCODE_BOGUS;
+		vmm_stat_incr(vm, vcpuid, VMEXIT_ASTPENDING, 1);
+		bail = true;
+	}
+	if (CPU_ISSET(vcpuid, &vm->debug_cpus)) {
+		vme->exitcode = VM_EXITCODE_DEBUG;
+		bail = true;
+	}
+
+	if (bail) {
+		if (on_entry) {
+			/*
+			 * If bailing out during VM-entry, the current %rip must
+			 * be recorded in the exitinfo.
+			 */
+			vme->rip = entry_rip;
+		}
+		vme->inst_length = 0;
+	}
+	return (bail);
+}
+
+static bool
+vcpu_sleep_bailout_checks(struct vm *vm, int vcpuid)
+{
+	/*
+	 * Bail-out check done prior to sleeping (in vCPU contexts like HLT or
+	 * wait-for-SIPI) expect that %rip is already populated in the vm_exit
+	 * structure, and we would only modify the exitcode.
+	 */
+	return (vcpu_bailout_checks(vm, vcpuid, false, 0));
+}
+
+bool
+vcpu_entry_bailout_checks(struct vm *vm, int vcpuid, uint64_t rip)
+{
+	/*
+	 * Bail-out checks done as part of VM entry require an updated %rip to
+	 * populate the vm_exit struct if any of the conditions of interest are
+	 * matched in the check.
+	 */
+	return (vcpu_bailout_checks(vm, vcpuid, true, rip));
 }
 
 cpuset_t

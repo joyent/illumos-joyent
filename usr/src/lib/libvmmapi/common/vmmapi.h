@@ -225,6 +225,7 @@ int	vm_setup_pptdev_msi(struct vmctx *ctx, int vcpu, int bus, int slot,
 int	vm_setup_pptdev_msix(struct vmctx *ctx, int vcpu, int bus, int slot,
 	    int func, int idx, uint64_t addr, uint64_t msg,
 	    uint32_t vector_control);
+int	vm_disable_pptdev_msix(struct vmctx *ctx, int bus, int slot, int func);
 int	vm_get_pptdev_limits(struct vmctx *ctx, int bus, int slot, int func,
     int *msi_limit, int *msix_limit);
 #else /* __FreeBSD__ */
@@ -236,6 +237,7 @@ int	vm_setup_pptdev_msi(struct vmctx *ctx, int vcpu, int pptfd,
     uint64_t addr, uint64_t msg, int numvec);
 int	vm_setup_pptdev_msix(struct vmctx *ctx, int vcpu, int pptfd,
     int idx, uint64_t addr, uint64_t msg, uint32_t vector_control);
+int	vm_disable_pptdev_msix(struct vmctx *ctx, int pptfd);
 int	vm_get_pptdev_limits(struct vmctx *ctx, int pptfd, int *msi_limit,
     int *msix_limit);
 #endif /* __FreeBSD__ */
@@ -304,6 +306,10 @@ int	vm_get_topology(struct vmctx *ctx, uint16_t *sockets, uint16_t *cores,
 /* illumos-specific APIs */
 int	vm_pmtmr_set_location(struct vmctx *ctx, uint16_t ioport);
 int	vm_wrlock_cycle(struct vmctx *ctx);
+int vm_get_run_state(struct vmctx *ctx, int vcpu, enum vcpu_run_state *state,
+    uint8_t *sipi_vector);
+int vm_set_run_state(struct vmctx *ctx, int vcpu, enum vcpu_run_state state,
+    uint8_t sipi_vector);
 #endif	/* __FreeBSD__ */
 
 #ifdef	__FreeBSD__

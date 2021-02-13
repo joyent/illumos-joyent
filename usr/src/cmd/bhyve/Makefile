@@ -61,6 +61,7 @@ SRCS =	acpi.c			\
 	pci_virtio_rnd.c	\
 	pci_virtio_viona.c	\
 	pci_xhci.c		\
+	pctestdev.c		\
 	pm.c			\
 	post.c			\
 	ps2kbd.c		\
@@ -97,7 +98,7 @@ SRCS =	acpi.c			\
 	#pci_hda.c		\
 
 # The bhyve generic net-backend stuff has been ignored by us at the moment
-# because SmartOS users prefer to use viona for its superior network perf.
+# because illumos users prefer to use viona for its superior network perf.
 	#net_backends.c		\
 
 
@@ -138,8 +139,17 @@ SMOFF += all_func_returns,leaks,no_if_block
 CSTD=		$(CSTD_GNU99)
 C99MODE=	-xc99=%all
 
-$(PROG) := LDLIBS += -lsocket -lnsl -ldlpi -ldladm -lmd -lsunw_crypto -luuid \
-	-lvmmapi -lz
+$(PROG) := LDLIBS += \
+	-lsocket \
+	-lnsl \
+	-ldlpi \
+	-ldladm \
+	-lmd \
+	-lsunw_crypto \
+	-luuid \
+	-lvmmapi \
+	-lz
+NATIVE_LIBS += libz.so libsunw_crypto.so
 $(ZHYVE_PROG) := LDLIBS += -lnvpair
 $(MEVENT_TEST_PROG) := LDLIBS += -lsocket
 

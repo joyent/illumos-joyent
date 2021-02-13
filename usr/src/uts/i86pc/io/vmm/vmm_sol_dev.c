@@ -443,6 +443,9 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 	case VM_RESTART_INSTRUCTION:
 	case VM_SET_KERNEMU_DEV:
 	case VM_GET_KERNEMU_DEV:
+	case VM_RESET_CPU:
+	case VM_GET_RUN_STATE:
+	case VM_SET_RUN_STATE:
 		/*
 		 * Copy in the ID of the vCPU chosen for this operation.
 		 * Since a nefarious caller could update their struct between
@@ -487,6 +490,7 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 	case VM_RTC_WRITE:
 	case VM_RTC_SETTIME:
 	case VM_RTC_GETTIME:
+	case VM_PPTDEV_DISABLE_MSIX:
 #ifndef __FreeBSD__
 	case VM_DEVMEM_GETOFFSET:
 #endif
@@ -611,6 +615,16 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 		error = ppt_setup_msix(sc->vmm_vm, pptmsix.vcpu, pptmsix.pptfd,
 		    pptmsix.idx, pptmsix.addr, pptmsix.msg,
 		    pptmsix.vector_control);
+		break;
+	}
+	case VM_PPTDEV_DISABLE_MSIX: {
+		struct vm_pptdev pptdev;
+
+		if (ddi_copyin(datap, &pptdev, sizeof (pptdev), md)) {
+			error = EFAULT;
+			break;
+		}
+		error = ppt_disable_msix(sc->vmm_vm, pptdev.pptfd);
 		break;
 	}
 	case VM_MAP_PPTDEV_MMIO: {
@@ -987,6 +1001,45 @@ vmmdev_do_ioctl(vmm_softc_t *sc, int cmd, intptr_t arg, int md,
 			error = vm_set_register(sc->vmm_vm, vcpu, regnums[i],
 			    regvals[i]);
 		}
+		break;
+	}
+	case VM_RESET_CPU: {
+		struct vm_vcpu_reset vvr;
+
+		if (ddi_copyin(datap, &vvr, sizeof (vvr), md)) {
+			error = EFAULT;
+			break;
+		}
+		if (vvr.kind != VRK_RESET && vvr.kind != VRK_INIT) {
+			error = EINVAL;
+		}
+
+		error = vcpu_arch_reset(sc->vmm_vm, vcpu, vvr.kind == VRK_INIT);
+		break;
+	}
+	case VM_GET_RUN_STATE: {
+		struct vm_run_state vrs;
+
+		bzero(&vrs, sizeof (vrs));
+		error = vm_get_run_state(sc->vmm_vm, vcpu, &vrs.state,
+		    &vrs.sipi_vector);
+		if (error == 0) {
+			if (ddi_copyout(&vrs, datap, sizeof (vrs), md)) {
+				error = EFAULT;
+				break;
+			}
+		}
+		break;
+	}
+	case VM_SET_RUN_STATE: {
+		struct vm_run_state vrs;
+
+		if (ddi_copyin(datap, &vrs, sizeof (vrs), md)) {
+			error = EFAULT;
+			break;
+		}
+		error = vm_set_run_state(sc->vmm_vm, vcpu, vrs.state,
+		    vrs.sipi_vector);
 		break;
 	}
 

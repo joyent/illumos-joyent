@@ -475,7 +475,6 @@ vmcb_init(struct svm_softc *sc, int vcpu, uint64_t iopm_base_pa,
 			svm_enable_intercept(sc, vcpu, VMCB_CR_INTCPT, mask);
 	}
 
-
 	/*
 	 * Intercept everything when tracing guest exceptions otherwise
 	 * just intercept machine check exception.
@@ -1836,7 +1835,7 @@ check_asid(struct svm_softc *sc, int vcpuid, pmap_t pmap, uint_t thiscpu)
 
 	eptgen = pmap->pm_eptgen;
 	flush = hma_svm_asid_update(&vcpustate->hma_asid, flush_by_asid(),
-	    vcpustate->eptgen == eptgen);
+	    vcpustate->eptgen != eptgen);
 
 	if (flush != VMCB_TLB_FLUSH_NOTHING) {
 		ctrl->asid = vcpustate->hma_asid.hsa_asid;
@@ -1913,12 +1912,24 @@ svm_dr_leave_guest(struct svm_regctx *gctx)
 	load_dr7(gctx->host_dr7);
 }
 
+static void
+svm_apply_tsc_adjust(struct svm_softc *svm_sc, int vcpuid)
+{
+	const uint64_t offset = vcpu_tsc_offset(svm_sc->vm, vcpuid, true);
+	struct vmcb_ctrl *ctrl = svm_get_vmcb_ctrl(svm_sc, vcpuid);
+
+	if (ctrl->tsc_offset != offset) {
+		ctrl->tsc_offset = offset;
+		svm_set_dirty(svm_sc, vcpuid, VMCB_CACHE_I);
+	}
+}
+
+
 /*
  * Start vcpu with specified RIP.
  */
 static int
-svm_vmrun(void *arg, int vcpu, uint64_t rip, pmap_t pmap,
-    struct vm_eventinfo *evinfo)
+svm_vmrun(void *arg, int vcpu, uint64_t rip, pmap_t pmap)
 {
 	struct svm_regctx *gctx;
 	struct svm_softc *svm_sc;
@@ -1973,6 +1984,8 @@ svm_vmrun(void *arg, int vcpu, uint64_t rip, pmap_t pmap,
 		vmm_stat_incr(vm, vcpu, VCPU_MIGRATIONS, 1);
 	}
 
+	svm_apply_tsc_adjust(svm_sc, vcpu);
+
 	svm_msr_guest_enter(svm_sc, vcpu);
 
 #ifndef __FreeBSD__
@@ -2010,34 +2023,18 @@ svm_vmrun(void *arg, int vcpu, uint64_t rip, pmap_t pmap,
 		inject_state = svm_inject_vlapic(svm_sc, vcpu, vlapic,
 		    inject_state);
 
-		if (vcpu_suspended(evinfo)) {
+		/*
+		 * Check for vCPU bail-out conditions.  This must be done after
+		 * svm_inject_events() to detect a triple-fault condition.
+		 */
+		if (vcpu_entry_bailout_checks(vm, vcpu, state->rip)) {
 			enable_gintr();
-			vm_exit_suspended(vm, vcpu, state->rip);
 			break;
 		}
 
-		if (vcpu_runblocked(evinfo)) {
+		if (vcpu_run_state_pending(vm, vcpu)) {
 			enable_gintr();
-			vm_exit_runblock(vm, vcpu, state->rip);
-			break;
-		}
-
-		if (vcpu_reqidle(evinfo)) {
-			enable_gintr();
-			vm_exit_reqidle(vm, vcpu, state->rip);
-			break;
-		}
-
-		/* We are asked to give the cpu by scheduler. */
-		if (vcpu_should_yield(vm, vcpu)) {
-			enable_gintr();
-			vm_exit_astpending(vm, vcpu, state->rip);
-			break;
-		}
-
-		if (vcpu_debugged(vm, vcpu)) {
-			enable_gintr();
-			vm_exit_debug(vm, vcpu, state->rip);
+			vm_exit_run_state(vm, vcpu, state->rip);
 			break;
 		}
 
@@ -2303,7 +2300,7 @@ svm_setreg(void *arg, int vcpu, int ident, uint64_t val)
 }
 
 static int
-svm_setdesc(void *arg, int vcpu, int reg, struct seg_desc *desc)
+svm_setdesc(void *arg, int vcpu, int reg, const struct seg_desc *desc)
 {
 	struct vmcb *vmcb;
 	struct svm_softc *sc;

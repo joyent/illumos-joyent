@@ -472,6 +472,7 @@ extern "C" {
  * These values are currently the same between Intel and AMD.
  */
 #define	MSR_PPIN_CTL_MASK	0x03
+#define	MSR_PPIN_CTL_DISABLED	0x00
 #define	MSR_PPIN_CTL_LOCKED	0x01
 #define	MSR_PPIN_CTL_ENABLED	0x02
 
@@ -737,6 +738,7 @@ extern "C" {
 #define	X86FSET_PPIN		99
 #define	X86FSET_VAES		100
 #define	X86FSET_VPCLMULQDQ	101
+#define	X86FSET_LFENCE_SER	102
 
 /*
  * Intel Deep C-State invariant TSC in leaf 0x80000007.
@@ -803,6 +805,9 @@ extern "C" {
 
 #define	X86_VENDOR_NSC		10
 #define	X86_VENDORSTR_NSC	"Geode by NSC"
+
+#define	X86_VENDOR_HYGON	11
+#define	X86_VENDORSTR_HYGON	"HygonGenuine"
 
 /*
  * Vendor string max len + \0
@@ -968,6 +973,12 @@ extern "C" {
 	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x17, 0x0009)
 
 /*
+ * Definitions for Hygon Family 0x18
+ */
+#define	X86_CHIPREV_HYGON_18_DN_A1 \
+	_X86_CHIPREV_MKREV(X86_VENDOR_HYGON, 0x18, 0x0001)
+
+/*
  * Various socket/package types, extended as the need to distinguish
  * a new type arises.  The top 8 byte identfies the vendor and the
  * remaining 24 bits describe 24 socket types.
@@ -1026,6 +1037,15 @@ extern "C" {
 #define	X86_SOCKET_STRX4	_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x23)
 #define	X86_NUM_SOCKETS_AMD	0x24
 
+/*
+ * Hygon socket types
+ */
+#define	X86_SOCKET_SL1		_X86_SOCKET_MKVAL(X86_VENDOR_HYGON, 0x01)
+#define	X86_SOCKET_SL1R2	_X86_SOCKET_MKVAL(X86_VENDOR_HYGON, 0x02)
+#define	X86_SOCKET_DM1		_X86_SOCKET_MKVAL(X86_VENDOR_HYGON, 0x03)
+#define	X86_NUM_SOCKETS_HYGON	0x04
+
+#define	X86_NUM_SOCKETS		(X86_NUM_SOCKETS_AMD + X86_NUM_SOCKETS_HYGON)
 
 /*
  * Definitions for Intel processor models. These are all for Family 6
@@ -1119,7 +1139,7 @@ extern "C" {
 
 #if defined(_KERNEL) || defined(_KMEMUSER)
 
-#define	NUM_X86_FEATURES	102
+#define	NUM_X86_FEATURES	103
 extern uchar_t x86_featureset[];
 
 extern void free_x86_featureset(void *featureset);
