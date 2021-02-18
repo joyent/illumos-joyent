@@ -46,6 +46,7 @@
 #include "gfx_fb.h"
 #include "framebuffer.h"
 
+EFI_GUID conout_guid = EFI_CONSOLE_OUT_DEVICE_GUID;
 EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID pciio_guid = EFI_PCI_IO_PROTOCOL_GUID;
 EFI_GUID uga_guid = EFI_UGA_DRAW_PROTOCOL_GUID;
@@ -83,6 +84,7 @@ efifb_mask_from_pixfmt(struct efi_fb *efifb, EFI_GRAPHICS_PIXEL_FORMAT pixfmt,
 	result = 0;
 	switch (pixfmt) {
 	case PixelRedGreenBlueReserved8BitPerColor:
+	case PixelBltOnly:
 		efifb->fb_mask_red = 0x000000ff;
 		efifb->fb_mask_green = 0x0000ff00;
 		efifb->fb_mask_blue = 0x00ff0000;
@@ -506,6 +508,8 @@ efifb_get_edid(edid_res_list_t *res)
 int
 efi_find_framebuffer(struct efi_fb *efifb)
 {
+	EFI_HANDLE h, *hlist;
+	UINTN nhandles, i, hsize;
 	extern EFI_GRAPHICS_OUTPUT *gop;
 	extern EFI_UGA_DRAW_PROTOCOL *uga;
 	EFI_STATUS status;
@@ -514,7 +518,40 @@ efi_find_framebuffer(struct efi_fb *efifb)
 	if (gop != NULL)
 		return (efifb_from_gop(efifb, gop->Mode, gop->Mode->Info));
 
-	status = BS->LocateProtocol(&gop_guid, NULL, (void **)&gop);
+	hsize = 0;
+	hlist = NULL;
+	status = BS->LocateHandle(ByProtocol, &gop_guid, NULL, &hsize, hlist);
+	if (status == EFI_BUFFER_TOO_SMALL) {
+		hlist = malloc(hsize);
+		if (hlist == NULL)
+			return (ENOMEM);
+		status = BS->LocateHandle(ByProtocol, &gop_guid, NULL, &hsize,
+		    hlist);
+		if (EFI_ERROR(status))
+			free(hlist);
+	}
+	if (EFI_ERROR(status))
+		return (efi_status_to_errno(status));
+
+	nhandles = hsize / sizeof (*hlist);
+
+	/*
+	 * Search for ConOut protocol, if not found, use first handle.
+	 */
+	h = *hlist;
+	for (i = 0; i < nhandles; i++) {
+		void *dummy = NULL;
+
+		status = OpenProtocolByHandle(hlist[i], &conout_guid, &dummy);
+		if (status == EFI_SUCCESS) {
+			h = hlist[i];
+			break;
+		}
+	}
+
+	status = OpenProtocolByHandle(h, &gop_guid, (void **)&gop);
+	free(hlist);
+
 	if (status == EFI_SUCCESS) {
 		/* Save default mode. */
 		if (default_mode == UINT32_MAX) {

@@ -475,7 +475,6 @@ vmcb_init(struct svm_softc *sc, int vcpu, uint64_t iopm_base_pa,
 			svm_enable_intercept(sc, vcpu, VMCB_CR_INTCPT, mask);
 	}
 
-
 	/*
 	 * Intercept everything when tracing guest exceptions otherwise
 	 * just intercept machine check exception.
@@ -1836,7 +1835,7 @@ check_asid(struct svm_softc *sc, int vcpuid, pmap_t pmap, uint_t thiscpu)
 
 	eptgen = pmap->pm_eptgen;
 	flush = hma_svm_asid_update(&vcpustate->hma_asid, flush_by_asid(),
-	    vcpustate->eptgen == eptgen);
+	    vcpustate->eptgen != eptgen);
 
 	if (flush != VMCB_TLB_FLUSH_NOTHING) {
 		ctrl->asid = vcpustate->hma_asid.hsa_asid;
@@ -1913,6 +1912,19 @@ svm_dr_leave_guest(struct svm_regctx *gctx)
 	load_dr7(gctx->host_dr7);
 }
 
+static void
+svm_apply_tsc_adjust(struct svm_softc *svm_sc, int vcpuid)
+{
+	const uint64_t offset = vcpu_tsc_offset(svm_sc->vm, vcpuid, true);
+	struct vmcb_ctrl *ctrl = svm_get_vmcb_ctrl(svm_sc, vcpuid);
+
+	if (ctrl->tsc_offset != offset) {
+		ctrl->tsc_offset = offset;
+		svm_set_dirty(svm_sc, vcpuid, VMCB_CACHE_I);
+	}
+}
+
+
 /*
  * Start vcpu with specified RIP.
  */
@@ -1971,6 +1983,8 @@ svm_vmrun(void *arg, int vcpu, uint64_t rip, pmap_t pmap)
 		vcpustate->lastcpu = curcpu;
 		vmm_stat_incr(vm, vcpu, VCPU_MIGRATIONS, 1);
 	}
+
+	svm_apply_tsc_adjust(svm_sc, vcpu);
 
 	svm_msr_guest_enter(svm_sc, vcpu);
 
