@@ -38,7 +38,7 @@
  * http://www.illumos.org/license/CDDL.
  *
  * Copyright 2015 Pluribus Networks Inc.
- * Copyright 2020 Joyent, Inc.
+ * Copyright 2021 Joyent, Inc.
  * Copyright 2020 Oxide Computer Company
  */
 
@@ -3737,7 +3737,7 @@ vm_ioport_unhook(struct vm *vm, void **cookie)
 int
 vm_arc_resv(struct vm *vm, uint64_t len)
 {
-	/* Since we already ahve the compat macros included, we use those */
+	/* Since we already have the compat macros included, we use those */
 	size_t pages = (size_t)roundup2(len, PAGE_SIZE) >> PAGE_SHIFT;
 	int err = 0;
 
