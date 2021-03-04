@@ -196,7 +196,7 @@ struct vm {
 	uint16_t	threads;		/* (o) num of threads/core */
 	uint16_t	maxcpus;		/* (o) max pluggable cpus */
 	uint64_t	boot_tsc_offset;	/* (i) TSC offset at VM boot */
-	size_t		arc_resv;
+	size_t		arc_resv;		/* # of pages take from ARC */
 
 	struct ioport_config ioports;		/* (o) ioport handling */
 };
@@ -652,7 +652,7 @@ vm_cleanup(struct vm *vm, bool destroy)
 		vm->vmspace = NULL;
 
 #ifndef __FreeBSD__
-		arc_virt_machine_release(vm->arc_resv >> PAGE_SHIFT);
+		arc_virt_machine_release(vm->arc_resv);
 		vm->arc_resv = 0;
 #endif
 
@@ -3733,16 +3733,19 @@ vm_ioport_unhook(struct vm *vm, void **cookie)
 	*cookie = NULL;
 }
 
+#ifndef __FreeBSD__
 int
 vm_arc_resv(struct vm *vm, uint64_t len)
 {
+	/* Since we already ahve the compat macros included, we use those */
+	size_t pages = (size_t)roundup2(len, PAGE_SIZE) >> PAGE_SHIFT;
 	int err = 0;
 
-	err = arc_virt_machine_reserve((size_t)(len >> PAGE_SHIFT));
+	err = arc_virt_machine_reserve(pages);
 	if (err != 0)
 		return (err);
 
-	vm->arc_resv += len;
+	vm->arc_resv += pages;
 	return (0);
 }
 #endif /* __FreeBSD__ */
