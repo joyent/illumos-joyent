@@ -77,6 +77,7 @@ lx_thrkill(pid_t tgid, pid_t pid, int lx_sig, boolean_t tgkill)
 	proc_t *pp, *cp = curproc;
 	sigqueue_t *sqp;
 	int sig, rv;
+	pid_t initpid = cp->p_zone->zone_proc_initpid;
 
 	/*
 	 * Unlike kill(2), Linux tkill(2) doesn't allow signals to
@@ -94,10 +95,7 @@ lx_thrkill(pid_t tgid, pid_t pid, int lx_sig, boolean_t tgkill)
 	 *
 	 * Otherwise, extract the tid and real pid from the Linux pid.
 	 */
-	if (pid == 1) {
-		pid_t initpid;
-
-		initpid = cp->p_zone->zone_proc_initpid;
+	if ((pid == 1) || (tgkill && tgid == 1)) {
 		if ((rv = lx_init_sig_check(sig, initpid)) != 0) {
 			return (set_errno(rv));
 		}
@@ -115,8 +113,10 @@ lx_thrkill(pid_t tgid, pid_t pid, int lx_sig, boolean_t tgkill)
 	 * Make sure the thread group matches the thread.
 	 */
 	if (tgkill) {
+		pid_t targetpid = (tgid == 1) ? initpid : tgid;
+
 		if ((pid == 1 && tgid != 1) ||
-		    (pid != 1 && tgid != pp->p_pid)) {
+		    (pid != 1 && pp->p_pid != targetpid)) {
 			mutex_exit(&pp->p_lock);
 			rv = set_errno(ESRCH);
 			goto free_and_exit;
