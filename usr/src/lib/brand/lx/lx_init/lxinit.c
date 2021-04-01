@@ -810,7 +810,7 @@ lxi_parse_route_line(const char *line, custr_t *cu, char *gw, char *dst,
 }
 
 static void
-lxi_net_process_route_line(const char *line, int llonly)
+lxi_net_process_route_line(const char *line, boolean_t llonly)
 {
 	custr_t *cu = NULL;
 	int pfx = -1;
