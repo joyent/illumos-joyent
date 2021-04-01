@@ -23,6 +23,9 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2019 Joyent, Inc.
+ */
 
 #include "lint.h"
 #include <sys/types.h>
@@ -64,7 +67,7 @@ port_associate(int port, int source, uintptr_t object, int events, void *user)
 
 
 int
-port_get(int port, port_event_t *pe, struct timespec *to)
+port_get(int port, port_event_t *pe, const struct timespec *to)
 {
 	rval_t	r;
 	if (to)
@@ -77,7 +80,7 @@ port_get(int port, port_event_t *pe, struct timespec *to)
 
 int
 port_getn(int port, port_event_t list[], uint_t max, uint_t *nget,
-    struct timespec *timeout)
+    const struct timespec *timeout)
 {
 	rval_t	r;
 	if (nget == NULL) {

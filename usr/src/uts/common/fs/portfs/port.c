@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright (c) 2015 Joyent, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -615,6 +615,20 @@ portfs(int opcode, uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3,
 			error = port_getn(pp, (port_event_t *)a1, 1,
 			    (uint_t *)&nget, &port_timer);
 		} while (nget == 0 && error == 0 && port_timer.pgt_loop);
+
+		/*
+		 * There are cases when a timeout is given to port_getn() where
+		 * it returns no events but also no error, such as when events
+		 * are available but can't be copied out, or when there are no
+		 * events and the timeout is all zero.
+		 *
+		 * This isn't a problem in PORT_GETN as the number of retrieved
+		 * events is always returned correctly, but in the case of
+		 * PORT_GET we need to fix this up here and return ETIME as
+		 * documented.
+		 */
+		if (nget == 0 && error == 0 && a4 != 0)
+			error = ETIME;
 		break;
 	}
 	case	PORT_GETN:
