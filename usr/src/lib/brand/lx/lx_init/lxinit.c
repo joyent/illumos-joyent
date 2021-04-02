@@ -742,9 +742,6 @@ lxi_net_setup_gateways(zone_dochandle_t handle)
  *
  * i.e. gateway address, destination network, and whether this is
  * a "link local" route or a next hop route.
- *
- * passing a true value  to the llonly argument to this method causes only
- * those lines with the link-local flag to be processed and vice-versa
  */
 static void
 lxi_parse_route_line(const char *line, custr_t *cu, char *gw, char *dst,
