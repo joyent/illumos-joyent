@@ -417,9 +417,8 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
     uint_t flags, const void *datap)
 {
 	char			fstype[16];
-	char			source[MAXPATHLEN];
-	char			target[MAXPATHLEN];
-	char			options[MAX_MNTOPT_STR];
+	char			*source, *target, *options;
+	size_t			sourcel, targetl, optionsl;
 	int			sflags, rv;
 	struct mounta		ma, *map = &ma;
 	vfs_t			*vfsp;
@@ -455,15 +454,25 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 		return (0);
 	}
 
+	/* Make sure we support the requested mount flags. */
+	if ((flags & ~LX_MS_SUPPORTED) != 0)
+		return (set_errno(ENOTSUP));
+
+	sourcel = targetl = MAXPATHLEN;
+	optionsl = MAX_MNTOPT_STR;
+	source = kmem_alloc(sourcel, KM_SLEEP);
+	target = kmem_alloc(targetl, KM_SLEEP);
+	options = kmem_alloc(optionsl, KM_SLEEP);
+
 	sflags = MS_SYSSPACE | MS_OPTIONSTR;
 	options[0] = '\0';
 
 	/* Copy in parameters that are always present. */
-	if ((rv = lx_mnt_copyin_arg(sourcep, source, sizeof (source))) != 0)
-		return (set_errno(rv));
+	if ((rv = lx_mnt_copyin_arg(sourcep, source, sourcel)) != 0)
+		goto out;
 
-	if ((rv = lx_mnt_copyin_arg(targetp, target, sizeof (target))) != 0)
-		return (set_errno(rv));
+	if ((rv = lx_mnt_copyin_arg(targetp, target, targetl)) != 0)
+		goto out;
 
 	/*
 	 * While SunOS is picky about mount(2) target paths being absolute,
@@ -474,23 +483,21 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 		vnode_t *vp;
 
 		if ((rv = lookupnameatcred(target, UIO_SYSSPACE, FOLLOW,
-		    NULLVPP, &vp, NULL, CRED())) != 0)
-			return (set_errno(rv));
+		    NULLVPP, &vp, NULL, CRED())) != 0) {
+			goto out;
+		}
 
 		rv = vnodetopath(NULL, vp, target, MAXPATHLEN, CRED());
 		VN_RELE(vp);
 		if (rv != 0)
-			return (set_errno(rv));
+			goto out;
 	}
-
-	/* Make sure we support the requested mount flags. */
-	if ((flags & ~LX_MS_SUPPORTED) != 0)
-		return (set_errno(ENOTSUP));
 
 	/* Copy in Linux mount options. */
 	if (datap != NULL &&
-	    (rv = lx_mnt_copyin_arg(datap, options, sizeof (options))) != 0)
-		return (set_errno(rv));
+	    (rv = lx_mnt_copyin_arg(datap, options, optionsl)) != 0) {
+		goto out;
+	}
 
 	/* Do filesystem specific mount work. */
 	if (flags & LX_MS_BIND) {
@@ -499,21 +506,21 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 
 		/* Verify Linux mount options. */
 		if ((rv = lx_mnt_opt_verify(options, lofs_options)) != 0)
-			return (set_errno(rv));
+			goto out;
 	} else if (strcmp(fstype, "tmpfs") == 0) {
 		char	idstr[64];
 
 		/* Verify Linux mount options. */
 		if ((rv = lx_mnt_opt_verify(options, lx_tmpfs_options)) != 0)
-			return (set_errno(rv));
+			goto out;
 
 		/*
 		 * Linux defaults to mode=1777 for tmpfs mounts.
 		 */
 		if (strstr(options, "mode=") == NULL) {
 			if (options[0] != '\0')
-				(void) strlcat(options, ",", sizeof (options));
-			(void) strlcat(options, "mode=1777", sizeof (options));
+				(void) strlcat(options, ",", optionsl);
+			(void) strlcat(options, "mode=1777", optionsl);
 		}
 
 		/*
@@ -527,22 +534,28 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 			uid = -1;
 			break;
 		case 1:
-			if (lx_mnt_opt_val(idstr, &uid) < 0)
-				return (set_errno(EINVAL));
+			if (lx_mnt_opt_val(idstr, &uid) < 0) {
+				rv = EINVAL;
+				goto out;
+			}
 			break;
 		default:
-			return (set_errno(E2BIG));
+			rv = E2BIG;
+			goto out;
 		}
 		switch (lx_mnt_opt_rm(options, "gid=", idstr, sizeof (idstr))) {
 		case 0:
 			gid = -1;
 			break;
 		case 1:
-			if (lx_mnt_opt_val(idstr, &gid) < 0)
-				return (set_errno(EINVAL));
+			if (lx_mnt_opt_val(idstr, &gid) < 0) {
+				rv = EINVAL;
+				goto out;
+			}
 			break;
 		default:
-			return (set_errno(E2BIG));
+			rv = E2BIG;
+			goto out;
 		}
 
 		/*
@@ -559,14 +572,14 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 
 		/* Verify Linux mount options. */
 		if ((rv = lx_mnt_opt_verify(options, lx_proc_options)) != 0)
-			return (set_errno(rv));
+			goto out;
 	} else if (strcmp(fstype, "sysfs") == 0) {
 		/* Translate sysfs mount requests to lx_sysfs requests. */
 		(void) strcpy(fstype, "lx_sysfs");
 
 		/* Verify Linux mount options. */
 		if ((rv = lx_mnt_opt_verify(options, lx_sysfs_options)) != 0)
-			return (set_errno(rv));
+			goto out;
 	} else if (strcmp(fstype, "cgroup") == 0) {
 		/* Translate cgroup mount requests to lx_cgroup requests. */
 		(void) strcpy(fstype, "lx_cgroup");
@@ -581,7 +594,7 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 
 		/* Verify Linux mount options. */
 		if ((rv = lx_mnt_opt_verify(options, lx_autofs_options)) != 0)
-			return (set_errno(rv));
+			goto out;
 
 		/* Linux seems to always allow overlay mounts */
 		sflags |= MS_OVERLAY;
@@ -608,23 +621,27 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 		flags &= ~(LX_MS_RELATIME | LX_MS_NOATIME);
 	}
 	if ((flags & LX_MS_NODEV) &&
-	    (rv = lx_mnt_add_opt("nodev", options, sizeof (options))) != 0)
-		return (set_errno(rv));
+	    (rv = lx_mnt_add_opt("nodev", options, optionsl)) != 0) {
+		goto out;
+	}
 	if ((flags & LX_MS_NOEXEC) &&
-	    (rv = lx_mnt_add_opt("noexec", options, sizeof (options))) != 0)
-		return (set_errno(rv));
+	    (rv = lx_mnt_add_opt("noexec", options, optionsl)) != 0) {
+		goto out;
+	}
 	if ((flags & LX_MS_NOATIME) &&
-	    (rv = lx_mnt_add_opt("noatime", options, sizeof (options))) != 0)
-		return (set_errno(rv));
+	    (rv = lx_mnt_add_opt("noatime", options, optionsl)) != 0) {
+		goto out;
+	}
 
 	if ((rv = lookupname(target, UIO_SYSSPACE, FOLLOW, NULLVPP, &vp)) != 0)
-		return (set_errno(rv));
+		goto out;
 
 	/* If mounting proc over itself, just return ok */
 	if (strcmp(fstype, "lx_proc") == 0 && strcmp("lx_proc",
 	    vfssw[vp->v_vfsp->vfs_fstype].vsw_name) == 0) {
 		VN_RELE(vp);
-		return (0);
+		rv = 0;
+		goto out;
 	}
 
 	map->spec = source;
@@ -634,12 +651,12 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 	map->dataptr = NULL;
 	map->datalen = 0;
 	map->optptr = options;
-	map->optlen = sizeof (options);
+	map->optlen = optionsl;
 
 	rv = domount(NULL, map, vp, CRED(), &vfsp);
 	VN_RELE(vp);
 	if (rv != 0)
-		return (set_errno(rv));
+		goto out;
 
 	VFS_RELE(vfsp);
 	if (strcmp(fstype, "tmpfs") == 0 && (uid != -1 || gid != -1)) {
@@ -651,7 +668,12 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 		}
 	}
 
-	return (0);
+out:
+	kmem_free(source, sourcel);
+	kmem_free(target, targetl);
+	kmem_free(options, optionsl);
+
+	return (rv == 0 ? rv : set_errno(rv));
 }
 
 /*

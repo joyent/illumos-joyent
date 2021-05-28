@@ -8171,8 +8171,8 @@ lxpr_readlink_exe(lxpr_node_t *lxpnp, char *buf, size_t size, cred_t *cr)
 static int
 lxpr_readlink(vnode_t *vp, uio_t *uiop, cred_t *cr, caller_context_t *ct)
 {
-	char bp[MAXPATHLEN + 1];
-	size_t buflen = sizeof (bp);
+	char *bp;
+	size_t buflen, klen;
 	lxpr_node_t *lxpnp = VTOLXP(vp);
 	vnode_t *rvp = lxpnp->lxpr_realvp;
 	pid_t pid;
@@ -8199,11 +8199,14 @@ lxpr_readlink(vnode_t *vp, uio_t *uiop, cred_t *cr, caller_context_t *ct)
 	if (vp->v_type != VLNK && lxpnp->lxpr_type != LXPR_PID_FD_FD)
 		return (EINVAL);
 
+	buflen = klen = MAXPATHLEN + 1;
+	bp = kmem_alloc(klen, KM_SLEEP);
+
 	/* Try to produce a symlink name for anything that has a realvp */
 	if (rvp != NULL) {
 		error = lxpr_doaccess(lxpnp, B_TRUE, VREAD, 0, cr, ct);
 		if (error != 0)
-			return (error);
+			goto out;
 
 		error = vnodetopath(NULL, rvp, bp, buflen, cr);
 
@@ -8221,7 +8224,7 @@ lxpr_readlink(vnode_t *vp, uio_t *uiop, cred_t *cr, caller_context_t *ct)
 			 */
 			if (lxpnp->lxpr_type != LXPR_PID_FD_FD ||
 			    lxpr_readlink_fdnode(lxpnp, bp, buflen) != 0) {
-				return (error);
+				goto out;
 			}
 		}
 	} else {
@@ -8239,18 +8242,24 @@ lxpr_readlink(vnode_t *vp, uio_t *uiop, cred_t *cr, caller_context_t *ct)
 		case LXPR_PID_CURDIR:
 		case LXPR_PID_ROOTDIR:
 		case LXPR_PID_EXE:
-			return (EACCES);
+			error = EACCES;
+			goto out;
 		default:
 			/*
 			 * Need to return error so that nothing thinks
 			 * that the symlink is empty and hence "."
 			 */
-			return (EINVAL);
+			error = EINVAL;
+			goto out;
 		}
 	}
 
 	/* copy the link data to user space */
-	return (uiomove(bp, strlen(bp), UIO_READ, uiop));
+	error = uiomove(bp, strlen(bp), UIO_READ, uiop);
+
+out:
+	kmem_free(bp, klen);
+	return (error);
 }
 
 
