@@ -118,6 +118,7 @@ static mount_opt_t lx_tmpfs_options[] = {
 	{ "mode",		MOUNT_OPT_UINT },
 	{ "uid",		MOUNT_OPT_UINT },
 	{ "gid",		MOUNT_OPT_UINT },
+	{ "nr_inodes",		MOUNT_OPT_PASSTHRU },
 	{ NULL,			MOUNT_OPT_INVALID }
 };
 
@@ -312,7 +313,8 @@ lx_mnt_opt_rm(char *opts, char *rmopt, char *retstr, int retlen)
 
 	ASSERT((opts != NULL) && (rmopt != NULL));
 
-	retstr[0] = '\0';
+	if (retstr != NULL)
+		retstr[0] = '\0';
 
 	/* If no options were specified, there's no problem. */
 	if (opts_len == 0)
@@ -324,12 +326,13 @@ lx_mnt_opt_rm(char *opts, char *rmopt, char *retstr, int retlen)
 	for (optend = optstart; *optend != ',' && *optend != '\0'; optend++)
 		;
 
-	/*LINTED*/
 	optlen = optend - optstart;
-	if (optlen >= retlen)
-		return (-1);
-	(void) strncpy(retstr, optstart, optlen);
-	retstr[optlen] = '\0';
+	if (retstr != NULL) {
+		if (optlen >= retlen)
+			return (-1);
+		(void) strncpy(retstr, optstart, optlen);
+		retstr[optlen] = '\0';
+	}
 
 	if (*optend == ',')
 		optend++;
@@ -512,6 +515,12 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 				(void) strlcat(options, ",", sizeof (options));
 			(void) strlcat(options, "mode=1777", sizeof (options));
 		}
+
+		/*
+		 * Linux supports "nr_inodes=<val>" for tmpfs. There is no
+		 * analogue in illumos - drop the option.
+		 */
+		(void) lx_mnt_opt_rm(options, "nr_inodes=", NULL, 0);
 
 		switch (lx_mnt_opt_rm(options, "uid=", idstr, sizeof (idstr))) {
 		case 0:
