@@ -10087,6 +10087,7 @@ f usr/lib/mdb/kvm/amd64/ip.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/ipc.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/ipp.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/krtld.so 0555 root sys
+f usr/lib/mdb/kvm/amd64/kstat.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/lofs.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/logindmux.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/mac.so 0555 root sys

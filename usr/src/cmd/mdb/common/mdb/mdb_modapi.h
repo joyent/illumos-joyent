@@ -249,6 +249,7 @@ extern int mdb_getareg(mdb_tid_t, const char *, mdb_reg_t *);
 #define	MDB_OPT_UINTPTR	4			/* uintptr_t argument */
 #define	MDB_OPT_UINT64	5			/* uint64_t argument */
 #define	MDB_OPT_UINTPTR_SET	6		/* boolean_t+uintptr_t args */
+#define	MDB_OPT_INT_SET	7			/* int argument */
 
 extern int mdb_getopts(int, const mdb_arg_t *, ...) __sentinel(0);
 

@@ -24,7 +24,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2019 Joyent, Inc.
+ */
 
 #include <mdb/mdb_types.h>
 #include <mdb/mdb_argvec.h>
@@ -186,6 +188,7 @@ argvec_process_opt(const mdb_opt_t *opt, const mdb_arg_t *arg)
 {
 	uint64_t ui64;
 	uintptr_t uip;
+	int i;
 
 	switch (opt->opt_type) {
 	case MDB_OPT_SETBITS:
@@ -222,6 +225,15 @@ argvec_process_opt(const mdb_opt_t *opt, const mdb_arg_t *arg)
 		else
 			ui64 = arg->a_un.a_val;
 		*((uint64_t *)opt->opt_valp) = ui64;
+		break;
+
+	case MDB_OPT_INT_SET:
+		*opt->opt_flag = TRUE;
+		if (arg->a_type == MDB_TYPE_STRING)
+			i = (int)mdb_strtoull(arg->a_un.a_str);
+		else
+			i = (int)arg->a_un.a_val;
+		*((int *)opt->opt_valp) = i;
 		break;
 
 	case MDB_OPT_SUBOPTS:
@@ -300,7 +312,8 @@ argvec_getopts(const mdb_opt_t *opts, const mdb_arg_t *argv, int argc)
 			    optp->opt_type == MDB_OPT_UINTPTR ||
 			    optp->opt_type == MDB_OPT_UINTPTR_SET ||
 			    optp->opt_type == MDB_OPT_SUBOPTS ||
-			    optp->opt_type == MDB_OPT_UINT64) {
+			    optp->opt_type == MDB_OPT_UINT64 ||
+			    optp->opt_type == MDB_OPT_INT_SET) {
 				/*
 				 * More text after the option letter:
 				 * forge a string argument from remainder.
@@ -364,7 +377,9 @@ mdb_getopts(int argc, const mdb_arg_t *argv, ...)
 		if (op->opt_type == MDB_OPT_SETBITS ||
 		    op->opt_type == MDB_OPT_CLRBITS) {
 			op->opt_bits = va_arg(alist, uint_t);
-		} else if (op->opt_type == MDB_OPT_UINTPTR_SET) {
+		} else if (op->opt_type == MDB_OPT_UINTPTR_SET ||
+		    op->opt_type == MDB_OPT_INT_SET) {
+
 			op->opt_flag = va_arg(alist, boolean_t *);
 		} else if (op->opt_type == MDB_OPT_SUBOPTS) {
 			op->opt_subopts = va_arg(alist, mdb_subopt_t *);

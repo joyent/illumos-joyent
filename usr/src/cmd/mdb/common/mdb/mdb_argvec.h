@@ -24,10 +24,12 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2019 Joyent, Inc.
+ */
+
 #ifndef	_MDB_ARGVEC_H
 #define	_MDB_ARGVEC_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 
@@ -43,8 +45,8 @@ typedef struct mdb_argvec {
 	size_t a_size;			/* Array size */
 } mdb_argvec_t;
 
-/* see mdb_modapi.h for 1-6 */
-#define	MDB_OPT_SUBOPTS	7		/* Option requires a mdb_subopt_t */
+/* see mdb_modapi.h for 1-7 */
+#define	MDB_OPT_SUBOPTS	8		/* Option requires a mdb_subopt_t */
 					/* list and a value argument */
 
 typedef struct mdb_subopt {
