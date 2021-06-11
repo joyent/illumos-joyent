@@ -728,28 +728,40 @@ lxpr_lookup_fdnode(vnode_t *dvp, const char *name)
 		lxpr_unlock(p);
 		lxpr_freenode(lxfp);
 		return (NULL);
-	} else {
-		/*
-		 * Fill in the lxpr_node so future references will be able to
-		 * find the underlying vnode. The vnode is held on the realvp.
-		 */
-		lxfp->lxpr_realvp = vp;
-
-		/*
-		 * For certain entries (sockets, pipes, etc), Linux expects a
-		 * bogus-named symlink.  If that's the case, report the type as
-		 * VNON to bypass link-following elsewhere in the vfs system.
-		 *
-		 * See lxpr_readlink for more details.
-		 */
-		if (lxpr_readlink_fdnode(lxfp, NULL, 0) == 0)
-			LXPTOV(lxfp)->v_type = VNON;
 	}
+
+	/*
+	 * Fill in the lxpr_node so future references will be able to
+	 * find the underlying vnode. The vnode is held on the realvp.
+	 */
+	lxfp->lxpr_realvp = vp;
+	vp = LXPTOV(lxfp);
+
+	/*
+	 * Since the resulting vnode is highly likely to be at some abitrary
+	 * position in another filesystem, the vnode type is set to VDIR
+	 * (causing lookups to be done via lxpr_lookup) and the VTRAVERSE flag
+	 * is set. See the comment in lxpr_lookup() for more details.
+	 */
+	if (lxfp->lxpr_realvp->v_type == VDIR) {
+		vp->v_type = VDIR;
+		vp->v_flag |= VTRAVERSE;
+	}
+
+	/*
+	 * For certain entries (sockets, pipes, etc), Linux expects a
+	 * bogus-named symlink.  If that's the case, report the type as
+	 * VNON to bypass link-following elsewhere in the vfs system.
+	 *
+	 * See lxpr_readlink for more details.
+	 */
+	if (lxpr_readlink_fdnode(lxfp, NULL, 0) == 0)
+		vp->v_type = VNON;
 
 	mutex_enter(&p->p_lock);
 	lxpr_unlock(p);
-	ASSERT(LXPTOV(lxfp) != NULL);
-	return (LXPTOV(lxfp));
+	ASSERT(vp != NULL);
+	return (vp);
 }
 
 /*

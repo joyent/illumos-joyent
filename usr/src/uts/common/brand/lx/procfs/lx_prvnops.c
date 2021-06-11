@@ -753,13 +753,14 @@ lxpr_open(vnode_t **vpp, int flag, cred_t *cr, caller_context_t *ct)
 
 	/*
 	 * If we are opening an underlying file only allow regular files,
-	 * fifos or sockets; reject the open for anything else.
+	 * directories, fifos or sockets; reject the open for anything else.
 	 * Just do it if we are opening the current or root directory.
 	 */
 	if (lxpnp->lxpr_realvp != NULL) {
 		rvp = lxpnp->lxpr_realvp;
 
-		if (type == LXPR_PID_FD_FD && rvp->v_type != VREG &&
+		if (type == LXPR_PID_FD_FD &&
+		    rvp->v_type != VREG && rvp->v_type != VDIR &&
 		    rvp->v_type != VFIFO && rvp->v_type != VSOCK) {
 			error = EACCES;
 		} else {
@@ -6428,16 +6429,8 @@ lxpr_lookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
 	 * we should never get here because the lookup
 	 * is done on the realvp for these nodes
 	 */
-	ASSERT(type != LXPR_PID_FD_FD &&
-	    type != LXPR_PID_CURDIR &&
+	ASSERT(type != LXPR_PID_CURDIR &&
 	    type != LXPR_PID_ROOTDIR);
-
-	/*
-	 * restrict lookup permission to owner or root
-	 */
-	if ((error = lxpr_access(dp, VEXEC, 0, cr, ct)) != 0) {
-		return (error);
-	}
 
 	/*
 	 * Just return the parent vnode if that's where we are trying to go.
@@ -6446,6 +6439,35 @@ lxpr_lookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
 		VN_HOLD(lxpnp->lxpr_parent);
 		*vpp = lxpnp->lxpr_parent;
 		return (0);
+	}
+
+	switch (type) {
+	case LXPR_PID_FD_FD:
+	case LXPR_PID_TID_FD_FD:
+		/*
+		 * Performing a VOP_LOOKUP on the underlying vnode and emitting
+		 * the resulting vnode, without encapsulation, as our own is a
+		 * very special case when it comes to the assumptions built
+		 * into VFS.
+		 *
+		 * Since the resulting vnode is highly likely to be at some
+		 * abitrary position in another filesystem, we insist that the
+		 * VTRAVERSE flag is set on the parent.  This prevents things
+		 * such as the v_path freshness logic from mistaking the
+		 * resulting vnode as a "real" child of the parent, rather than
+		 * a consequence of this "procfs wormhole".
+		 *
+		 * Failure to establish such protections can lead to
+		 * incorrectly calculated v_paths being set on nodes reached
+		 * through these lookups.
+		 */
+		ASSERT((dp->v_flag & VTRAVERSE) != 0);
+
+		dp = lxpnp->lxpr_realvp;
+		return (VOP_LOOKUP(dp, comp, vpp, pathp, flags, rdir, cr, ct,
+                    direntflags, realpnp));
+	default:
+		break;
 	}
 
 	/*
@@ -6457,6 +6479,12 @@ lxpr_lookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
 		*vpp = dp;
 		return (0);
 	}
+
+	/*
+	 * restrict lookup permission to owner or root
+	 */
+	if ((error = lxpr_access(dp, VEXEC, 0, cr, ct)) != 0)
+		return (error);
 
 	*vpp = (lxpr_lookup_function[type](dp, comp));
 	return ((*vpp == NULL) ? ENOENT : 0);
