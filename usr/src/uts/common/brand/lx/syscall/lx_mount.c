@@ -480,17 +480,55 @@ lx_mount(const char *sourcep, const char *targetp, const char *fstypep,
 	 * requirement we must lookup the full path.
 	 */
 	if (target[0] != '/') {
-		vnode_t *vp;
-
-		if ((rv = lookupnameatcred(target, UIO_SYSSPACE, FOLLOW,
-		    NULLVPP, &vp, NULL, CRED())) != 0) {
+		if ((rv = lookupname(target, UIO_SYSSPACE, FOLLOW,
+		    NULLVPP, &vp)) != 0) {
 			goto out;
 		}
 
-		rv = vnodetopath(NULL, vp, target, MAXPATHLEN, CRED());
+		rv = vnodetopath(NULL, vp, target, targetl, CRED());
 		VN_RELE(vp);
 		if (rv != 0)
 			goto out;
+	}
+
+	/*
+	 * Following commits* in September 2020, systemd mounts most
+	 * filesystems via an open file descriptor in order to avoid
+	 * following mount point symlinks.
+	 * It does this by opening the mount point with O_NOFOLLOW|O_PATH
+	 * and then performing the mount on /proc/self/fd/<fd>.
+	 * In illumos, this results in a mount attempt on the lx_proc vnode
+	 * instead of the intended mount point, which fails since /proc files
+	 * are generally marked as unmountable (and we wouldn't want this
+	 * anyway).
+	 * As a workaround, the /proc vnode's link target is retrieved and
+	 * used for mount. This lookup causes procfs to return the path of
+	 * the vnode's realvp which is the path of the underlying directory.
+	 * Additonally, since systemd is holding an open file descriptor for
+	 * the mount point, overlay mounts also need to be allowed.
+	 *
+	 * * https://github.com/systemd/systemd/commit/28126409b20bca9aa6f
+	 * * https://github.com/systemd/systemd/commit/21935150a0c42b91a32
+	 */
+	if (strncmp(target, "/proc/self/fd/", 14) == 0 &&
+	    lookupname(target, UIO_SYSSPACE, NO_FOLLOW, NULLVPP, &vp) == 0) {
+		struct iovec iov = {0};
+		struct uio uio = {0};
+
+		iov.iov_base = target;
+		iov.iov_len = targetl;
+		uio.uio_iov = &iov;
+		uio.uio_iovcnt = 1;
+		uio.uio_resid = targetl;
+		uio.uio_segflg = UIO_SYSSPACE;
+		uio.uio_llimit = MAXOFFSET_T;
+
+		rv = VOP_READLINK(vp, &uio, CRED(), NULL);
+		VN_RELE(vp);
+		if (rv != 0)
+			goto out;
+		target[targetl - uio.uio_resid] = '\0';
+		sflags |= MS_OVERLAY;
 	}
 
 	/* Copy in Linux mount options. */
