@@ -63,9 +63,9 @@ typedef uint32_t tem_char_t;	/* 32bit char to support UTF-8 */
 #define	TEM_CHAR(c)		((c) & 0x1fffff)
 #define	TEM_CHAR_ATTR(c)	(((c) >> 21) & TEM_ATTR_MASK)
 #define	TEM_ATTR(c)		(((c) & TEM_ATTR_MASK) << 21)
+#define	TEM_ATTR_ISSET(c, a)	((TEM_CHAR_ATTR(c) & (a)) == (a))
 
 #define	TEM_MAXPARAMS	5	/* maximum number of ANSI paramters */
-#define	TEM_MAXTAB	40	/* maximum number of tab stops */
 #define	TEM_MAXFKEY	30	/* max length of function key with <ESC>Q */
 #define	MAX_TEM		2	/* max number of loadable terminal emulators */
 
@@ -171,8 +171,9 @@ struct tem_vt_state {
 	int	tvs_curparam;	/* current param # of output esc seq */
 	int	tvs_paramval;	/* value of current param */
 	int	tvs_params[TEM_MAXPARAMS];  /* parameters of output esc seq */
-	screen_pos_t	tvs_tabs[TEM_MAXTAB];	/* tab stops */
-	int	tvs_ntabs;		/* number of tabs used */
+	screen_pos_t	*tvs_tabs;	/* tab stops */
+	size_t	tvs_maxtab;		/* maximum number of tab stops */
+	size_t	tvs_ntabs;		/* number of tabs used */
 	int	tvs_nscroll;		/* number of lines to scroll */
 
 	struct tem_char_pos tvs_s_cursor;	/* start cursor position */
@@ -182,7 +183,7 @@ struct tem_vt_state {
 	term_char_t	*tvs_outbuf;	/* place to keep incomplete lines */
 	int		tvs_outindex;	/* index into a_outbuf */
 	void		*tvs_pix_data;	/* pointer to tmp bitmap area */
-	int		tvs_pix_data_size;
+	unsigned	tvs_pix_data_size;
 	text_color_t	tvs_fg_color;
 	text_color_t	tvs_bg_color;
 	int		tvs_first_line;	/* kernel console output begins */
@@ -225,7 +226,7 @@ typedef struct tem_state {
 	struct tem_size ts_p_dimension;	/* screen dimensions in pixels */
 	struct tem_pix_pos ts_p_offset;	/* pix offset to center the display */
 
-	int	ts_pix_data_size;	/* size of bitmap data areas */
+	unsigned ts_pix_data_size;	/* size of bitmap data areas */
 	int	ts_pdepth;		/* pixel depth */
 	struct font	ts_font;	/* font table */
 	bool	update_font;		/* flag the font change */

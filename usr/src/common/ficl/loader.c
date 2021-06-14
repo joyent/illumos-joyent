@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2000 Daniel Capo Sobral
  * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2020 RackTop Systems, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -43,6 +44,7 @@
 #else
 #include <stand.h>
 #include <gfx_fb.h>
+#include <sys/tem_impl.h>
 #include "bootstrap.h"
 #endif
 #ifdef _STANDALONE
@@ -70,9 +72,10 @@
  *		.#	    ( value -- )
  */
 
-/* ( flags x1 y1 x2 y2 -- flag ) */
+#ifdef _STANDALONE
+/* Put image using terminal coordinates. ( flags x1 y1 x2 y2 -- flag ) */
 void
-ficl_fb_putimage(ficlVm *pVM)
+ficl_term_putimage(ficlVm *pVM)
 {
 	char *namep, *name;
 	ficlUnsigned names;
@@ -90,6 +93,17 @@ ficl_fb_putimage(ficlVm *pVM)
 	x1 = ficlStackPopUnsigned(ficlVmGetDataStack(pVM));
 	f = ficlStackPopUnsigned(ficlVmGetDataStack(pVM));
 
+	x1 = tems.ts_p_offset.x + x1 * tems.ts_font.vf_width;
+	y1 = tems.ts_p_offset.y + y1 * tems.ts_font.vf_height;
+	if (x2 != 0) {
+		x2 = tems.ts_p_offset.x +
+		    x2 * tems.ts_font.vf_width;
+	}
+	if (y2 != 0) {
+		y2 = tems.ts_p_offset.y +
+		    y2 * tems.ts_font.vf_height;
+	}
+
 	name = ficlMalloc(names + 1);
 	if (!name)
 		ficlVmThrowError(pVM, "Error: out of memory");
@@ -97,6 +111,46 @@ ficl_fb_putimage(ficlVm *pVM)
 	name[names] = '\0';
 
 	if (png_open(&png, name) == PNG_NO_ERROR) {
+		if (gfx_fb_putimage(&png, x1, y1, x2, y2, f) == 0)
+			ret = FICL_TRUE;	/* success */
+		(void) png_close(&png);
+	}
+	ficlFree(name);
+	ficlStackPushInteger(ficlVmGetDataStack(pVM), ret);
+}
+#endif
+
+/* ( flags x1 y1 x2 y2 -- flag ) */
+void
+ficl_fb_putimage(ficlVm *pVM)
+{
+	char *namep, *name;
+	ficlUnsigned names;
+	ficlInteger ret = FICL_FALSE;
+	uint32_t x1, y1, x2, y2, f;
+	png_t png;
+	int error;
+
+	FICL_STACK_CHECK(ficlVmGetDataStack(pVM), 7, 1);
+
+	names = ficlStackPopUnsigned(ficlVmGetDataStack(pVM));
+	namep = (char *)ficlStackPopPointer(ficlVmGetDataStack(pVM));
+	y2 = ficlStackPopUnsigned(ficlVmGetDataStack(pVM));
+	x2 = ficlStackPopUnsigned(ficlVmGetDataStack(pVM));
+	y1 = ficlStackPopUnsigned(ficlVmGetDataStack(pVM));
+	x1 = ficlStackPopUnsigned(ficlVmGetDataStack(pVM));
+	f = ficlStackPopUnsigned(ficlVmGetDataStack(pVM));
+
+	name = ficlMalloc(names + 1);
+	if (!name)
+		ficlVmThrowError(pVM, "Error: out of memory");
+	(void) strncpy(name, namep, names);
+	name[names] = '\0';
+
+	if ((error = png_open(&png, name)) != PNG_NO_ERROR) {
+		if (f & FL_PUTIMAGE_DEBUG)
+			printf("%s\n", png_error_string(error));
+	} else {
 		if (gfx_fb_putimage(&png, x1, y1, x2, y2, f) == 0)
 			ret = FICL_TRUE;	/* success */
 		(void) png_close(&png);
@@ -1052,6 +1106,8 @@ ficlSystemCompilePlatform(ficlSystem *pSys)
 	(void) ficlDictionarySetPrimitive(dp, "term-drawrect",
 	    ficl_term_drawrect, FICL_WORD_DEFAULT);
 #ifdef _STANDALONE
+	(void) ficlDictionarySetPrimitive(dp, "term-putimage",
+	    ficl_term_putimage, FICL_WORD_DEFAULT);
 	/* Register words from linker set. */
 	SET_FOREACH(fnpp, Xficl_compile_set)
 		(*fnpp)(pSys);

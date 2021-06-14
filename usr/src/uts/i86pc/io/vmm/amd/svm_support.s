@@ -28,6 +28,7 @@
 
 /*
  * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #include <sys/asm_linkage.h>
@@ -35,10 +36,6 @@
 #include "svm_assym.h"
 
 /* Porting note: This is named 'svm_support.S' upstream. */
-
-#define	VMLOAD	.byte 0x0f, 0x01, 0xda
-#define	VMRUN	.byte 0x0f, 0x01, 0xd8
-#define	VMSAVE	.byte 0x0f, 0x01, 0xdb
 
 
 /*
@@ -86,7 +83,7 @@ ENTRY_NP(svm_launch)
 	movq	%rsi, SVMSTK_RSI(%rsp)
 	movq	%rdi, SVMSTK_RDI(%rsp)
 
-	/* VMLOAD and VMRUN expect the VMCB physaddr in %rax */
+	/* Save the physical address of the VMCB in %rax */
 	movq	%rdi, %rax
 
 	/* Restore guest state. */
@@ -105,9 +102,9 @@ ENTRY_NP(svm_launch)
 	movq	SCTX_RDI(%rsi), %rdi
 	movq	SCTX_RSI(%rsi), %rsi	/* %rsi must be restored last */
 
-	VMLOAD
-	VMRUN
-	VMSAVE
+	vmload	%rax
+	vmrun	%rax
+	vmsave	%rax
 
 	/* Grab the svm_regctx pointer */
 	movq	SVMSTK_RSI(%rsp), %rax
@@ -141,6 +138,18 @@ ENTRY_NP(svm_launch)
 	shrq	$32, %rdx
 	movl	$MSR_GSBASE, %ecx
 	wrmsr
+
+	/*
+	 * While SVM will save/restore the GDTR and IDTR, the TR does not enjoy
+	 * such treatment.  Reload the KTSS immediately, since it is used by
+	 * dtrace and other fault/trap handlers.
+	 */
+	movq	SVMSTK_RDX(%rsp), %rdi		/* %rdi = CPU */
+	movq	CPU_GDT(%rdi), %rdi		/* %rdi = cpu->cpu_gdt */
+	leaq	GDT_KTSS_OFF(%rdi), %rdi	/* %rdi = &cpu_gdt[GDT_KTSS] */
+	andb	$0xfd, SSD_TYPE(%rdi)		/* ssd_type.busy = 0 */
+	movw	$KTSS_SEL, %ax			/* reload kernel TSS */
+	ltr	%ax
 
 	SVM_GUEST_FLUSH_SCRATCH
 

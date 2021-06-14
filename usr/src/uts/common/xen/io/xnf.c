@@ -26,6 +26,7 @@
 
 /*
  * Copyright (c) 2014, 2017 by Delphix. All rights reserved.
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 /*
@@ -150,15 +151,6 @@
 #include <sys/debug.h>
 
 #include <io/xnf.h>
-
-#if defined(DEBUG) || defined(__lint)
-#define	XNF_DEBUG
-#endif
-
-#ifdef XNF_DEBUG
-int xnf_debug = 0;
-xnf_t *xnf_debug_instance = NULL;
-#endif
 
 /*
  * On a 32 bit PAE system physical and machine addresses are larger
@@ -563,9 +555,14 @@ xnf_data_txbuf_free_chain(xnf_t *xnfp, xnf_txbuf_t *txp)
 }
 
 static xnf_txbuf_t *
-xnf_data_txbuf_alloc(xnf_t *xnfp)
+xnf_data_txbuf_alloc(xnf_t *xnfp, int flag)
 {
-	xnf_txbuf_t *txp = kmem_cache_alloc(xnfp->xnf_tx_buf_cache, KM_SLEEP);
+	xnf_txbuf_t *txp;
+
+	if ((txp = kmem_cache_alloc(xnfp->xnf_tx_buf_cache, flag)) == NULL) {
+		return (NULL);
+	}
+
 	txp->tx_type = TX_DATA;
 	txp->tx_next = NULL;
 	txp->tx_prev = NULL;
@@ -991,12 +988,6 @@ xnf_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	int err;
 	char cachename[32];
 
-#ifdef XNF_DEBUG
-	if (xnf_debug & XNF_DEBUG_DDI)
-		printf("xnf%d: attach(0x%p)\n", ddi_get_instance(devinfo),
-		    (void *)devinfo);
-#endif
-
 	switch (cmd) {
 	case DDI_RESUME:
 		xnfp = ddi_get_driver_private(devinfo);
@@ -1155,11 +1146,6 @@ xnf_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	    "Ethernet controller");
 #endif
 
-#ifdef XNF_DEBUG
-	if (xnf_debug_instance == NULL)
-		xnf_debug_instance = xnfp;
-#endif
-
 	return (DDI_SUCCESS);
 
 failure_5:
@@ -1207,11 +1193,6 @@ static int
 xnf_detach(dev_info_t *devinfo, ddi_detach_cmd_t cmd)
 {
 	xnf_t *xnfp;		/* Our private device info */
-
-#ifdef XNF_DEBUG
-	if (xnf_debug & XNF_DEBUG_DDI)
-		printf("xnf_detach(0x%p)\n", (void *)devinfo);
-#endif
 
 	xnfp = ddi_get_driver_private(devinfo);
 
@@ -1546,9 +1527,9 @@ xnf_tx_get_lookaside(xnf_t *xnfp, mblk_t *mp, size_t *plen)
 	xnf_buf_t *bd;
 	caddr_t bp;
 
-	bd = xnf_buf_get(xnfp, KM_SLEEP, B_TRUE);
-	if (bd == NULL)
+	if ((bd = xnf_buf_get(xnfp, KM_NOSLEEP, B_TRUE)) == NULL) {
 		return (NULL);
+	}
 
 	bp = bd->buf;
 	while (mp != NULL) {
@@ -1750,8 +1731,12 @@ xnf_tx_push_packet(xnf_t *xnfp, xnf_txbuf_t *head)
 static xnf_txbuf_t *
 xnf_mblk_copy(xnf_t *xnfp, mblk_t *mp)
 {
-	xnf_txbuf_t *txp = xnf_data_txbuf_alloc(xnfp);
+	xnf_txbuf_t *txp;
 	size_t length;
+
+	if ((txp = xnf_data_txbuf_alloc(xnfp, KM_NOSLEEP)) == NULL) {
+		return (NULL);
+	}
 
 	txp->tx_bdesc = xnf_tx_get_lookaside(xnfp, mp, &length);
 	if (txp->tx_bdesc == NULL) {
@@ -1779,14 +1764,15 @@ xnf_mblk_map(xnf_t *xnfp, mblk_t *mp, int *countp)
 
 	for (mblk_t *ml = mp; ml != NULL; ml = ml->b_cont) {
 		ddi_dma_handle_t dma_handle;
-		ddi_dma_cookie_t dma_cookie;
-		uint_t ncookies;
+		const ddi_dma_cookie_t *dma_cookie, *dma_cookie_prev;
 		xnf_txbuf_t *txp;
 
 		if (MBLKL(ml) == 0)
 			continue;
 
-		txp = xnf_data_txbuf_alloc(xnfp);
+		if ((txp = xnf_data_txbuf_alloc(xnfp, KM_NOSLEEP)) == NULL) {
+			goto error;
+		}
 
 		if (head == NULL) {
 			head = txp;
@@ -1804,8 +1790,7 @@ xnf_mblk_map(xnf_t *xnfp, mblk_t *mp, int *countp)
 		int ret = ddi_dma_addr_bind_handle(dma_handle,
 		    NULL, (char *)ml->b_rptr, MBLKL(ml),
 		    DDI_DMA_WRITE | DDI_DMA_STREAMING,
-		    DDI_DMA_DONTWAIT, 0, &dma_cookie,
-		    &ncookies);
+		    DDI_DMA_DONTWAIT, 0, NULL, NULL);
 		if (ret != DDI_DMA_MAPPED) {
 			if (ret != DDI_DMA_NORESOURCES) {
 				dev_err(xnfp->xnf_devinfo, CE_WARN,
@@ -1816,23 +1801,27 @@ xnf_mblk_map(xnf_t *xnfp, mblk_t *mp, int *countp)
 		}
 		txp->tx_handle_bound = B_TRUE;
 
-		ASSERT(ncookies > 0);
-		for (int i = 0; i < ncookies; i++) {
+		dma_cookie_prev = NULL;
+		while ((dma_cookie = ddi_dma_cookie_iter(dma_handle,
+		    dma_cookie_prev)) != NULL) {
 			if (nsegs == XEN_MAX_TX_DATA_PAGES) {
 				dev_err(xnfp->xnf_devinfo, CE_WARN,
 				    "xnf_dmamap_alloc() failed: "
 				    "too many segments");
 				goto error;
 			}
-			if (i > 0) {
-				txp = xnf_data_txbuf_alloc(xnfp);
+			if (dma_cookie_prev != NULL) {
+				if ((txp = xnf_data_txbuf_alloc(xnfp,
+				    KM_NOSLEEP)) == NULL) {
+					goto error;
+				}
 				ASSERT(tail != NULL);
 				TXBUF_SETNEXT(tail, txp);
 				txp->tx_head = head;
 			}
 
 			txp->tx_mfn =
-			    xnf_btop(pa_to_ma(dma_cookie.dmac_laddress));
+			    xnf_btop(pa_to_ma(dma_cookie->dmac_laddress));
 			txp->tx_txreq.gref = xnf_gref_get(xnfp);
 			if (txp->tx_txreq.gref == INVALID_GRANT_REF) {
 				dev_err(xnfp->xnf_devinfo, CE_WARN,
@@ -1843,16 +1832,17 @@ xnf_mblk_map(xnf_t *xnfp, mblk_t *mp, int *countp)
 			gnttab_grant_foreign_access_ref(txp->tx_txreq.gref,
 			    oeid, txp->tx_mfn, 1);
 			txp->tx_txreq.offset =
-			    dma_cookie.dmac_laddress & PAGEOFFSET;
-			txp->tx_txreq.size = dma_cookie.dmac_size;
+			    dma_cookie->dmac_laddress & PAGEOFFSET;
+			txp->tx_txreq.size = dma_cookie->dmac_size;
 			txp->tx_txreq.flags = 0;
 
-			ddi_dma_nextcookie(dma_handle, &dma_cookie);
 			nsegs++;
 
 			if (tail != NULL)
 				tail->tx_txreq.flags = NETTXF_more_data;
 			tail = txp;
+
+			dma_cookie_prev = dma_cookie;
 		}
 	}
 
@@ -2015,6 +2005,12 @@ pulledup:
 			 * Defragment packet if it spans too many pages.
 			 */
 			mblk_t *newmp = msgpullup(mp, -1);
+			if (newmp == NULL) {
+				dev_err(xnfp->xnf_devinfo, CE_WARN,
+				    "msgpullup() failed");
+				goto drop;
+			}
+
 			freemsg(mp);
 			mp = newmp;
 			xnfp->xnf_stat_tx_pullup++;
@@ -2165,12 +2161,6 @@ xnf_start(void *arg)
 {
 	xnf_t *xnfp = arg;
 
-#ifdef XNF_DEBUG
-	if (xnf_debug & XNF_DEBUG_TRACE)
-		printf("xnf%d start(0x%p)\n",
-		    ddi_get_instance(xnfp->xnf_devinfo), (void *)xnfp);
-#endif
-
 	mutex_enter(&xnfp->xnf_rxlock);
 	mutex_enter(&xnfp->xnf_txlock);
 
@@ -2188,12 +2178,6 @@ static void
 xnf_stop(void *arg)
 {
 	xnf_t *xnfp = arg;
-
-#ifdef XNF_DEBUG
-	if (xnf_debug & XNF_DEBUG_TRACE)
-		printf("xnf%d stop(0x%p)\n",
-		    ddi_get_instance(xnfp->xnf_devinfo), (void *)xnfp);
-#endif
 
 	mutex_enter(&xnfp->xnf_rxlock);
 	mutex_enter(&xnfp->xnf_txlock);
@@ -2570,7 +2554,7 @@ xnf_rx_collect(xnf_t *xnfp)
 static int
 xnf_alloc_dma_resources(xnf_t *xnfp)
 {
-	dev_info_t 		*devinfo = xnfp->xnf_devinfo;
+	dev_info_t		*devinfo = xnfp->xnf_devinfo;
 	size_t			len;
 	ddi_dma_cookie_t	dma_cookie;
 	uint_t			ncookies;

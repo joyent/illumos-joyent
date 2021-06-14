@@ -41,55 +41,29 @@ USR_GLENDALE_DIR	= $(USR_PLAT_DIR)/SUNW,Sun-Blade-T6320
 USR_GLENDALE_SBIN_DIR	= $(USR_GLENDALE_DIR)/sbin
 USR_GLENDALE_LIB_DIR	= $(USR_GLENDALE_DIR)/lib
 
-
-#
-#	The following are SPARC specific (rather than sun4v) specific modules
-#	which are required for the sun4v kernel to completely lint. They are
-#	not involved in the build in any other way. In order to minimize
-#	build time, it is assumed that they are up to date. But since sun4v
-#	is really a separate architecture we cannot use the v7 sparc modules.
-#
-SPARC_LIB_DIR	 = $(UTSBASE)/sparc/lint-libs/$(OBJS_DIR)
-
-SPARC_LINTS	 =
-
-#
-#
-#
-LINT_LIBS	 = $(LINT_LIB) \
-		   $(LINT_KMODS:%=$(LINT_LIB_DIR)/llib-l%.ln) \
-		   $(CLOSED_LINT_KMODS:%=$(LINT_LIB_DIR)/llib-l%.ln) \
-		   $(SPARC_LINTS:%=$(SPARC_LIB_DIR)/llib-l%.ln)
-
 def		:=	TARGET= def
 all		:=	TARGET= all
 install		:=	TARGET= install
 install_h	:=	TARGET= install_h
 clean		:=	TARGET= clean
 clobber		:=	TARGET= clobber
-lint		:=	TARGET= lint
-lintlib		:=	TARGET= lintlib
-modlintlib	:=	TARGET= modlintlib
 modlist		:=	TARGET= modlist
 modlist	modlist.sparc :=	NO_STATE= -K $$MODSTATE$$$$
-clean.lint	:=	TARGET= clean.lint
 check		:=	TARGET= check
 
 .KEEP_STATE:
 
-.PARALLEL:	$(PARALLEL_KMODS) $(CLOSED_KMODS) $(XMODS) $(CLOSED_XMODS) \
-		modlist modlist.sparc
+.PARALLEL:	$(PARALLEL_KMODS) $(XMODS) modlist modlist.sparc
 
 # Override for CPU_KMODS... they cannot be built
 # in parallel
 .NO_PARALLEL:	$(CPU_KMODS)
 
-def all clean clobber clean.lint: genassym unix .WAIT \
-	$(KMODS) $(CLOSED_KMODS) $(XMODS) $(CLOSED_XMODS) $(IMPLEMENTATIONS)
+def all clean clobber: genassym unix .WAIT \
+	$(KMODS) $(XMODS) $(IMPLEMENTATIONS)
 
 # list the modules under sun4v.
-modlist: unix $(KMODS) $(CLOSED_KMODS) $(XMODS) $(CLOSED_XMODS) \
-	$(IMPLEMENTATIONS)
+modlist: unix $(KMODS) $(XMODS) $(IMPLEMENTATIONS)
 
 # list the modules for Install -k sun4v.
 modlist.karch: modlist modlist.sparc
@@ -97,12 +71,8 @@ modlist.karch: modlist modlist.sparc
 modlist.sparc:
 	@cd $(SRC)/uts/sparc; pwd; $(MAKE) $(NO_STATE) modlist
 
-install: install_platforms genassym unix .WAIT $(KMODS) $(CLOSED_KMODS) \
-	$(XMODS) $(CLOSED_XMODS) $(IMPLEMENTATIONS)
-
-lintlib:	unix
-
-modlintlib:	$(LINT_KMODS) $(CLOSED_LINT_KMODS)
+install: install_platforms genassym unix .WAIT $(KMODS) \
+	$(XMODS) $(IMPLEMENTATIONS)
 
 genassym unix $(KMODS):	FRC
 	@cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
@@ -111,22 +81,7 @@ $(IMPLEMENTATIONS):	FRC
 	@cd $@; pwd; THISIMPL=$@ $(MAKE) $(NO_STATE) $(TARGET)
 
 $(XMODS):	FRC
-	@if [ -f $@/Makefile  ]; then \
-		cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET); \
-	else \
-		true; \
-	fi
-
-$(CLOSED_XMODS):	FRC
-	@if [ -f $(CLOSED)/uts/sun4v/$@/Makefile  ]; then \
-		cd $(CLOSED)/uts/sun4v/$@; pwd; \
-		    $(MAKE) $(NO_STATE) $(TARGET); \
-	else \
-		true; \
-	fi
-
-$(CLOSED_KMODS):	FRC
-	cd $(CLOSED)/uts/sun4v/$@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
+	cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
 
 install_h check:	install_platforms $(IMPLEMENTATIONS) FRC
 	@cd sys; pwd; $(MAKE) $(TARGET)
@@ -281,18 +236,6 @@ $(USR_MONZA_SBIN_DIR):		$(USR_MONZA_DIR)
 
 $(USR_MONZA_SBIN_LINKS):	$(USR_MONZA_SBIN_DIR)
 	$(INS.slink7)
-
-#
-#	Full kernel lint target.
-#
-LINT_TARGET	= globallint
-
-globallint:
-	@-$(ECHO) "\nSUN4V KERNEL: global crosschecks:"
-	@-$(LINT) $(LINTFLAGS) $(LINT_LIBS) 2>&1 | $(LGREP.2)
-
-lint:	lintlib .WAIT modlintlib .WAIT $(SPARC_LINTS) $(LINT_DEPS) \
-	$(IMPLEMENTATIONS) $(LINT_CPU_KMODS)
 
 include ../Makefile.targ
 

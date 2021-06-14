@@ -39,8 +39,8 @@ include Makefile.master
 # it defines TARGETDIRS and ROOTDIRS.
 include Targetdirs
 
-COMMON_SUBDIRS=	data uts lib cmd ucblib ucbcmd psm man test
-sparc_SUBDIRS= stand
+COMMON_SUBDIRS=	data uts lib cmd ucblib ucbcmd man test
+sparc_SUBDIRS= psm stand
 i386_SUBDIRS= grub boot
 
 #
@@ -74,16 +74,6 @@ CHKMFSTSUBDIRS=	cmd
 CHKMANSUBDIRS = man
 
 MSGSUBDIRS=	cmd ucbcmd lib data
-DOMAINS= \
-	SUNW_OST_ADMIN \
-	SUNW_OST_NETRPC \
-	SUNW_OST_OSCMD \
-	SUNW_OST_OSLIB \
-	SUNW_OST_UCBCMD \
-	SUNW_OST_ZONEINFO
-
-MSGDDIRS=       $(DOMAINS:%=$(MSGROOT)/%)
-MSGDIRS=        $(MSGROOT) $(MSGDDIRS) $(MSGROOT)/LC_TIME
 
 all :=			TARGET= all
 install :=		TARGET= install
@@ -126,7 +116,7 @@ install1: mapfiles closedbins sgs
 
 install2: install1 .WAIT $(SUBDIRS)
 
-_msg: _msgdirs rootdirs FRC
+_msg: rootdirs FRC
 	@for m in $(MSGSUBDIRS); do \
 		cd $$m; pwd; $(MAKE) _msg; cd ..; \
 	done
@@ -166,6 +156,7 @@ closedbins: bldtools $(ROOTDIRS) FRC
 	(cd $$CLOSED_ROOT; \
 	    $(TAR) cfX - $(CODEMGR_WS)/exception_lists/closed-bins .) | \
 	    (cd $(ROOT); $(TAR) xBpf -); \
+	$(CHMOD) 0400 $(ROOT)/etc/security/tsol/label_encodings; \
 	$(ECHO) "Stripping CTF from closed-bins in $$ROOT"; \
 	( cd $(ROOT); $(CTFSTRIP) $$(cd $$CLOSED_ROOT; $(FIND) \
 	    ./kernel ./usr/kernel ./platform/*/kernel -type f -a -perm -u+x | \
@@ -220,9 +211,7 @@ bldtools:
 rootdirs: $(ROOTDIRS)
 	$(INS) -d -m 775 $(ROOT)/var/mail/:saved
 
-_msgdirs:       $(MSGDIRS)
-
-$(ROOTDIRS) $(MSGDIRS):
+$(ROOTDIRS):
 	$(INS.dir)
 
 userheaders: FRC

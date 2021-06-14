@@ -135,6 +135,7 @@ static int cur_fd = -1;
 static TAILQ_HEAD(, breakpoint) breakpoints;
 static struct vcpu_state *vcpu_state;
 static int cur_vcpu, stopped_vcpu;
+static bool gdb_active = false;
 
 const int gdb_regset[] = {
 	VM_REG_GUEST_RAX,
@@ -753,6 +754,8 @@ static void
 _gdb_cpu_suspend(int vcpu, bool report_stop)
 {
 
+	if (!gdb_active)
+		return;
 	debug("$vCPU %d suspending\n", vcpu);
 	CPU_SET(vcpu, &vcpus_waiting);
 	if (report_stop && CPU_CMP(&vcpus_waiting, &vcpus_suspended) == 0)
@@ -771,6 +774,8 @@ void
 gdb_cpu_add(int vcpu)
 {
 
+	if (!gdb_active)
+		return;
 	debug("$vCPU %d starting\n", vcpu);
 	pthread_mutex_lock(&gdb_lock);
 	assert(vcpu < guest_ncpus);
@@ -852,6 +857,8 @@ gdb_cpu_mtrap(int vcpu)
 {
 	struct vcpu_state *vs;
 
+	if (!gdb_active)
+		return;
 	debug("$vCPU %d MTRAP\n", vcpu);
 	pthread_mutex_lock(&gdb_lock);
 	vs = &vcpu_state[vcpu];
@@ -892,6 +899,10 @@ gdb_cpu_breakpoint(int vcpu, struct vm_exit *vmexit)
 	uint64_t gpa;
 	int error;
 
+	if (!gdb_active) {
+		fprintf(stderr, "vm_loop: unexpected VMEXIT_DEBUG\n");
+		exit(4);
+	}
 	pthread_mutex_lock(&gdb_lock);
 	error = guest_vaddr2paddr(vcpu, vmexit->rip, &gpa);
 	assert(error == 1);
@@ -1840,6 +1851,42 @@ limit_gdb_socket(int s)
 }
 #endif
 
+
+#ifndef __FreeBSD__
+/*
+ * Equivalent to init_gdb() below, but without configuring the listening socket.
+ * This will allow the bhyve process to tolerate mdb attaching/detaching from
+ * the instance while it is running.
+ */
+void
+init_mdb(struct vmctx *_ctx, bool wait)
+{
+	int error;
+
+	error = pthread_mutex_init(&gdb_lock, NULL);
+	if (error != 0)
+		errc(1, error, "gdb mutex init");
+	error = pthread_cond_init(&idle_vcpus, NULL);
+	if (error != 0)
+		errc(1, error, "gdb cv init");
+
+	ctx = _ctx;
+	stopped_vcpu = -1;
+	TAILQ_INIT(&breakpoints);
+	vcpu_state = calloc(guest_ncpus, sizeof(*vcpu_state));
+	if (wait) {
+		/*
+		 * Set vcpu 0 in vcpus_suspended.  This will trigger the
+		 * logic in gdb_cpu_add() to suspend the first vcpu before
+		 * it starts execution.  The vcpu will remain suspended
+		 * until a debugger connects.
+		 */
+		CPU_SET(0, &vcpus_suspended);
+		stopped_vcpu = 0;
+	}
+}
+#endif
+
 void
 init_gdb(struct vmctx *_ctx, int sport, bool wait)
 {
@@ -1895,4 +1942,5 @@ init_gdb(struct vmctx *_ctx, int sport, bool wait)
 	limit_gdb_socket(s);
 #endif
 	mevent_add(s, EVF_READ, new_connection, NULL);
+	gdb_active = true;
 }

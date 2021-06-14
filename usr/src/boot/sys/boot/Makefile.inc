@@ -31,7 +31,7 @@ LDFLAGS	+=	$(GLDTARGET)
 # bare minimum for case we can not load font from the OS root.
 
 FONT=		8x16
-FONT_SRC=	ter-u16n.bdf
+FONT_SRC=	ter-u16b.bdf
 FONT_DIR=	$(SRC)/data/consfonts
 
 PNGLITE=	$(SRC)/common/pnglite
@@ -39,6 +39,7 @@ PNGLITE=	$(SRC)/common/pnglite
 BOOTSRC=	$(SRC)/boot/sys/boot
 LIBSRC=		$(SRC)/boot/lib
 SASRC=		$(LIBSRC)/libstand
+CRYPTOSRC=	$(SASRC)/crypto
 ZFSSRC=		$(SASRC)/zfs
 ZLIB=		$(SRC)/contrib/zlib
 LZ4=		$(SRC)/common/lz4

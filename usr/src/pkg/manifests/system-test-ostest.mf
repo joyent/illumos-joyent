@@ -14,6 +14,7 @@
 # Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright 2020 Joyent, Inc.
 # Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2021 Tintri by DDN, Inc. All rights reserved.
 #
 
 set name=pkg.fmri value=pkg:/system/test/ostest@$(PKGVERS)
@@ -22,6 +23,8 @@ set name=pkg.summary value="OS Unit Test Suite"
 set name=info.classification \
     value=org.opensolaris.category.2008:Development/System
 set name=variant.arch value=$(ARCH)
+dir path=kernel/drv group=sys
+dir path=kernel/drv/$(ARCH64) group=sys
 dir path=opt/os-tests
 dir path=opt/os-tests/bin
 dir path=opt/os-tests/runfiles
@@ -29,6 +32,7 @@ dir path=opt/os-tests/tests
 dir path=opt/os-tests/tests/ddi_ufm
 dir path=opt/os-tests/tests/file-locking
 $(i386_ONLY)dir path=opt/os-tests/tests/i386
+dir path=opt/os-tests/tests/ksensor
 dir path=opt/os-tests/tests/libtopo
 dir path=opt/os-tests/tests/pf_key
 dir path=opt/os-tests/tests/poll
@@ -36,9 +40,13 @@ dir path=opt/os-tests/tests/sdevfs
 dir path=opt/os-tests/tests/secflags
 dir path=opt/os-tests/tests/sigqueue
 dir path=opt/os-tests/tests/sockfs
+dir path=opt/os-tests/tests/stackalign
 dir path=opt/os-tests/tests/stress
+dir path=opt/os-tests/tests/syscall
 dir path=opt/os-tests/tests/timer
 dir path=opt/os-tests/tests/uccid
+file path=kernel/drv/$(ARCH64)/ksensor_test group=sys
+file path=kernel/drv/ksensor_test.conf group=sys
 file path=opt/os-tests/README mode=0444
 file path=opt/os-tests/bin/ostest mode=0555
 file path=opt/os-tests/runfiles/default.run mode=0444
@@ -56,6 +64,16 @@ $(i386_ONLY)file path=opt/os-tests/tests/i386/badseg mode=0555
 $(i386_ONLY)file path=opt/os-tests/tests/i386/badseg_exec mode=0555
 $(i386_ONLY)file path=opt/os-tests/tests/i386/ldt mode=0555
 $(i386_ONLY)file path=opt/os-tests/tests/imc_test mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_basic.32 mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_basic.64 mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_err.32 mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_err.64 mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_fini mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_init mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_sread.32 mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_sread.64 mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_stress mode=0555
+file path=opt/os-tests/tests/ksensor/ksensor_unload mode=0555
 file path=opt/os-tests/tests/libtopo/digraph-test mode=0555
 file path=opt/os-tests/tests/libtopo/digraph-test-in-badedge.xml mode=0444
 file path=opt/os-tests/tests/libtopo/digraph-test-in-badelement.xml mode=0444
@@ -92,11 +110,17 @@ file path=opt/os-tests/tests/sockfs/conn mode=0555
 file path=opt/os-tests/tests/sockfs/dgram mode=0555
 file path=opt/os-tests/tests/sockfs/drop_priv mode=0555
 file path=opt/os-tests/tests/sockfs/nosignal mode=0555
+file path=opt/os-tests/tests/sockfs/recvmsg.32 mode=0555
+file path=opt/os-tests/tests/sockfs/recvmsg.64 mode=0555
 file path=opt/os-tests/tests/sockfs/rights.32 mode=0555
 file path=opt/os-tests/tests/sockfs/rights.64 mode=0555
 file path=opt/os-tests/tests/sockfs/sockpair mode=0555
 file path=opt/os-tests/tests/spoof-ras mode=0555
+file path=opt/os-tests/tests/stackalign/stackalign.32 mode=0555
+file path=opt/os-tests/tests/stackalign/stackalign.64 mode=0555
 file path=opt/os-tests/tests/stress/dladm-kstat mode=0555
+file path=opt/os-tests/tests/syscall/open.32 mode=0555
+file path=opt/os-tests/tests/syscall/open.64 mode=0555
 file path=opt/os-tests/tests/timer/timer_limit mode=0555
 file path=opt/os-tests/tests/uccid/atrparse mode=0555
 file path=opt/os-tests/tests/uccid/excl-badread mode=0555
@@ -119,4 +143,5 @@ file path=opt/os-tests/tests/writev.64 mode=0555
 license cr_Sun license=cr_Sun
 license lic_CDDL license=lic_CDDL
 depend fmri=system/io/tests type=require
+depend fmri=system/ksensor type=require
 depend fmri=system/test/testrunner type=require

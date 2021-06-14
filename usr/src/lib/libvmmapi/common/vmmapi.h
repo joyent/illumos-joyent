@@ -38,7 +38,8 @@
  * http://www.illumos.org/license/CDDL.
  *
  * Copyright 2015 Pluribus Networks Inc.
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #ifndef _VMMAPI_H_
@@ -131,6 +132,8 @@ int	vm_get_devmem_offset(struct vmctx *ctx, int segid, off_t *mapoff);
 int	vm_mmap_memseg(struct vmctx *ctx, vm_paddr_t gpa, int segid,
 	    vm_ooffset_t segoff, size_t len, int prot);
 
+int	vm_munmap_memseg(struct vmctx *ctx, vm_paddr_t gpa, size_t len);
+
 int	vm_create(const char *name);
 int	vm_get_device_fd(struct vmctx *ctx);
 struct vmctx *vm_open(const char *name);
@@ -165,7 +168,8 @@ int	vm_set_register_set(struct vmctx *ctx, int vcpu, unsigned int count,
     const int *regnums, uint64_t *regvals);
 int	vm_get_register_set(struct vmctx *ctx, int vcpu, unsigned int count,
     const int *regnums, uint64_t *regvals);
-int	vm_run(struct vmctx *ctx, int vcpu, struct vm_exit *ret_vmexit);
+int	vm_run(struct vmctx *ctx, int vcpu, const struct vm_entry *vm_entry,
+    struct vm_exit *vm_exit);
 int	vm_suspend(struct vmctx *ctx, enum vm_suspend_how how);
 int	vm_reinit(struct vmctx *ctx);
 int	vm_apicid2vcpu(struct vmctx *ctx, int apicid);
@@ -218,11 +222,14 @@ int	vm_assign_pptdev(struct vmctx *ctx, int bus, int slot, int func);
 int	vm_unassign_pptdev(struct vmctx *ctx, int bus, int slot, int func);
 int	vm_map_pptdev_mmio(struct vmctx *ctx, int bus, int slot, int func,
 			   vm_paddr_t gpa, size_t len, vm_paddr_t hpa);
+int	vm_unmap_pptdev_mmio(struct vmctx *ctx, int bus, int slot, int func,
+			     vm_paddr_t gpa, size_t len);
 int	vm_setup_pptdev_msi(struct vmctx *ctx, int vcpu, int bus, int slot,
 	    int func, uint64_t addr, uint64_t msg, int numvec);
 int	vm_setup_pptdev_msix(struct vmctx *ctx, int vcpu, int bus, int slot,
 	    int func, int idx, uint64_t addr, uint64_t msg,
 	    uint32_t vector_control);
+int	vm_disable_pptdev_msix(struct vmctx *ctx, int bus, int slot, int func);
 int	vm_get_pptdev_limits(struct vmctx *ctx, int bus, int slot, int func,
     int *msi_limit, int *msix_limit);
 #else /* __FreeBSD__ */
@@ -230,10 +237,13 @@ int	vm_assign_pptdev(struct vmctx *ctx, int pptfd);
 int	vm_unassign_pptdev(struct vmctx *ctx, int pptfd);
 int	vm_map_pptdev_mmio(struct vmctx *ctx, int pptfd, vm_paddr_t gpa,
     size_t len, vm_paddr_t hpa);
+int	vm_unmap_pptdev_mmio(struct vmctx *ctx, int pptfd, vm_paddr_t gpa,
+    size_t len);
 int	vm_setup_pptdev_msi(struct vmctx *ctx, int vcpu, int pptfd,
     uint64_t addr, uint64_t msg, int numvec);
 int	vm_setup_pptdev_msix(struct vmctx *ctx, int vcpu, int pptfd,
     int idx, uint64_t addr, uint64_t msg, uint32_t vector_control);
+int	vm_disable_pptdev_msix(struct vmctx *ctx, int pptfd);
 int	vm_get_pptdev_limits(struct vmctx *ctx, int pptfd, int *msi_limit,
     int *msix_limit);
 #endif /* __FreeBSD__ */
@@ -300,7 +310,13 @@ int	vm_get_topology(struct vmctx *ctx, uint16_t *sockets, uint16_t *cores,
 
 #ifndef	__FreeBSD__
 /* illumos-specific APIs */
+int	vm_pmtmr_set_location(struct vmctx *ctx, uint16_t ioport);
 int	vm_wrlock_cycle(struct vmctx *ctx);
+int vm_get_run_state(struct vmctx *ctx, int vcpu, enum vcpu_run_state *state,
+    uint8_t *sipi_vector);
+int vm_set_run_state(struct vmctx *ctx, int vcpu, enum vcpu_run_state state,
+    uint8_t sipi_vector);
+int	vm_arc_resv(struct vmctx *ctx, size_t);
 #endif	/* __FreeBSD__ */
 
 #ifdef	__FreeBSD__

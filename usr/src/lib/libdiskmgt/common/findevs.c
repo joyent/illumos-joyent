@@ -28,6 +28,7 @@
  * Copyright (c) 2011 by Delphix. All rights reserved.
  * Copyright 2017 Nexenta Systems, Inc.
  * Copyright 2017 Joyent, Inc.
+ * Copyright 2021 Oxide Computer Company
  */
 
 #include <fcntl.h>
@@ -151,8 +152,23 @@ findevs(struct search_args *args)
 	args->controller_listp = NULL;
 	args->disk_listp = NULL;
 
+	args->ph = DI_PROM_HANDLE_NIL;
+	args->handle = DI_LINK_NIL;
 	args->dev_walk_status = 0;
-	args->handle = di_devlink_init(NULL, 0);
+
+	/*
+	 * Create device information library handles, which must be destroyed
+	 * before we return.
+	 */
+	if ((args->ph = di_prom_init()) == DI_PROM_HANDLE_NIL ||
+	    (args->handle = di_devlink_init(NULL, 0)) == DI_LINK_NIL) {
+		/*
+		 * We could not open all of the handles we need, so clean up
+		 * and report failure to the caller.
+		 */
+		args->dev_walk_status = errno;
+		goto cleanup;
+	}
 
 	/*
 	 * Have to make several passes at this with the new devfs caching.
@@ -160,7 +176,6 @@ findevs(struct search_args *args)
 	 * devices.
 	 */
 	di_root = di_init("/", DINFOCACHE);
-	args->ph = di_prom_init();
 	(void) di_walk_minor(di_root, NULL, 0, args, add_devs);
 	di_fini(di_root);
 
@@ -168,9 +183,16 @@ findevs(struct search_args *args)
 	(void) di_walk_minor(di_root, NULL, 0, args, add_devs);
 	di_fini(di_root);
 
-	(void) di_devlink_fini(&(args->handle));
-
 	clean_paths(args);
+
+cleanup:
+	if (args->ph != DI_PROM_HANDLE_NIL) {
+		di_prom_fini(args->ph);
+		args->ph = DI_PROM_HANDLE_NIL;
+	}
+	if (args->handle != DI_LINK_NIL) {
+		(void) di_devlink_fini(&(args->handle));
+	}
 }
 
 /*
@@ -607,6 +629,28 @@ add_disk2controller(disk_t *diskp, struct search_args *args)
 		return (0);
 	}
 
+	/*
+	 * Certain pseudo-device nodes do not all immediately have a valid
+	 * parent-node. In particular, lofi (and zfs) would point to the generic
+	 * /pseudo node. As a result, if we find a lofi disk, redirect it to the
+	 * actual path. If we don't find it in this, then just fall back to the
+	 * traditional path.
+	 */
+	if (libdiskmgt_str_eq(di_node_name(pnode), "pseudo") &&
+	    libdiskmgt_str_eq(di_node_name(node), "lofi")) {
+		di_node_t n;
+
+		n = di_drv_first_node("lofi", pnode);
+		while (n != DI_NODE_NIL) {
+			if (di_instance(n) == 0) {
+				pnode = n;
+				break;
+			}
+
+			n = di_drv_next_node(n);
+		}
+	}
+
 	minor = di_minor_next(pnode, NULL);
 	if (minor == NULL) {
 		return (0);
@@ -1041,6 +1085,10 @@ ctype(di_node_t node, di_minor_t minor)
 	    libdiskmgt_str_eq(name, "xpvd"))
 		return (DM_CTYPE_XEN);
 
+	if (libdiskmgt_str_eq(type, DDI_PSEUDO) &&
+	    libdiskmgt_str_eq(name, "lofi"))
+		return (DM_CTYPE_LOFI);
+
 	if (dm_debug) {
 		(void) fprintf(stderr,
 		    "INFO: unknown controller type=%s name=%s\n", type, name);
@@ -1417,6 +1465,11 @@ is_ctrl(di_node_t node, di_minor_t minor)
 	if (libdiskmgt_str_eq(type, DDI_PSEUDO) &&
 	    (libdiskmgt_str_eq(name, "ide") ||
 	    libdiskmgt_str_eq(name, "xpvd")))
+		return (1);
+
+	if (libdiskmgt_str_eq(type, DDI_PSEUDO) &&
+	    libdiskmgt_str_eq(name, "lofi") &&
+	    libdiskmgt_str_eq(di_minor_name(minor), "ctl"))
 		return (1);
 
 	return (0);

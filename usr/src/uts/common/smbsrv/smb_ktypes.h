@@ -20,7 +20,8 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
+ * Copyright 2020 RackTop Systems, Inc.
+ * Copyright 2020 Tintri by DDN, Inc. All rights reserved.
  */
 
 /*
@@ -600,6 +601,7 @@ typedef struct smb_oplock_grant {
 	uint32_t		og_state;	/* latest sent to client */
 	uint32_t		og_breaking;	/* BREAK_TO... flags */
 	uint16_t		og_dialect;	/* how to send breaks */
+	boolean_t		og_closing;
 	/* File-system level state */
 	uint8_t			onlist_II;
 	uint8_t			onlist_R;
@@ -728,6 +730,11 @@ typedef struct smb_arg_negotiate {
 	uint8_t		ni_key[SMB_ENCRYPT_KEY_MAXLEN];
 	timestruc_t	ni_servertime;
 } smb_arg_negotiate_t;
+
+typedef struct smb2_arg_negotiate {
+	struct smb2_neg_ctxs	*neg_in_ctxs;
+	struct smb2_neg_ctxs	*neg_out_ctxs;
+} smb2_arg_negotiate_t;
 
 typedef enum {
 	SMB_SSNSETUP_PRE_NTLM012 = 1,
@@ -888,6 +895,7 @@ struct smb_key {
     ASSERT(((p) != NULL) && ((p)->s_magic == SMB_SESSION_MAGIC))
 
 #define	SMB_CHALLENGE_SZ	8
+#define	SMB3_PREAUTH_HASHVAL_SZ	64
 
 typedef enum {
 	SMB_SESSION_STATE_INITIALIZED = 0,
@@ -903,6 +911,8 @@ typedef enum {
 /* Bits in s_flags below */
 #define	SMB_SSN_AAPL_CCEXT	1	/* Saw "AAPL" create ctx. ext. */
 #define	SMB_SSN_AAPL_READDIR	2	/* Wants MacOS ext. readdir */
+
+#define	SMB2_NEGOTIATE_MAX_DIALECTS	64
 
 typedef struct smb_session {
 	list_node_t		s_lnd;
@@ -938,6 +948,7 @@ typedef struct smb_session {
 	struct smb_sign		signing;	/* SMB1 */
 	void			*sign_mech;	/* mechanism info */
 	void			*enc_mech;
+	void			*preauth_mech;
 
 	/* SMB2/SMB3 signing support */
 	int			(*sign_calc)(struct smb_request *,
@@ -967,6 +978,11 @@ typedef struct smb_session {
 	timeout_id_t		s_auth_tmo;
 
 	/*
+	 * Client dialects
+	 */
+	uint16_t		cli_dialect_cnt;
+	uint16_t		cli_dialects[SMB2_NEGOTIATE_MAX_DIALECTS];
+	/*
 	 * Maximum negotiated buffer sizes between SMB client and server
 	 * in SMB_SESSION_SETUP_ANDX
 	 */
@@ -976,6 +992,11 @@ typedef struct smb_session {
 	uint16_t		smb_max_mpx;
 	smb_srqueue_t		*s_srqueue;
 	uint64_t		start_time;
+
+	uint16_t		smb31_enc_cipherid;
+	uint16_t		smb31_preauth_hashid;
+	uint8_t			smb31_preauth_hashval[SMB3_PREAUTH_HASHVAL_SZ];
+
 	unsigned char		MAC_key[44];
 	char			ip_addr_str[INET6_ADDRSTRLEN];
 	uint8_t			clnt_uuid[16];
@@ -1067,6 +1088,9 @@ typedef struct smb_user {
 	uint8_t			u_nonce_fixed[4];
 	uint64_t		u_salt;
 	smb_cfg_val_t		u_encrypt;
+
+	/* SMB 3.1.1 preauth session hashval */
+	uint8_t			u_preauth_hashval[SMB3_PREAUTH_HASHVAL_SZ];
 } smb_user_t;
 
 #define	SMB_TREE_MAGIC			0x54524545	/* 'TREE' */
@@ -1146,6 +1170,7 @@ typedef struct smb_tree {
 	time_t			t_connect_time;
 	volatile uint32_t	t_open_files;
 	smb_cfg_val_t		t_encrypt; /* Share.EncryptData */
+	timestruc_t		t_create_time;
 } smb_tree_t;
 
 #define	SMB_TREE_VFS(tree)	((tree)->t_snode->vp->v_vfsp)
@@ -1402,7 +1427,6 @@ typedef struct smb_ofile {
 	cred_t			*f_cr;
 	pid_t			f_pid;
 	smb_attr_t		f_pending_attr;
-	boolean_t		f_written;
 	smb_oplock_grant_t	f_oplock;
 	uint8_t			TargetOplockKey[SMB_LEASE_KEY_SZ];
 	uint8_t			ParentOplockKey[SMB_LEASE_KEY_SZ];
@@ -1898,6 +1922,7 @@ typedef struct smb_request {
 	uint32_t		sr_seqnum;
 
 	union {
+		smb2_arg_negotiate_t	nego2;
 		smb_arg_negotiate_t	*negprot;
 		smb_arg_sessionsetup_t	*ssetup;
 		smb_arg_tcon_t		tcon;
@@ -1913,6 +1938,7 @@ typedef struct smb_request {
 
 #define	sr_ssetup	arg.ssetup
 #define	sr_negprot	arg.negprot
+#define	sr_nego2	arg.nego2
 #define	sr_tcon		arg.tcon
 #define	sr_dirop	arg.dirop
 #define	sr_open		arg.open
@@ -2228,6 +2254,14 @@ typedef struct smb_enumshare_info {
 	uint16_t	es_nsent;
 	uint16_t	es_datasize;
 } smb_enumshare_info_t;
+
+/*
+ * SMB 3.1.1 error id for error ctxs
+ */
+enum smb2_error_id {
+	SMB2_ERROR_ID_DEFAULT		= 0,
+	SMB2_ERROR_ID_SHARE_REDIRECT	= 0x72645253	/* not used */
+};
 
 #ifdef	__cplusplus
 }

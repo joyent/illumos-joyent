@@ -20,7 +20,8 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2020 Tintri by DDN, Inc. All rights reserved.
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 #include <sys/types.h>
@@ -160,6 +161,7 @@ smb_load_kconfig(smb_kmod_cfg_t *kcfg)
 	kcfg->skc_min_protocol = smb_config_get_min_protocol();
 	kcfg->skc_secmode = smb_config_get_secmode();
 	kcfg->skc_encrypt = smb_config_get_require(SMB_CI_ENCRYPT);
+	kcfg->skc_encrypt_cipher = smb31_config_get_encrypt_cipher();
 
 	(void) smb_getdomainname(kcfg->skc_nbdomain,
 	    sizeof (kcfg->skc_nbdomain));
@@ -720,4 +722,16 @@ smb_gethostbyaddr(const char *addr, int len, int type, int *err_num)
 	h = getipnodebyaddr(addr, len, type, err_num);
 
 	return (h);
+}
+
+uint32_t
+smb_get_netlogon_flags(void)
+{
+	int64_t val;
+
+	if (smb_config_getnum(SMB_CI_NETLOGON_FLAGS, &val) != SMBD_SMF_OK)
+		return (SMB_PI_NETLOGON_FLAGS_DEFAULT);
+
+	/* These are flags, and we only use the lowest 32 bits */
+	return ((uint32_t)val);
 }

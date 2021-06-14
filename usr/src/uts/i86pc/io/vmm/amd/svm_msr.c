@@ -25,6 +25,18 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * Copyright 2020 Oxide Computer Company
+ */
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
@@ -32,6 +44,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/errno.h>
 #include <sys/systm.h>
+#include <sys/x86_archext.h>
+#include <sys/privregs.h>
 
 #include <machine/cpufunc.h>
 #include <machine/specialreg.h>
@@ -53,24 +67,6 @@ enum {
 	IDX_MSR_SF_MASK,
 	HOST_MSR_NUM		/* must be the last enumeration */
 };
-
-#ifdef __FreeBSD__
-static uint64_t host_msrs[HOST_MSR_NUM];
-
-void
-svm_msr_init(void)
-{
-	/* 
-	 * It is safe to cache the values of the following MSRs because they
-	 * don't change based on curcpu, curproc or curthread.
-	 */
-	host_msrs[IDX_MSR_LSTAR] = rdmsr(MSR_LSTAR);
-	host_msrs[IDX_MSR_CSTAR] = rdmsr(MSR_CSTAR);
-	host_msrs[IDX_MSR_STAR] = rdmsr(MSR_STAR);
-	host_msrs[IDX_MSR_SF_MASK] = rdmsr(MSR_SF_MASK);
-}
-#else
-
 CTASSERT(HOST_MSR_NUM == SVM_HOST_MSR_NUM);
 
 void
@@ -81,7 +77,6 @@ svm_msr_init(void)
 	 * values for them serves no purpose.
 	 */
 }
-#endif /* __FreeBSD__ */
 
 void
 svm_msr_guest_init(struct svm_softc *sc, int vcpu)
@@ -94,32 +89,27 @@ svm_msr_guest_init(struct svm_softc *sc, int vcpu)
 	 * There are no guest MSRs that are saved/restored "by hand" so nothing
 	 * more to do here.
 	 */
-	return;
 }
 
 void
 svm_msr_guest_enter(struct svm_softc *sc, int vcpu)
 {
+	uint64_t *host_msrs = sc->host_msrs[vcpu];
+
 	/*
 	 * Save host MSRs (if any) and restore guest MSRs (if any).
 	 */
-#ifndef __FreeBSD__
-	uint64_t *host_msrs = sc->host_msrs[vcpu];
-
-	/* Save host MSRs */
 	host_msrs[IDX_MSR_LSTAR] = rdmsr(MSR_LSTAR);
 	host_msrs[IDX_MSR_CSTAR] = rdmsr(MSR_CSTAR);
 	host_msrs[IDX_MSR_STAR] = rdmsr(MSR_STAR);
 	host_msrs[IDX_MSR_SF_MASK] = rdmsr(MSR_SF_MASK);
-#endif /* __FreeBSD__ */
 }
 
 void
 svm_msr_guest_exit(struct svm_softc *sc, int vcpu)
 {
-#ifndef __FreeBSD__
 	uint64_t *host_msrs = sc->host_msrs[vcpu];
-#endif
+
 	/*
 	 * Save guest MSRs (if any) and restore host MSRs.
 	 */
@@ -132,25 +122,27 @@ svm_msr_guest_exit(struct svm_softc *sc, int vcpu)
 }
 
 int
-svm_rdmsr(struct svm_softc *sc, int vcpu, u_int num, uint64_t *result,
-    bool *retu)
+svm_rdmsr(struct svm_softc *sc, int vcpu, uint_t num, uint64_t *result)
 {
 	int error = 0;
 
 	switch (num) {
-	case MSR_MCG_CAP:
-	case MSR_MCG_STATUS:
-		*result = 0;
-		break;
-	case MSR_MTRRcap:
-	case MSR_MTRRdefType:
-	case MSR_MTRR4kBase ... MSR_MTRR4kBase + 8:
-	case MSR_MTRR16kBase ... MSR_MTRR16kBase + 1:
-	case MSR_MTRR64kBase:
 	case MSR_SYSCFG:
 	case MSR_AMDK8_IPM:
 	case MSR_EXTFEATURES:
 		*result = 0;
+		break;
+	case MSR_AMD_DE_CFG:
+		*result = 0;
+		/*
+		 * Bit 1 of DE_CFG is defined by AMD to control whether the
+		 * lfence instruction is serializing.  Practically all CPUs
+		 * supported by bhyve also contain this MSR, making it safe to
+		 * expose unconditionally.
+		 */
+		if (is_x86_feature(x86_featureset, X86FSET_LFENCE_SER)) {
+			*result |= AMD_DE_CFG_LFENCE_DISPATCH;
+		}
 		break;
 	default:
 		error = EINVAL;
@@ -161,23 +153,17 @@ svm_rdmsr(struct svm_softc *sc, int vcpu, u_int num, uint64_t *result,
 }
 
 int
-svm_wrmsr(struct svm_softc *sc, int vcpu, u_int num, uint64_t val, bool *retu)
+svm_wrmsr(struct svm_softc *sc, int vcpu, uint_t num, uint64_t val)
 {
 	int error = 0;
 
 	switch (num) {
-	case MSR_MCG_CAP:
-	case MSR_MCG_STATUS:
-		break;		/* ignore writes */
-	case MSR_MTRRcap:
-		vm_inject_gp(sc->vm, vcpu);
-		break;
-	case MSR_MTRRdefType:
-	case MSR_MTRR4kBase ... MSR_MTRR4kBase + 8:
-	case MSR_MTRR16kBase ... MSR_MTRR16kBase + 1:
-	case MSR_MTRR64kBase:
 	case MSR_SYSCFG:
-		break;		/* Ignore writes */
+		/* Ignore writes */
+		break;
+	case MSR_AMD_DE_CFG:
+		/* Ignore writes */
+		break;
 	case MSR_AMDK8_IPM:
 		/*
 		 * Ignore writes to the "Interrupt Pending Message" MSR.

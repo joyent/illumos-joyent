@@ -53,7 +53,7 @@ static struct vmm_stat_type *vsttab[MAX_VMM_STAT_ELEMS];
 
 static MALLOC_DEFINE(M_VMM_STAT, "vmm stat", "vmm stat");
 
-#define	vst_size	((size_t)vst_num_elems * sizeof(uint64_t))
+#define	vst_size	((size_t)vst_num_elems * sizeof (uint64_t))
 
 void
 vmm_stat_register(void *arg)
@@ -137,7 +137,7 @@ vmm_stat_desc_copy(int index, char *buf, int bufsize)
 		if (index >= vst->index && index < vst->index + vst->nelems) {
 			if (vst->nelems > 1) {
 				snprintf(buf, bufsize, "%s[%d]",
-					 vst->desc, index - vst->index);
+				    vst->desc, index - vst->index);
 			} else {
 				strlcpy(buf, vst->desc, bufsize);
 			}
@@ -163,10 +163,9 @@ VMM_STAT(VMEXIT_NMI_WINDOW, "vm exits due to nmi window opening");
 VMM_STAT(VMEXIT_INOUT, "number of times in/out was intercepted");
 VMM_STAT(VMEXIT_CPUID, "number of times cpuid was intercepted");
 VMM_STAT(VMEXIT_NESTED_FAULT, "vm exits due to nested page fault");
-VMM_STAT(VMEXIT_INST_EMUL, "vm exits for instruction emulation");
+VMM_STAT(VMEXIT_MMIO_EMUL, "vm exits for mmio emulation");
 VMM_STAT(VMEXIT_UNKNOWN, "number of vm exits for unknown reason");
 VMM_STAT(VMEXIT_ASTPENDING, "number of times astpending at exit");
 VMM_STAT(VMEXIT_REQIDLE, "number of times idle requested at exit");
-VMM_STAT(VMEXIT_USERSPACE, "number of vm exits handled in userspace");
-VMM_STAT(VMEXIT_RUNBLOCK, "number of times runblock at exit");
 VMM_STAT(VMEXIT_EXCEPTION, "number of vm exits due to exceptions");
+VMM_STAT(VMEXIT_RUN_STATE, "number of vm exits due to run_state change");

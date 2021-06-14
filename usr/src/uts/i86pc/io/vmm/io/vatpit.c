@@ -76,7 +76,6 @@ struct vatpit_callout_arg {
 	int		channel_num;
 };
 
-
 struct channel {
 	int		mode;
 	uint16_t	initial;	/* initial counter value */
@@ -165,7 +164,7 @@ vatpit_callout_handler(void *a)
 
 	callout_deactivate(callout);
 
-	if (c->mode == TIMER_RATEGEN) {
+	if (c->mode == TIMER_RATEGEN || c->mode == TIMER_SQWAVE) {
 		pit_timer_start_cntr0(vatpit);
 	}
 
@@ -174,7 +173,6 @@ vatpit_callout_handler(void *a)
 
 done:
 	VATPIT_UNLOCK(vatpit);
-	return;
 }
 
 static void
@@ -197,7 +195,7 @@ pit_timer_start_cntr0(struct vatpit *vatpit)
 		 * ticks in the past.
 		 */
 		binuptime(&now);
-		if (bintime_cmp(&c->callout_bt, &now, <)) {
+		if (BINTIME_CMP(&c->callout_bt, <, &now)) {
 			c->callout_bt = now;
 			bintime_add(&c->callout_bt, &delta);
 		}
@@ -294,7 +292,6 @@ pit_readback(struct vatpit *vatpit, uint8_t cmd)
 	return (error);
 }
 
-
 static int
 vatpit_update_mode(struct vatpit *vatpit, uint8_t val)
 {
@@ -336,15 +333,12 @@ vatpit_update_mode(struct vatpit *vatpit, uint8_t val)
 }
 
 int
-vatpit_handler(struct vm *vm, int vcpuid, bool in, int port, int bytes,
-    uint32_t *eax)
+vatpit_handler(void *arg, bool in, uint16_t port, uint8_t bytes, uint32_t *eax)
 {
-	struct vatpit *vatpit;
+	struct vatpit *vatpit = arg;
 	struct channel *c;
 	uint8_t val;
 	int error;
-
-	vatpit = vm_atpit(vm);
 
 	if (bytes != 1)
 		return (-1);
@@ -394,8 +388,9 @@ vatpit_handler(struct vm *vm, int vcpuid, bool in, int port, int bytes,
 			tmp &= 0xff;
 			*eax = tmp;
 			c->frbyte ^= 1;
-		}  else
+		} else {
 			*eax = c->ol[--c->olbyte];
+		}
 	} else {
 		c->cr[c->crbyte++] = *eax;
 		if (c->crbyte == 2) {
@@ -419,12 +414,10 @@ vatpit_handler(struct vm *vm, int vcpuid, bool in, int port, int bytes,
 }
 
 int
-vatpit_nmisc_handler(struct vm *vm, int vcpuid, bool in, int port, int bytes,
+vatpit_nmisc_handler(void *arg, bool in, uint16_t port, uint8_t bytes,
     uint32_t *eax)
 {
-	struct vatpit *vatpit;
-
-	vatpit = vm_atpit(vm);
+	struct vatpit *vatpit = arg;
 
 	if (in) {
 			VATPIT_LOCK(vatpit);
@@ -446,7 +439,7 @@ vatpit_init(struct vm *vm)
 	struct vatpit_callout_arg *arg;
 	int i;
 
-	vatpit = malloc(sizeof(struct vatpit), M_VATPIT, M_WAITOK | M_ZERO);
+	vatpit = malloc(sizeof (struct vatpit), M_VATPIT, M_WAITOK | M_ZERO);
 	vatpit->vm = vm;
 
 	mtx_init(&vatpit->mtx, "vatpit lock", NULL, MTX_SPIN);
@@ -474,7 +467,6 @@ vatpit_cleanup(struct vatpit *vatpit)
 	free(vatpit, M_VATPIT);
 }
 
-#ifndef __FreeBSD__
 void
 vatpit_localize_resources(struct vatpit *vatpit)
 {
@@ -485,4 +477,3 @@ vatpit_localize_resources(struct vatpit *vatpit)
 		}
 	}
 }
-#endif /* __FreeBSD */

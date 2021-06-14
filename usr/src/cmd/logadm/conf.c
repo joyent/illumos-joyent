@@ -195,7 +195,7 @@ conf_scan(const char *fname, char *buf, int buflen, int timescan)
 	for (line = buf; line < ebuf; line = eline) {
 		char *ap;
 		struct opts *opts = NULL;
-		struct confinfo *cp;
+		struct confinfo *cp = NULL;
 
 		lineno++;
 		err_fileline(fname, lineno);
@@ -300,7 +300,7 @@ conf_scan(const char *fname, char *buf, int buflen, int timescan)
 				 * the log file name.
 				 */
 				flags = 0;
-				if (cp == NULL)
+				if (timescan && cp == NULL)
 					flags = CONFF_TSONLY;
 				fillconflist(lineno, entry, opts, comment,
 				    flags);
@@ -441,7 +441,7 @@ conf_open(const char *cfname, const char *tfname, struct opts *cliopts)
 
 	/*
 	 * possible future enhancement:  go through and mark any entries:
-	 * 		logfile -P <date>
+	 *		logfile -P <date>
 	 * as DELETED if the logfile doesn't exist
 	 */
 
@@ -685,6 +685,8 @@ conf_print(FILE *cstream, FILE *tstream)
 
 #ifdef	TESTMODULE
 
+int Debug;
+
 /*
  * test main for conf module, usage: a.out conffile
  */
@@ -702,7 +704,7 @@ main(int argc, char *argv[])
 	if (argc != 2)
 		err(EF_RAW, "usage: %s conffile\n", argv[0]);
 
-	conf_open(argv[1], argv[1], opts);
+	(void) conf_open(argv[1], argv[1], opts);
 
 	printf("conffile <%s>:\n", argv[1]);
 	conf_print(stdout, NULL);

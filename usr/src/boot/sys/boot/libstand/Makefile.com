@@ -24,10 +24,12 @@ $(LIBRARY): $(SRCS) $(OBJS)
 	$(AR) $(ARFLAGS) $@ $(OBJS)
 
 include $(SASRC)/Makefile.inc
+include $(CRYPTOSRC)/Makefile.inc
 include $(ZFSSRC)/Makefile.inc
 
 LIBCSRC=	$(SRC)/lib/libc
 OBJS +=		explicit_bzero.o
+OBJS +=		memmem.o
 
 CPPFLAGS +=	-I$(SRC)/uts/common
 
@@ -70,5 +72,5 @@ x86:
 %.o:	$(LZ4)/%.c
 	$(COMPILE.c) $<
 
-%.o:	$(LIBCSRC)/port/gen/%.c
+%.o:	$(SRC)/common/util/%.c
 	$(COMPILE.c) $<

@@ -35,6 +35,7 @@
  *
  * Copyright 2015 Pluribus Networks Inc.
  * Copyright 2019 Joyent, Inc.
+ * Copyright 2021 Oxide Computer Company
  */
 
 /*
@@ -162,7 +163,7 @@
  * this limitation and can avoid extra copying before the buffers are accessed
  * directly by the NIC.  When a guest designates buffers to be transmitted,
  * viona translates the guest-physical addresses contained in the ring
- * descriptors to host-virtual addresses via vmm_dr_gpa2kva().  That pointer is
+ * descriptors to host-virtual addresses via viona_hold_page().  That pointer is
  * wrapped in an mblk_t using a preallocated viona_desb_t for the desballoc().
  * Doing so increments vr_xfer_outstanding, preventing the ring from being
  * reset (allowing the link to drop its vmm handle to the guest) until all
@@ -170,7 +171,7 @@
  * the viona_desb_t entries is done during the VRS_INIT stage of the ring
  * worker thread.  The ring size informs that allocation as the number of
  * concurrent transmissions is limited by the number of descriptors in the
- * ring.  This minimizes allocation in the transmit hot-path by aqcuiring those
+ * ring.  This minimizes allocation in the transmit hot-path by acquiring those
  * fixed-size resources during initialization.
  *
  * This optimization depends on the underlying NIC driver freeing the mblks in
@@ -283,7 +284,7 @@ static int viona_chpoll(dev_t dev, short events, int anyyet, short *reventsp,
 static int viona_ioc_create(viona_soft_state_t *, void *, int, cred_t *);
 static int viona_ioc_delete(viona_soft_state_t *, boolean_t);
 
-static int viona_ioc_set_notify_ioport(viona_link_t *, uint_t);
+static int viona_ioc_set_notify_ioport(viona_link_t *, uint16_t);
 static int viona_ioc_ring_init(viona_link_t *, void *, int);
 static int viona_ioc_ring_reset(viona_link_t *, uint_t);
 static int viona_ioc_ring_kick(viona_link_t *, uint_t);
@@ -581,7 +582,11 @@ viona_ioctl(dev_t dev, int cmd, intptr_t data, int md, cred_t *cr, int *rv)
 		err = viona_ioc_intr_poll(link, dptr, md, rv);
 		break;
 	case VNA_IOC_SET_NOTIFY_IOP:
-		err = viona_ioc_set_notify_ioport(link, (uint_t)data);
+		if (data < 0 || data > UINT16_MAX) {
+			err = EINVAL;
+			break;
+		}
+		err = viona_ioc_set_notify_ioport(link, (uint16_t)data);
 		break;
 	default:
 		err = ENOTTY;
@@ -926,19 +931,29 @@ viona_ioc_ring_set_msi(viona_link_t *link, void *data, int md)
 }
 
 static int
-viona_notify_wcb(void *arg, uintptr_t ioport, uint_t sz, uint64_t val)
+viona_notify_iop(void *arg, bool in, uint16_t port, uint8_t bytes,
+    uint32_t *val)
 {
 	viona_link_t *link = (viona_link_t *)arg;
-	uint16_t vq = (uint16_t)val;
+	uint16_t vq = *val;
 
-	if (ioport != link->l_notify_ioport || sz != sizeof (uint16_t)) {
+	if (in) {
+		/*
+		 * Do not service read (in/ins) requests on this ioport.
+		 * Instead, indicate that the handler is not found, causing a
+		 * fallback to userspace processing.
+		 */
+		return (ESRCH);
+	}
+
+	if (port != link->l_notify_ioport) {
 		return (EINVAL);
 	}
 	return (viona_ioc_ring_kick(link, vq));
 }
 
 static int
-viona_ioc_set_notify_ioport(viona_link_t *link, uint_t ioport)
+viona_ioc_set_notify_ioport(viona_link_t *link, uint16_t ioport)
 {
 	int err = 0;
 
@@ -948,8 +963,8 @@ viona_ioc_set_notify_ioport(viona_link_t *link, uint_t ioport)
 	}
 
 	if (ioport != 0) {
-		err = vmm_drv_ioport_hook(link->l_vm_hold, ioport, NULL,
-		    viona_notify_wcb, (void *)link, &link->l_notify_cookie);
+		err = vmm_drv_ioport_hook(link->l_vm_hold, ioport,
+		    viona_notify_iop, (void *)link, &link->l_notify_cookie);
 		if (err == 0) {
 			link->l_notify_ioport = ioport;
 		}

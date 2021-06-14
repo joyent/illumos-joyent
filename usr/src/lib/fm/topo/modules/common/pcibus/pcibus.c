@@ -493,6 +493,11 @@ pciexdev_declare(topo_mod_t *mod, tnode_t *parent, di_node_t dn,
 		return (NULL);
 	}
 
+	if (pci_create_dev_sensors(mod, ntn) < 0) {
+		topo_node_unbind(ntn);
+		return (NULL);
+	}
+
 	/*
 	 * We can expect to find pci-express functions beneath the device
 	 */
@@ -573,6 +578,11 @@ pcidev_declare(topo_mod_t *mod, tnode_t *parent, di_node_t dn,
 	if ((ntn = pci_tnode_create(mod, parent, PCI_DEVICE, i, dn)) == NULL)
 		return (NULL);
 	if (did_props_set(ntn, pd, Dev_common_props, Dev_propcnt) < 0) {
+		topo_node_unbind(ntn);
+		return (NULL);
+	}
+
+	if (pci_create_dev_sensors(mod, ntn) < 0) {
 		topo_node_unbind(ntn);
 		return (NULL);
 	}
@@ -661,7 +671,7 @@ declare_dev_and_fn(topo_mod_t *mod, tnode_t *bus, tnode_t **dev, di_node_t din,
 	tnode_t *fn;
 	uint_t class, subclass;
 	uint_t vid, did;
-	uint_t pdev_sz;
+	uint_t pdev_sz = 0;
 	did_t *dp = NULL;
 
 	if (*dev == NULL) {

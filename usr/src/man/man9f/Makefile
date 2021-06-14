@@ -13,7 +13,7 @@
 # Copyright 2017, Richard Lowe
 # Copyright 2014 Garrett D'Amore <garrett@damore>
 # Copyright 2019 Joyent, Inc.
-# Copyright 2016 Nexenta Systems, Inc.
+# Copyright 2020-2021 Tintri by DDN, Inc. All rights reserved.
 # Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
 #
 
@@ -70,6 +70,7 @@ MANFILES=	ASSERT.9f				\
 		copyin.9f				\
 		copymsg.9f				\
 		copyout.9f				\
+		credentials.9f				\
 		csx_AccessConfigurationRegister.9f	\
 		csx_CS_DDI_Info.9f			\
 		csx_ConvertSize.9f			\
@@ -556,6 +557,7 @@ MANFILES=	ASSERT.9f				\
 
 MANLINKS=	AVL_NEXT.9f					\
 		AVL_PREV.9f					\
+		CRED.9f						\
 		SIZEOF_PTR.9f					\
 		SIZEOF_STRUCT.9f				\
 		STRUCT_BUF.9f					\
@@ -690,6 +692,9 @@ MANLINKS=	AVL_NEXT.9f					\
 		avl_remove.9f					\
 		avl_swap.9f					\
 		bcanputnext.9f					\
+		crdup.9f					\
+		crfree.9f					\
+		crget.9f					\
 		crgetgid.9f					\
 		crgetgroups.9f					\
 		crgetngroups.9f					\
@@ -699,6 +704,7 @@ MANLINKS=	AVL_NEXT.9f					\
 		crgetsuid.9f					\
 		crgetuid.9f					\
 		crgetzoneid.9f					\
+		crhold.9f					\
 		csx_Get16.9f					\
 		csx_Get32.9f					\
 		csx_Get64.9f					\
@@ -936,6 +942,7 @@ MANLINKS=	AVL_NEXT.9f					\
 		ddi_umem_unlock.9f				\
 		ddi_unmap_regs.9f				\
 		desballoc.9f					\
+		desballoca.9f					\
 		dev_err.9f					\
 		devmap_load.9f					\
 		devmap_umem_setup.9f				\
@@ -943,6 +950,7 @@ MANLINKS=	AVL_NEXT.9f					\
 		dlokack.9f					\
 		dlphysaddrack.9f				\
 		dluderrorind.9f					\
+		esballoca.9f					\
 		firmware_close.9f				\
 		firmware_free.9f				\
 		firmware_get_size.9f				\
@@ -971,6 +979,7 @@ MANLINKS=	AVL_NEXT.9f					\
 		inl.9f						\
 		intro.9f					\
 		inw.9f						\
+		kcred.9f					\
 		kmem_cache_alloc.9f				\
 		kmem_cache_destroy.9f				\
 		kmem_cache_free.9f				\
@@ -1021,6 +1030,7 @@ MANLINKS=	AVL_NEXT.9f					\
 		mac_fini_ops.9f					\
 		mac_free.9f					\
 		mac_hcksum_set.9f				\
+		mac_prop_info_set_default_fec.9f		\
 		mac_prop_info_set_default_link_flowctrl.9f	\
 		mac_prop_info_set_default_str.9f		\
 		mac_prop_info_set_default_uint32.9f		\
@@ -1312,7 +1322,8 @@ MANLINKS=	AVL_NEXT.9f					\
 		vsprintf.9f					\
 		vzcmn_err.9f					\
 		wr.9f						\
-		zcmn_err.9f
+		zcmn_err.9f					\
+		zone_kcred.9f
 
 assert.9f				:= LINKSRC = ASSERT.9f
 
@@ -1484,6 +1495,14 @@ cv_timedwait.9f				:= LINKSRC = condvar.9f
 cv_timedwait_sig.9f			:= LINKSRC = condvar.9f
 cv_wait.9f				:= LINKSRC = condvar.9f
 cv_wait_sig.9f				:= LINKSRC = condvar.9f
+
+CRED.9f					:= LINKSRC = credentials.9f
+crdup.9f				:= LINKSRC = credentials.9f
+crfree.9f				:= LINKSRC = credentials.9f
+crget.9f				:= LINKSRC = credentials.9f
+crhold.9f				:= LINKSRC = credentials.9f
+kcred.9f				:= LINKSRC = credentials.9f
+zone_kcred.9f				:= LINKSRC = credentials.9f
 
 csx_Get16.9f				:= LINKSRC = csx_Get8.9f
 csx_Get32.9f				:= LINKSRC = csx_Get8.9f
@@ -1794,6 +1813,8 @@ dlphysaddrack.9f			:= LINKSRC = dlbindack.9f
 dluderrorind.9f				:= LINKSRC = dlbindack.9f
 
 desballoc.9f				:= LINKSRC = esballoc.9f
+desballoca.9f				:= LINKSRC = esballoc.9f
+esballoca.9f				:= LINKSRC = esballoc.9f
 
 unfreezestr.9f				:= LINKSRC = freezestr.9f
 
@@ -1896,6 +1917,8 @@ list_tail.9f				:= LINKSRC = list_create.9f
 mac_free.9f				:= LINKSRC = mac_alloc.9f
 mac_hcksum_set.9f			:= LINKSRC = mac_hcksum_get.9f
 mac_fini_ops.9f				:= LINKSRC = mac_init_ops.9f
+
+mac_prop_info_set_default_fec.9f	:= LINKSRC = mac_prop_info.9f
 mac_prop_info_set_default_link_flowctrl.9f	:= LINKSRC = mac_prop_info.9f
 mac_prop_info_set_default_str.9f	:= LINKSRC = mac_prop_info.9f
 mac_prop_info_set_default_uint8.9f	:= LINKSRC = mac_prop_info.9f

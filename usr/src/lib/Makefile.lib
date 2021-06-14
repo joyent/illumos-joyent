@@ -145,7 +145,7 @@ USDT_G_PICS=	$(PICS)
 
 HSONAME=	-h$(SONAME)
 DYNFLAGS=	$(HSONAME) $(ZTEXT) $(ZDEFS) $(BDIRECT) \
-		$(MAPFILES:%=-M%) $(MAPFILE.PGA:%=-M%) $(MAPFILE.NED:%=-M%) \
+		$(MAPFILES:%=-Wl,-M%) $(MAPFILE.PGA:%=-Wl,-M%) $(MAPFILE.NED:%=-Wl,-M%) \
 		$(LDCHECKS)
 
 LDLIBS=		$(LDLIBS.lib)
@@ -180,6 +180,13 @@ INS.liblinkccc=	-$(RM) $@; $(SYMLINK) $(LIBLINKPATH)$(LIBLINKSCCC)$(VERS) $@
 # default 64-bit dynamic library symlink
 INS.liblink64=	-$(RM) $@; $(SYMLINK) $(LIBLINKPATH)$(LIBLINKS)$(VERS) $@
 INS.liblinkccc64= -$(RM) $@; $(SYMLINK) $(LIBLINKPATH)$(LIBLINKSCCC)$(VERS) $@
+
+#
+# Default to adding stack protection to all libraries.
+#
+CFLAGS +=	$(CCSTACKPROTECT)
+CFLAGS64 +=	$(CCSTACKPROTECT)
+LDLIBS +=	$(LDSTACKPROTECT)
 
 #
 # If appropriate, augment POST_PROCESS_O and POST_PROCESS_SO to do CTF
@@ -225,7 +232,7 @@ HSONAMECCC=	-h $(SONAMECCC)
 # Keep in sync with the standard DYNFLAGS
 #
 $(DYNLIBCCC):=	DYNFLAGS = $(HSONAMECCC) $(ZTEXT) $(ZDEFS) \
-		$(MAPFILES:%=-M%) $(MAPFILE.PGA:%=-M%) $(MAPFILE.NED:%=-M%) \
+		$(MAPFILES:%=-Wl,-M%) $(MAPFILE.PGA:%=-Wl,-M%) $(MAPFILE.NED:%=-Wl,-M%) \
 		$(BDIRECT) $(NORUNPATH)
 
 

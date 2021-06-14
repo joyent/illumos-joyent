@@ -43,8 +43,6 @@ all debug: $(PROG)
 
 install: all $(ROOTPROG)
 
-LINTSRCS += $(LOCALOBJS:%.o=../common/%.c)
-
 $(PROG): $(OBJS)
 	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
 	$(CTFMRG)

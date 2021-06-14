@@ -28,7 +28,7 @@
  * $FreeBSD$
  */
 /*
- * Copyright 2017 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #include <sys/cdefs.h>
@@ -62,13 +62,6 @@ vmx_ctl_allows_zero_setting(uint64_t msr_val, int bitpos)
 	return ((msr_val & (1UL << bitpos)) == 0);
 }
 
-uint32_t
-vmx_revision(void)
-{
-
-	return (rdmsr(MSR_VMX_BASIC) & 0xffffffff);
-}
-
 /*
  * Generate a bitmask to be used for the VMCS execution control fields.
  *
@@ -82,7 +75,7 @@ vmx_revision(void)
  */
 int
 vmx_set_ctlreg(int ctl_reg, int true_ctl_reg, uint32_t ones_mask,
-	       uint32_t zeros_mask, uint32_t *retval)
+    uint32_t zeros_mask, uint32_t *retval)
 {
 	int i;
 	uint64_t val, trueval;
@@ -105,8 +98,8 @@ vmx_set_ctlreg(int ctl_reg, int true_ctl_reg, uint32_t ones_mask,
 		zero_allowed = vmx_ctl_allows_zero_setting(trueval, i);
 
 		KASSERT(one_allowed || zero_allowed,
-			("invalid zero/one setting for bit %d of ctl 0x%0x, "
-			 "truectl 0x%0x\n", i, ctl_reg, true_ctl_reg));
+		    ("invalid zero/one setting for bit %d of ctl 0x%0x, "
+		    "truectl 0x%0x\n", i, ctl_reg, true_ctl_reg));
 
 		if (zero_allowed && !one_allowed) {		/* b(i),c(i) */
 			if (ones_mask & (1 << i))
@@ -117,21 +110,26 @@ vmx_set_ctlreg(int ctl_reg, int true_ctl_reg, uint32_t ones_mask,
 				return (EINVAL);
 			*retval |= 1 << i;
 		} else {
-			if (zeros_mask & (1 << i))	/* b(ii),c(ii) */
+			if (zeros_mask & (1 << i)) {
+				/* b(ii),c(ii) */
 				*retval &= ~(1 << i);
-			else if (ones_mask & (1 << i)) /* b(ii), c(ii) */
+			} else if (ones_mask & (1 << i)) {
+				/* b(ii), c(ii) */
 				*retval |= 1 << i;
-			else if (!true_ctls_avail)
-				*retval &= ~(1 << i);	/* b(iii) */
-			else if (vmx_ctl_allows_zero_setting(val, i))/* c(iii)*/
+			} else if (!true_ctls_avail) {
+				/* b(iii) */
 				*retval &= ~(1 << i);
-			else if (vmx_ctl_allows_one_setting(val, i)) /* c(iv) */
+			} else if (vmx_ctl_allows_zero_setting(val, i)) {
+				/* c(iii) */
+				*retval &= ~(1 << i);
+			} else if (vmx_ctl_allows_one_setting(val, i)) {
+				/* c(iv) */
 				*retval |= 1 << i;
-			else {
+			} else {
 				panic("vmx_set_ctlreg: unable to determine "
-				      "correct value of ctl bit %d for msr "
-				      "0x%0x and true msr 0x%0x", i, ctl_reg,
-				      true_ctl_reg);
+				    "correct value of ctl bit %d for msr "
+				    "0x%0x and true msr 0x%0x", i, ctl_reg,
+				    true_ctl_reg);
 			}
 		}
 	}
@@ -147,7 +145,7 @@ msr_bitmap_initialize(char *bitmap)
 }
 
 int
-msr_bitmap_change_access(char *bitmap, u_int msr, int access)
+msr_bitmap_change_access(char *bitmap, uint_t msr, int access)
 {
 	int byte, bit;
 
@@ -177,14 +175,11 @@ msr_bitmap_change_access(char *bitmap, u_int msr, int access)
 static uint64_t misc_enable;
 static uint64_t platform_info;
 static uint64_t turbo_ratio_limit;
-#ifdef __FreeBSD__
-static uint64_t host_msrs[GUEST_MSR_NUM];
-#endif /* __FreeBSD__ */
 
 static bool
 nehalem_cpu(void)
 {
-	u_int family, model;
+	uint_t family, model;
 
 	/*
 	 * The family:model numbers belonging to the Nehalem microarchitecture
@@ -209,7 +204,7 @@ nehalem_cpu(void)
 static bool
 westmere_cpu(void)
 {
-	u_int family, model;
+	uint_t family, model;
 
 	/*
 	 * The family:model numbers belonging to the Westmere microarchitecture
@@ -253,18 +248,6 @@ vmx_msr_init(void)
 {
 	uint64_t bus_freq, ratio;
 	int i;
-
-#ifdef __FreeBSD__
-	/* XXXJOY: Do we want to do this caching? */
-	/*
-	 * It is safe to cache the values of the following MSRs because
-	 * they don't change based on curcpu, curproc or curthread.
-	 */
-	host_msrs[IDX_MSR_LSTAR] = rdmsr(MSR_LSTAR);
-	host_msrs[IDX_MSR_CSTAR] = rdmsr(MSR_CSTAR);
-	host_msrs[IDX_MSR_STAR] = rdmsr(MSR_STAR);
-	host_msrs[IDX_MSR_SF_MASK] = rdmsr(MSR_SF_MASK);
-#endif /* __FreeBSD__ */
 
 	/*
 	 * Initialize emulated MSRs
@@ -350,16 +333,12 @@ vmx_msr_guest_init(struct vmx *vmx, int vcpuid)
 	    PAT_VALUE(5, PAT_WRITE_THROUGH)	|
 	    PAT_VALUE(6, PAT_UNCACHED)		|
 	    PAT_VALUE(7, PAT_UNCACHEABLE);
-
-	return;
 }
 
 void
 vmx_msr_guest_enter(struct vmx *vmx, int vcpuid)
 {
 	uint64_t *guest_msrs = vmx->guest_msrs[vcpuid];
-
-#ifndef __FreeBSD__
 	uint64_t *host_msrs = vmx->host_msrs[vcpuid];
 
 	/* Save host MSRs */
@@ -367,12 +346,8 @@ vmx_msr_guest_enter(struct vmx *vmx, int vcpuid)
 	host_msrs[IDX_MSR_CSTAR] = rdmsr(MSR_CSTAR);
 	host_msrs[IDX_MSR_STAR] = rdmsr(MSR_STAR);
 	host_msrs[IDX_MSR_SF_MASK] = rdmsr(MSR_SF_MASK);
-#endif /* __FreeBSD__ */
 
 	/* Save host MSRs (in particular, KGSBASE) and restore guest MSRs */
-#ifdef __FreeBSD__
-	update_pcb_bases(curpcb);
-#endif
 	wrmsr(MSR_LSTAR, guest_msrs[IDX_MSR_LSTAR]);
 	wrmsr(MSR_CSTAR, guest_msrs[IDX_MSR_CSTAR]);
 	wrmsr(MSR_STAR, guest_msrs[IDX_MSR_STAR]);
@@ -384,9 +359,7 @@ void
 vmx_msr_guest_exit(struct vmx *vmx, int vcpuid)
 {
 	uint64_t *guest_msrs = vmx->guest_msrs[vcpuid];
-#ifndef __FreeBSD__
 	uint64_t *host_msrs = vmx->host_msrs[vcpuid];
-#endif
 
 	/* Save guest MSRs */
 	guest_msrs[IDX_MSR_LSTAR] = rdmsr(MSR_LSTAR);
@@ -405,7 +378,7 @@ vmx_msr_guest_exit(struct vmx *vmx, int vcpuid)
 }
 
 int
-vmx_rdmsr(struct vmx *vmx, int vcpuid, u_int num, uint64_t *val, bool *retu)
+vmx_rdmsr(struct vmx *vmx, int vcpuid, uint_t num, uint64_t *val)
 {
 	const uint64_t *guest_msrs;
 	int error;
@@ -414,16 +387,13 @@ vmx_rdmsr(struct vmx *vmx, int vcpuid, u_int num, uint64_t *val, bool *retu)
 	error = 0;
 
 	switch (num) {
-	case MSR_MCG_CAP:
-	case MSR_MCG_STATUS:
-		*val = 0;
-		break;
-	case MSR_MTRRcap:
-	case MSR_MTRRdefType:
-	case MSR_MTRR4kBase ... MSR_MTRR4kBase + 8:
-	case MSR_MTRR16kBase ... MSR_MTRR16kBase + 1:
-	case MSR_MTRR64kBase:
-		*val = 0;
+	case MSR_IA32_FEATURE_CONTROL:
+		/*
+		 * We currently don't support SGX support in guests, so
+		 * always report those features as disabled with the MSR
+		 * locked so the guest won't attempt to write to it.
+		 */
+		*val = IA32_FEATURE_CONTROL_LOCK;
 		break;
 	case MSR_IA32_MISC_ENABLE:
 		*val = misc_enable;
@@ -446,27 +416,16 @@ vmx_rdmsr(struct vmx *vmx, int vcpuid, u_int num, uint64_t *val, bool *retu)
 }
 
 int
-vmx_wrmsr(struct vmx *vmx, int vcpuid, u_int num, uint64_t val, bool *retu)
+vmx_wrmsr(struct vmx *vmx, int vcpuid, uint_t num, uint64_t val)
 {
 	uint64_t *guest_msrs;
 	uint64_t changed;
 	int error;
-	
+
 	guest_msrs = vmx->guest_msrs[vcpuid];
 	error = 0;
 
 	switch (num) {
-	case MSR_MCG_CAP:
-	case MSR_MCG_STATUS:
-		break;		/* ignore writes */
-	case MSR_MTRRcap:
-		vm_inject_gp(vmx->vm, vcpuid);
-		break;
-	case MSR_MTRRdefType:
-	case MSR_MTRR4kBase ... MSR_MTRR4kBase + 8:
-	case MSR_MTRR16kBase ... MSR_MTRR16kBase + 1:
-	case MSR_MTRR64kBase:
-		break;		/* Ignore writes */
 	case MSR_IA32_MISC_ENABLE:
 		changed = val ^ misc_enable;
 		/*
@@ -493,11 +452,6 @@ vmx_wrmsr(struct vmx *vmx, int vcpuid, u_int num, uint64_t val, bool *retu)
 		else
 			vm_inject_gp(vmx->vm, vcpuid);
 		break;
-#ifdef __FreeBSD__
-	case MSR_TSC:
-		error = vmx_set_tsc_offset(vmx, vcpuid, val - rdtsc());
-		break;
-#endif /* __FreeBSD__ */
 	default:
 		error = EINVAL;
 		break;

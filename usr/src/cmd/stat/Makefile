@@ -40,14 +40,13 @@ all :=		TARGET = all
 install :=	TARGET = install
 clean :=	TARGET = clean
 clobber :=	TARGET = clobber
-lint :=		TARGET = lint
 _msg :=		TARGET = _msg
 
 .KEEP_STATE:
 
-all install lint clean clobber _msg: $(SUBDIRS)
+all install clean clobber _msg: $(SUBDIRS)
 
 $(SUBDIRS): FRC
-	@cd $@; pwd; $(MAKE) $(MFLAGS) $(TARGET)
+	@cd $@; pwd; $(MAKE) $(TARGET)
 
 FRC:

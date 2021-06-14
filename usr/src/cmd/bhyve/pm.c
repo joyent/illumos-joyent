@@ -28,6 +28,7 @@
  */
 /*
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #include <sys/cdefs.h>
@@ -210,7 +211,7 @@ pm1_enable_handler(struct vmctx *ctx, int vcpu, int in, int port, int bytes,
 		 * the global lock, but ACPI-CA whines profusely if it
 		 * can't set GBL_EN.
 		 */
-		pm1_enable = *eax & (PM1_PWRBTN_EN | PM1_GBL_EN);
+		pm1_enable = *eax & (PM1_RTC_EN | PM1_PWRBTN_EN | PM1_GBL_EN);
 		sci_update(ctx);
 	}
 	pthread_mutex_unlock(&pm_lock);
@@ -441,3 +442,14 @@ sci_init(struct vmctx *ctx)
 	}
 #endif
 }
+
+#ifndef	__FreeBSD__
+void pmtmr_init(struct vmctx *ctx)
+{
+	int err;
+
+	/* Attach in-kernel PM timer emulation to correct IO port */
+	err = vm_pmtmr_set_location(ctx, IO_PMTMR);
+	assert(err == 0);
+}
+#endif

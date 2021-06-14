@@ -40,9 +40,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/smp.h>
 #include <sys/sysctl.h>
 
-#include <vm/vm.h>
-#include <vm/pmap.h>
-
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
 
@@ -52,6 +49,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/vmparam.h>
 #include <machine/pci_cfgreg.h>
 
+#include "ivhd_if.h"
 #include "pcib_if.h"
 
 #include "io/iommu.h"
@@ -356,7 +354,6 @@ amdvi_cmd_inv_iommu_pages(struct amdvi_softc *softc, uint16_t domain_id,
 	cmd = amdvi_get_cmd_tail(softc);
 	KASSERT(cmd != NULL, ("Cmd is NULL"));
 
-
 	cmd->opcode = AMDVI_INVD_PAGE_OPCODE;
 	cmd->word1 = domain_id;
 	/*
@@ -515,8 +512,7 @@ amdvi_dump_cmds(struct amdvi_softc *softc, int count)
 		printf("  [CMD%d, off:0x%x] opcode= 0x%x 0x%x"
 		    " 0x%x 0x%lx\n", i, off, cmd->opcode,
 		    cmd->word0, cmd->word1, cmd->addr);
-		off = (off + sizeof(struct amdvi_cmd)) %
-		    (softc->cmd_max * sizeof(struct amdvi_cmd));
+		off = MOD_INC(off, sizeof(struct amdvi_cmd), softc->cmd_max);
 	}
 }
 
@@ -729,7 +725,6 @@ amdvi_print_pci_cap(device_t dev)
 	struct amdvi_softc *softc;
 	uint32_t off, cap;
 
-
 	softc = device_get_softc(dev);
 	off = softc->cap_off;
 
@@ -774,101 +769,34 @@ amdvi_free_evt_intr_res(device_t dev)
 {
 
 	struct amdvi_softc *softc;
+	device_t mmio_dev;
 
 	softc = device_get_softc(dev);
-	if (softc->event_tag != NULL) {
-		bus_teardown_intr(dev, softc->event_res, softc->event_tag);
-	}
-	if (softc->event_res != NULL) {
-		bus_release_resource(dev, SYS_RES_IRQ, softc->event_rid,
-		    softc->event_res);
-	}
-	bus_delete_resource(dev, SYS_RES_IRQ, softc->event_rid);
-	PCIB_RELEASE_MSI(device_get_parent(device_get_parent(dev)),
-	    dev, 1, &softc->event_irq);
+	mmio_dev = softc->pci_dev;
+
+	IVHD_TEARDOWN_INTR(mmio_dev);
 }
 
 static bool
 amdvi_alloc_intr_resources(struct amdvi_softc *softc)
 {
 	struct amdvi_ctrl *ctrl;
-	device_t dev, pcib;
-	device_t mmio_dev;
-	uint64_t msi_addr;
-	uint32_t msi_data;
+	device_t dev, mmio_dev;
 	int err;
 
 	dev = softc->dev;
-	pcib = device_get_parent(device_get_parent(dev));
-	mmio_dev = pci_find_bsf(PCI_RID2BUS(softc->pci_rid),
-            PCI_RID2SLOT(softc->pci_rid), PCI_RID2FUNC(softc->pci_rid));
-	if (device_is_attached(mmio_dev)) {
-		device_printf(dev,
-		    "warning: IOMMU device is claimed by another driver %s\n",
-		    device_get_driver(mmio_dev)->name);
-	}
-
-	softc->event_irq = -1;
-	softc->event_rid = 0;
-
-	/*
-	 * Section 3.7.1 of IOMMU rev 2.0. With MSI, there is only one
-	 * interrupt. XXX: Enable MSI/X support.
-	 */
-	err = PCIB_ALLOC_MSI(pcib, dev, 1, 1, &softc->event_irq);
-	if (err) {
-		device_printf(dev,
-		    "Couldn't find event MSI IRQ resource.\n");
-		return (ENOENT);
-	}
-
-	err = bus_set_resource(dev, SYS_RES_IRQ, softc->event_rid,
-	    softc->event_irq, 1);
-	if (err) {
-		device_printf(dev, "Couldn't set event MSI resource.\n");
-		return (ENXIO);
-	}
-
-	softc->event_res = bus_alloc_resource_any(dev, SYS_RES_IRQ,
-	    &softc->event_rid, RF_ACTIVE);
-	if (!softc->event_res) {
-		device_printf(dev,
-		    "Unable to allocate event INTR resource.\n");
-		return (ENOMEM);
-	}
-
-	if (bus_setup_intr(dev, softc->event_res,
-	    INTR_TYPE_MISC | INTR_MPSAFE, NULL, amdvi_event_intr,
-	    softc, &softc->event_tag)) {
-		device_printf(dev, "Fail to setup event intr\n");
-		bus_release_resource(softc->dev, SYS_RES_IRQ,
-		    softc->event_rid, softc->event_res);
-		softc->event_res = NULL;
-		return (ENXIO);
-	}
-
-	bus_describe_intr(dev, softc->event_res, softc->event_tag,
-	    "fault");
-
-	err = PCIB_MAP_MSI(pcib, dev, softc->event_irq, &msi_addr,
-	    &msi_data);
-	if (err) {
-		device_printf(dev,
-		    "Event interrupt config failed, err=%d.\n",
-		    err);
-		amdvi_free_evt_intr_res(softc->dev);
-		return (err);
-	}
+	mmio_dev = softc->pci_dev;
 
 	/* Clear interrupt status bits. */
 	ctrl = softc->ctrl;
 	ctrl->status &= AMDVI_STATUS_EV_OF | AMDVI_STATUS_EV_INTR;
 
-	/* Now enable MSI interrupt. */
-	pci_enable_msi(mmio_dev, msi_addr, msi_data);
-	return (0);
+	err = IVHD_SETUP_INTR(mmio_dev, amdvi_event_intr, softc, "fault");
+	if (err)
+		device_printf(dev, "Interrupt setup failed on %s\n",
+		    device_get_nameunit(mmio_dev));
+	return (err);
 }
-
 
 static void
 amdvi_print_dev_cap(struct amdvi_softc *softc)
@@ -1003,8 +931,8 @@ amdvi_teardown_hw(struct amdvi_softc *softc)
 
 	dev = softc->dev;
 
-	/* 
-	 * Called after disable, h/w is stopped by now, free all the resources. 
+	/*
+	 * Called after disable, h/w is stopped by now, free all the resources.
 	 */
 	amdvi_free_evt_intr_res(dev);
 
@@ -1026,7 +954,7 @@ amdvi_init(void)
 	}
 	if (!amdvi_enable_user && ivhd_count) {
 		printf("bhyve: Found %d AMD-Vi/IOMMU device(s), "
-		    	"use hw.vmm.amdvi.enable=1 to enable pass-through.\n",
+		    "use hw.vmm.amdvi.enable=1 to enable pass-through.\n",
 		    ivhd_count);
 		return (EINVAL);
 	}
@@ -1121,7 +1049,6 @@ amdvi_free_ptp(uint64_t *ptp, int level)
 
 		amdvi_free_ptp((uint64_t *)PHYS_TO_DMAP(ptp[i]
 		    & AMDVI_PT_MASK), level - 1);
-
 	}
 
 	free(ptp, M_AMDVI);
@@ -1304,7 +1231,7 @@ amdvi_set_dte(struct amdvi_domain *domain, uint16_t devid, bool enable)
 	struct amdvi_dte* temp;
 
 	KASSERT(domain, ("domain is NULL for pci_rid:0x%x\n", devid));
-	
+
 	softc = amdvi_find_iommu(devid);
 	KASSERT(softc, ("softc is NULL for pci_rid:0x%x\n", devid));
 
@@ -1397,11 +1324,11 @@ amdvi_enable(void)
 		ctrl = softc->ctrl;
 		KASSERT(ctrl, ("ctrl is NULL\n"));
 
-		val = (	AMDVI_CTRL_EN 		|
-			AMDVI_CTRL_CMD 		|
-		    	AMDVI_CTRL_ELOG 	|
-		    	AMDVI_CTRL_ELOGINT 	|
-		    	AMDVI_CTRL_INV_TO_1S);
+		val = (	AMDVI_CTRL_EN		|
+			AMDVI_CTRL_CMD		|
+			AMDVI_CTRL_ELOG		|
+			AMDVI_CTRL_ELOGINT	|
+			AMDVI_CTRL_INV_TO_1S);
 
 		if (softc->ivhd_flag & IVHD_FLAG_COH)
 			val |= AMDVI_CTRL_COH;

@@ -1,0 +1,42 @@
+Git commit hashes in this file refer to the official FreeBSD distributed
+public Git repository at https://git.freebsd.org/src.git
+
+The bhyve kernel module and its associated userland consumers have been updated
+to the latest upstream FreeBSD sources as of:
+
+commit 9f40a3be3d5dbddf782c3d1eeaadcd022a4dad01
+Author: John Baldwin <jhb@FreeBSD.org>
+Date:   Wed Mar 24 09:29:15 2021 -0700
+
+    bhyve hostbridge: Rename "device" property to "devid".
+
+    "device" is already used as the generic PCI-level name of the device
+    model to use (e.g. "hostbridge").  The result was that parsing
+    "hostbridge" as an integer failed and the host bridge used a device ID
+    of 0.  The EFI ROM asserts that the device ID of the hostbridge is not
+    0, so booting with the current EFI ROM was failing during the ROM
+    boot.
+
+Divergence Notes:
+
+A previous sync skipped commit 0ff7076bdbc6dae5ea44c0acdb567e1cede199d1 which
+introduced a generic backend functionality to network devices.  Without that in
+place, subsequent updates reflect the absence of that subsystem.  Integrating
+net backends has not been a priority, given the common use of viona on illumos.
+
+The draft Save/Restore functionality, added in FreeBSD commit
+483d953a86a2507355f8287c5107dc827a0ff516, has not been synced into illumos bhyve
+yet.  It is not built by default in FreeBSD, so we're not interested in taking
+it until it successfully endures more in-depth testing.
+
+The VirtFS filesystem sharing feature, added in FreeBSD commit
+100353cfbf882e23c911300ebd0cb458bd3ee975, has not been synced into illumos bhyve
+yet.  It depends on the userland lib9p which needs a fair amount of work to
+build and run on illumos. The integration of this feature is being tracked in
+https://www.illumos.org/issues/13380
+
+The stub usr/src/compat/bhyve/stdatomic.h file only includes enough glue
+to satisfy the use of <stdatomic.h> in usr/src/cmd/bhyve/rfb.c, and in
+particular assumes that atomic variables are sized as an int. If other bhyve
+pieces start using stdatomic.h, this will need enhancing.
+

@@ -12,20 +12,73 @@
 /*
  * Copyright 2016 Toomas Soome <tsoome@me.com>
  * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 /*
- * Common functions to implement graphical framebuffer support for console.
+ * The workhorse here is gfxfb_blt(). It is implemented to mimic UEFI
+ * GOP Blt, and allows us to fill the rectangle on screen, copy
+ * rectangle from video to buffer and buffer to video and video to video.
+ * Such implementation does allow us to have almost identical implementation
+ * for both BIOS VBE and UEFI.
+ *
+ * ALL pixel data is assumed to be 32-bit BGRA (byte order Blue, Green, Red,
+ * Alpha) format, this allows us to only handle RGB data and not to worry
+ * about mixing RGB with indexed colors.
+ * Data exchange between memory buffer and video will translate BGRA
+ * and native format as following:
+ *
+ * 32-bit to/from 32-bit is trivial case.
+ * 32-bit to/from 24-bit is also simple - we just drop the alpha channel.
+ * 32-bit to/from 16-bit is more complicated, because we nee to handle
+ * data loss from 32-bit to 16-bit. While reading/writing from/to video, we
+ * need to apply masks of 16-bit color components. This will preserve
+ * colors for terminal text. For 32-bit truecolor PMG images, we need to
+ * translate 32-bit colors to 15/16 bit colors and this means data loss.
+ * There are different algorithms how to perform such color space reduction,
+ * we are currently using bitwise right shift to reduce color space and so far
+ * this technique seems to be sufficient (see also gfx_fb_putimage(), the
+ * end of for loop).
+ * 32-bit to/from 8-bit is the most troublesome because 8-bit colors are
+ * indexed. From video, we do get color indexes, and we do translate
+ * color index values to RGB. To write to video, we again need to translate
+ * RGB to color index. Additionally, we need to translate between VGA and
+ * Sun colors.
+ *
+ * Our internal color data is represented using BGRA format. But the hardware
+ * used indexed colors for 8-bit colors (0-255) and for this mode we do
+ * need to perform translation to/from BGRA and index values.
+ *
+ *                   - paletteentry RGB <-> index -
+ * BGRA BUFFER <----/                              \ - VIDEO
+ *                  \                              /
+ *                   -  RGB (16/24/32)            -
+ *
+ * To perform index to RGB translation, we use palette table generated
+ * from when we set up 8-bit mode video. We cannot read palette data from
+ * the hardware, because not all hardware supports reading it.
+ *
+ * BGRA to index is implemented in rgb_to_color_index() by searching
+ * palette array for closest match of RBG values.
+ *
+ * Note: In 8-bit mode, We do store first 16 colors to palette registers
+ * in VGA color order, this serves two purposes; firstly,
+ * if palette update is not supported, we still have correct 16 colors.
+ * Secondly, the kernel does get correct 16 colors when some other boot
+ * loader is used. However, the palette map for 8-bit colors is using
+ * Sun color ordering - this does allow us to skip translation
+ * from VGA colors to Sun colors, while we are reading RGB data.
  */
 
 #include <sys/cdefs.h>
 #include <sys/param.h>
 #include <stand.h>
-#if	defined(EFI)
+#if defined(EFI)
 #include <efi.h>
 #include <efilib.h>
 #else
 #include <btxv86.h>
+#include <vbe.h>
 #endif
 #include <sys/tem_impl.h>
 #include <sys/consplat.h>
@@ -37,6 +90,15 @@
 #include <gfx_fb.h>
 #include <pnglite.h>
 #include <bootstrap.h>
+#include <lz4.h>
+
+/* VGA text mode does use bold font. */
+#if !defined(VGA_8X16_FONT)
+#define	VGA_8X16_FONT		"/boot/fonts/8x16b.fnt"
+#endif
+#if !defined(DEFAULT_8X16_FONT)
+#define	DEFAULT_8X16_FONT	"/boot/fonts/8x16.fnt"
+#endif
 
 /*
  * Global framebuffer struct, to be updated with mode changes.
@@ -48,19 +110,18 @@ static int gfx_inverse = 0;
 static int gfx_inverse_screen = 0;
 static uint8_t gfx_fg = DEFAULT_ANSI_FOREGROUND;
 static uint8_t gfx_bg = DEFAULT_ANSI_BACKGROUND;
-
-static int gfx_fb_cons_clear(struct vis_consclear *);
-static void gfx_fb_cons_copy(struct vis_conscopy *);
-static void gfx_fb_cons_display(struct vis_consdisplay *);
-
-#if	defined(EFI)
-static int gfx_gop_cons_clear(uint32_t data, uint32_t width, uint32_t height);
-static void gfx_gop_cons_copy(struct vis_conscopy *);
-static void gfx_gop_cons_display(struct vis_consdisplay *);
+#if defined(EFI)
+static EFI_GRAPHICS_OUTPUT_BLT_PIXEL *GlyphBuffer;
+#else
+static struct paletteentry *GlyphBuffer;
 #endif
-static int gfx_bm_cons_clear(uint32_t data, uint32_t width, uint32_t height);
-static void gfx_bm_cons_copy(struct vis_conscopy *);
-static void gfx_bm_cons_display(struct vis_consdisplay *);
+static size_t GlyphBufferSize;
+
+int gfx_fb_cons_clear(struct vis_consclear *);
+void gfx_fb_cons_copy(struct vis_conscopy *);
+void gfx_fb_cons_display(struct vis_consdisplay *);
+
+static bool insert_font(char *, FONT_FLAGS);
 
 /*
  * Set default operations to use bitmap based implementation.
@@ -71,15 +132,6 @@ static void gfx_bm_cons_display(struct vis_consdisplay *);
  * Task Priority Level (TPL) to TPL_NOTIFY, which is highest priority
  * usable in application.
  */
-struct gfx_fb_ops {
-	int (*gfx_cons_clear)(uint32_t, uint32_t, uint32_t);
-	void (*gfx_cons_copy)(struct vis_conscopy *);
-	void (*gfx_cons_display)(struct vis_consdisplay *);
-} gfx_fb_ops = {
-	.gfx_cons_clear = gfx_bm_cons_clear,
-	.gfx_cons_copy = gfx_bm_cons_copy,
-	.gfx_cons_display = gfx_bm_cons_display
-};
 
 /*
  * Translate platform specific FB address.
@@ -87,7 +139,7 @@ struct gfx_fb_ops {
 static uint8_t *
 gfx_get_fb_address(void)
 {
-#if	defined(EFI)
+#if defined(EFI)
 	return ((uint8_t *)(uintptr_t)
 	    gfx_fb.framebuffer_common.framebuffer_addr);
 #else
@@ -153,28 +205,35 @@ gfx_parse_mode_str(char *str, int *x, int *y, int *depth)
 
 /*
  * Support for color mapping.
+ * For 8, 24 and 32 bit depth, use mask size 8.
+ * 15/16 bit depth needs to use mask size from mode,
+ * or we will lose color information from 32-bit to 15/16 bit translation.
  */
 uint32_t
 gfx_fb_color_map(uint8_t index)
 {
 	rgb_t rgb;
+	int bpp;
 
-	if (gfx_fb.framebuffer_common.framebuffer_type !=
-	    MULTIBOOT_FRAMEBUFFER_TYPE_RGB) {
-		if (index < nitems(solaris_color_to_pc_color))
-			return (solaris_color_to_pc_color[index]);
-		else
-			return (index);
-	}
+	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
 
-	rgb.red.pos = gfx_fb.u.fb2.framebuffer_red_field_position;
-	rgb.red.size = gfx_fb.u.fb2.framebuffer_red_mask_size;
+	rgb.red.pos = 16;
+	if (bpp == 2)
+		rgb.red.size = gfx_fb.u.fb2.framebuffer_red_mask_size;
+	else
+		rgb.red.size = 8;
 
-	rgb.green.pos = gfx_fb.u.fb2.framebuffer_green_field_position;
-	rgb.green.size = gfx_fb.u.fb2.framebuffer_green_mask_size;
+	rgb.green.pos = 8;
+	if (bpp == 2)
+		rgb.green.size = gfx_fb.u.fb2.framebuffer_green_mask_size;
+	else
+		rgb.green.size = 8;
 
-	rgb.blue.pos = gfx_fb.u.fb2.framebuffer_blue_field_position;
-	rgb.blue.size = gfx_fb.u.fb2.framebuffer_blue_mask_size;
+	rgb.blue.pos = 0;
+	if (bpp == 2)
+		rgb.blue.size = gfx_fb.u.fb2.framebuffer_blue_mask_size;
+	else
+		rgb.blue.size = 8;
 
 	return (rgb_color_map(&rgb, index));
 }
@@ -228,10 +287,7 @@ gfx_set_colors(struct env_var *ev, int flags, const void *value)
 	if (value == NULL)
 		return (CMD_OK);
 
-	if (gfx_fb.framebuffer_common.framebuffer_bpp < 24)
-		limit = 7;
-	else
-		limit = 255;
+	limit = 255;
 
 	if (color_name_to_ansi(value, &val)) {
 		snprintf(buf, sizeof (buf), "%d", val);
@@ -243,18 +299,16 @@ gfx_set_colors(struct env_var *ev, int flags, const void *value)
 		val = (int)strtol(value, &end, 0);
 		if (errno != 0 || *end != '\0') {
 			printf("Allowed values are either ansi color name or "
-			    "number from range [0-7]%s.\n",
-			    limit == 7 ? "" : " or [16-255]");
+			    "number from range [0-255].\n");
 			return (CMD_OK);
 		}
 		evalue = value;
 	}
 
 	/* invalid value? */
-	if ((val < 0 || val > limit) || (val > 7 && val < 16)) {
+	if ((val < 0 || val > limit)) {
 		printf("Allowed values are either ansi color name or "
-		    "number from range [0-7]%s.\n",
-		    limit == 7 ? "" : " or [16-255]");
+		    "number from range [0-255].\n");
 		return (CMD_OK);
 	}
 
@@ -312,29 +366,15 @@ gfx_set_inverses(struct env_var *ev, int flags, const void *value)
  * Initialize gfx framework.
  */
 void
-gfx_framework_init(struct visual_ops *fb_ops)
+gfx_framework_init(void)
 {
 	int rc, limit;
 	char *env, buf[2];
-#if	defined(EFI)
-	extern EFI_GRAPHICS_OUTPUT *gop;
-
-	if (gop != NULL) {
-		gfx_fb_ops.gfx_cons_clear = gfx_gop_cons_clear;
-		gfx_fb_ops.gfx_cons_copy = gfx_gop_cons_copy;
-		gfx_fb_ops.gfx_cons_display = gfx_gop_cons_display;
-	}
-#endif
 
 	if (gfx_fb.framebuffer_common.framebuffer_bpp < 24)
 		limit = 7;
 	else
 		limit = 255;
-
-	/* Add visual io callbacks */
-	fb_ops->cons_clear = gfx_fb_cons_clear;
-	fb_ops->cons_copy = gfx_fb_cons_copy;
-	fb_ops->cons_display = gfx_fb_cons_display;
 
 	/* set up tem inverse controls */
 	env = getenv("tem.inverse");
@@ -390,87 +430,535 @@ gfx_framework_init(struct visual_ops *fb_ops)
 	snprintf(buf, sizeof (buf), "%d", gfx_bg);
 	env_setenv("tem.bg_color", EV_VOLATILE, buf, gfx_set_colors,
 	    env_nounset);
+
+	/*
+	 * Setup font list to have builtin font.
+	 */
+	(void) insert_font(NULL, FONT_BUILTIN);
 }
 
 /*
- * visual io callbacks.
+ * Get indexed color from RGB. This function is used to write data to video
+ * memory when the adapter is set to use indexed colors.
+ * Since UEFI does only support 32-bit colors, we do not implement it for
+ * UEFI because there is no need for it and we do not have palette array
+ * for UEFI.
  */
-
-#if	defined(EFI)
-static int
-gfx_gop_cons_clear(uint32_t data, uint32_t width, uint32_t height)
+static uint8_t
+rgb_to_color_index(uint8_t r, uint8_t g, uint8_t b)
 {
-	EFI_GRAPHICS_OUTPUT_BLT_PIXEL *BltBuffer;
-	EFI_STATUS status;
-	extern EFI_GRAPHICS_OUTPUT *gop;
+#if !defined(EFI)
+	uint32_t color, best, dist, k;
+	int diff;
 
-	BltBuffer = (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)&data;
+	color = 0;
+	best = 255 * 255 * 255;
+	for (k = 0; k < NCMAP; k++) {
+		diff = r - pe8[k].Red;
+		dist = diff * diff;
+		diff = g - pe8[k].Green;
+		dist += diff * diff;
+		diff = b - pe8[k].Blue;
+		dist += diff * diff;
 
-	status = gop->Blt(gop, BltBuffer, EfiBltVideoFill, 0, 0,
-	    0, 0, width, height, 0);
+		/* Exact match, exit the loop */
+		if (dist == 0)
+			break;
 
-	if (EFI_ERROR(status))
-		return (1);
-	else
-		return (0);
-}
+		if (dist < best) {
+			color = k;
+			best = dist;
+		}
+	}
+	if (k == NCMAP)
+		k = color;
+	return (k);
+#else
+	(void) r;
+	(void) g;
+	(void) b;
+	return (0);
 #endif
+}
+
+static void
+gfx_mem_wr1(uint8_t *base, size_t size, uint32_t o, uint8_t v)
+{
+
+	if (o >= size)
+		return;
+	*(uint8_t *)(base + o) = v;
+}
+
+static void
+gfx_mem_wr2(uint8_t *base, size_t size, uint32_t o, uint16_t v)
+{
+
+	if (o >= size)
+		return;
+	*(uint16_t *)(base + o) = v;
+}
+
+static void
+gfx_mem_wr4(uint8_t *base, size_t size, uint32_t o, uint32_t v)
+{
+
+	if (o >= size)
+		return;
+	*(uint32_t *)(base + o) = v;
+}
 
 static int
-gfx_bm_cons_clear(uint32_t data, uint32_t width, uint32_t height)
+gfxfb_blt_fill(void *BltBuffer,
+    uint32_t DestinationX, uint32_t DestinationY,
+    uint32_t Width, uint32_t Height)
 {
-	uint8_t *fb, *fb8;
-	uint32_t *fb32, pitch;
-	uint16_t *fb16;
-	uint32_t i, j;
+#if defined(EFI)
+	EFI_GRAPHICS_OUTPUT_BLT_PIXEL *p;
+#else
+	struct paletteentry *p;
+#endif
+	uint32_t data, bpp, pitch, y, x;
+	size_t size;
+	off_t off;
+	uint8_t *destination;
 
-	fb = gfx_get_fb_address();
+	if (BltBuffer == NULL)
+		return (EINVAL);
+
+	if (DestinationY + Height >
+	    gfx_fb.framebuffer_common.framebuffer_height)
+		return (EINVAL);
+
+	if (DestinationX + Width > gfx_fb.framebuffer_common.framebuffer_width)
+		return (EINVAL);
+
+	if (Width == 0 || Height == 0)
+		return (EINVAL);
+
+	p = BltBuffer;
+	if (gfx_fb.framebuffer_common.framebuffer_bpp == 8) {
+		data = rgb_to_color_index(p->Red, p->Green, p->Blue);
+	} else {
+		data = (p->Red &
+		    ((1 << gfx_fb.u.fb2.framebuffer_red_mask_size) - 1)) <<
+		    gfx_fb.u.fb2.framebuffer_red_field_position;
+		data |= (p->Green &
+		    ((1 << gfx_fb.u.fb2.framebuffer_green_mask_size) - 1)) <<
+		    gfx_fb.u.fb2.framebuffer_green_field_position;
+		data |= (p->Blue &
+		    ((1 << gfx_fb.u.fb2.framebuffer_blue_mask_size) - 1)) <<
+		    gfx_fb.u.fb2.framebuffer_blue_field_position;
+	}
+
+	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
 	pitch = gfx_fb.framebuffer_common.framebuffer_pitch;
+	destination = gfx_get_fb_address();
+	size = gfx_fb.framebuffer_common.framebuffer_height * pitch;
 
-	switch (gfx_fb.framebuffer_common.framebuffer_bpp) {
-	case 8:		/* 8 bit */
-		for (i = 0; i < height; i++) {
-			(void) memset(fb + i * pitch, data, pitch);
-		}
-		break;
-	case 15:
-	case 16:		/* 16 bit */
-		for (i = 0; i < height; i++) {
-			fb16 = (uint16_t *)(fb + i * pitch);
-			for (j = 0; j < width; j++)
-				fb16[j] = (uint16_t)(data & 0xffff);
-		}
-		break;
-	case 24:		/* 24 bit */
-		for (i = 0; i < height; i++) {
-			fb8 = fb + i * pitch;
-			for (j = 0; j < pitch; j += 3) {
-				fb8[j] = (data >> 16) & 0xff;
-				fb8[j+1] = (data >> 8) & 0xff;
-				fb8[j+2] = data & 0xff;
+	for (y = DestinationY; y < Height + DestinationY; y++) {
+		off = y * pitch + DestinationX * bpp;
+		for (x = 0; x < Width; x++) {
+			switch (bpp) {
+			case 1:
+				gfx_mem_wr1(destination, size, off,
+				    (data < NCOLORS) ?
+				    solaris_color_to_pc_color[data] : data);
+				break;
+			case 2:
+				gfx_mem_wr2(destination, size, off, data);
+				break;
+			case 3:
+				gfx_mem_wr1(destination, size, off,
+				    (data >> 16) & 0xff);
+				gfx_mem_wr1(destination, size, off + 1,
+				    (data >> 8) & 0xff);
+				gfx_mem_wr1(destination, size, off + 2,
+				    data & 0xff);
+				break;
+			case 4:
+				gfx_mem_wr4(destination, size, off, data);
+				break;
+			default:
+				return (EINVAL);
 			}
+			off += bpp;
 		}
-		break;
-	case 32:		/* 32 bit */
-		for (i = 0; i < height; i++) {
-			fb32 = (uint32_t *)(fb + i * pitch);
-			for (j = 0; j < width; j++)
-				fb32[j] = data;
-		}
-		break;
-	default:
-		return (1);
 	}
 
 	return (0);
 }
 
 static int
+gfxfb_blt_video_to_buffer(void *BltBuffer, uint32_t SourceX, uint32_t SourceY,
+    uint32_t DestinationX, uint32_t DestinationY,
+    uint32_t Width, uint32_t Height, uint32_t Delta)
+{
+#if defined(EFI)
+	EFI_GRAPHICS_OUTPUT_BLT_PIXEL *p;
+#else
+	struct paletteentry *p;
+#endif
+	uint32_t x, sy, dy;
+	uint32_t bpp, pitch, copybytes;
+	off_t off;
+	uint8_t *source, *destination, *sb;
+	uint8_t rm, rp, gm, gp, bm, bp;
+	bool bgra;
+
+	if (BltBuffer == NULL)
+		return (EINVAL);
+
+	if (SourceY + Height >
+	    gfx_fb.framebuffer_common.framebuffer_height)
+		return (EINVAL);
+
+	if (SourceX + Width > gfx_fb.framebuffer_common.framebuffer_width)
+		return (EINVAL);
+
+	if (Width == 0 || Height == 0)
+		return (EINVAL);
+
+	if (Delta == 0)
+		Delta = Width * sizeof (*p);
+
+	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
+	pitch = gfx_fb.framebuffer_common.framebuffer_pitch;
+
+	copybytes = Width * bpp;
+
+	rm = (1 << gfx_fb.u.fb2.framebuffer_red_mask_size) - 1;
+	rp = gfx_fb.u.fb2.framebuffer_red_field_position;
+	gm = (1 << gfx_fb.u.fb2.framebuffer_green_mask_size) - 1;
+	gp = gfx_fb.u.fb2.framebuffer_green_field_position;
+	bm = (1 << gfx_fb.u.fb2.framebuffer_blue_mask_size) - 1;
+	bp = gfx_fb.u.fb2.framebuffer_blue_field_position;
+	/* If FB pixel format is BGRA, we can use direct copy. */
+	bgra = bpp == 4 &&
+	    gfx_fb.u.fb2.framebuffer_red_mask_size == 8 &&
+	    gfx_fb.u.fb2.framebuffer_red_field_position == 16 &&
+	    gfx_fb.u.fb2.framebuffer_green_mask_size == 8 &&
+	    gfx_fb.u.fb2.framebuffer_green_field_position == 8 &&
+	    gfx_fb.u.fb2.framebuffer_blue_mask_size == 8 &&
+	    gfx_fb.u.fb2.framebuffer_blue_field_position == 0;
+
+	for (sy = SourceY, dy = DestinationY; dy < Height + DestinationY;
+	    sy++, dy++) {
+		off = sy * pitch + SourceX * bpp;
+		source = gfx_get_fb_address() + off;
+		destination = (uint8_t *)BltBuffer + dy * Delta +
+		    DestinationX * sizeof (*p);
+
+		if (bgra) {
+			bcopy(source, destination, copybytes);
+		} else {
+			for (x = 0; x < Width; x++) {
+				uint32_t c = 0;
+
+				p = (void *)(destination + x * sizeof (*p));
+				sb = source + x * bpp;
+				switch (bpp) {
+				case 1:
+					c = *sb;
+					break;
+				case 2:
+					c = *(uint16_t *)sb;
+					break;
+				case 3:
+					c = sb[0] << 16 | sb[1] << 8 | sb[2];
+					break;
+				case 4:
+					c = *(uint32_t *)sb;
+					break;
+				default:
+					return (EINVAL);
+				}
+
+				if (bpp == 1) {
+					*(uint32_t *)p = gfx_fb_color_map(
+					    (c < NCOLORS) ?
+					    pc_color_to_solaris_color[c] : c);
+				} else {
+					p->Red = (c >> rp) & rm;
+					p->Green = (c >> gp) & gm;
+					p->Blue = (c >> bp) & bm;
+					p->Reserved = 0;
+				}
+			}
+		}
+	}
+
+	return (0);
+}
+
+static int
+gfxfb_blt_buffer_to_video(void *BltBuffer, uint32_t SourceX, uint32_t SourceY,
+    uint32_t DestinationX, uint32_t DestinationY,
+    uint32_t Width, uint32_t Height, uint32_t Delta)
+{
+#if defined(EFI)
+	EFI_GRAPHICS_OUTPUT_BLT_PIXEL *p;
+#else
+	struct paletteentry *p;
+#endif
+	uint32_t x, sy, dy;
+	uint32_t bpp, pitch, copybytes;
+	off_t off;
+	uint8_t *source, *destination;
+	uint8_t rm, rp, gm, gp, bm, bp;
+	bool bgra;
+
+	if (BltBuffer == NULL)
+		return (EINVAL);
+
+	if (DestinationY + Height >
+	    gfx_fb.framebuffer_common.framebuffer_height)
+		return (EINVAL);
+
+	if (DestinationX + Width > gfx_fb.framebuffer_common.framebuffer_width)
+		return (EINVAL);
+
+	if (Width == 0 || Height == 0)
+		return (EINVAL);
+
+	if (Delta == 0)
+		Delta = Width * sizeof (*p);
+
+	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
+	pitch = gfx_fb.framebuffer_common.framebuffer_pitch;
+
+	copybytes = Width * bpp;
+
+	rm = (1 << gfx_fb.u.fb2.framebuffer_red_mask_size) - 1;
+	rp = gfx_fb.u.fb2.framebuffer_red_field_position;
+	gm = (1 << gfx_fb.u.fb2.framebuffer_green_mask_size) - 1;
+	gp = gfx_fb.u.fb2.framebuffer_green_field_position;
+	bm = (1 << gfx_fb.u.fb2.framebuffer_blue_mask_size) - 1;
+	bp = gfx_fb.u.fb2.framebuffer_blue_field_position;
+	/* If FB pixel format is BGRA, we can use direct copy. */
+	bgra = bpp == 4 &&
+	    gfx_fb.u.fb2.framebuffer_red_mask_size == 8 &&
+	    gfx_fb.u.fb2.framebuffer_red_field_position == 16 &&
+	    gfx_fb.u.fb2.framebuffer_green_mask_size == 8 &&
+	    gfx_fb.u.fb2.framebuffer_green_field_position == 8 &&
+	    gfx_fb.u.fb2.framebuffer_blue_mask_size == 8 &&
+	    gfx_fb.u.fb2.framebuffer_blue_field_position == 0;
+
+	for (sy = SourceY, dy = DestinationY; sy < Height + SourceY;
+	    sy++, dy++) {
+		off = dy * pitch + DestinationX * bpp;
+		destination = gfx_get_fb_address() + off;
+
+		if (bgra) {
+			source = (uint8_t *)BltBuffer + sy * Delta +
+			    SourceX * sizeof (*p);
+			bcopy(source, destination, copybytes);
+		} else {
+			for (x = 0; x < Width; x++) {
+				uint32_t c;
+
+				p = (void *)((uint8_t *)BltBuffer +
+				    sy * Delta +
+				    (SourceX + x) * sizeof (*p));
+				if (bpp == 1) {
+					c = rgb_to_color_index(p->Red,
+					    p->Green, p->Blue);
+				} else {
+					c = (p->Red & rm) << rp |
+					    (p->Green & gm) << gp |
+					    (p->Blue & bm) << bp;
+				}
+				off = x * bpp;
+				switch (bpp) {
+				case 1:
+					gfx_mem_wr1(destination, copybytes,
+					    off, (c < NCOLORS) ?
+					    solaris_color_to_pc_color[c] : c);
+					break;
+				case 2:
+					gfx_mem_wr2(destination, copybytes,
+					    off, c);
+					break;
+				case 3:
+					gfx_mem_wr1(destination, copybytes,
+					    off, (c >> 16) & 0xff);
+					gfx_mem_wr1(destination, copybytes,
+					    off + 1, (c >> 8) & 0xff);
+					gfx_mem_wr1(destination, copybytes,
+					    off + 2, c & 0xff);
+					break;
+				case 4:
+					gfx_mem_wr4(destination, copybytes,
+					    off, c);
+					break;
+				default:
+					return (EINVAL);
+				}
+			}
+		}
+	}
+
+	return (0);
+}
+
+static int
+gfxfb_blt_video_to_video(uint32_t SourceX, uint32_t SourceY,
+    uint32_t DestinationX, uint32_t DestinationY,
+    uint32_t Width, uint32_t Height)
+{
+	uint32_t bpp, copybytes;
+	int pitch;
+	uint8_t *source, *destination;
+	off_t off;
+
+	if (SourceY + Height >
+	    gfx_fb.framebuffer_common.framebuffer_height)
+		return (EINVAL);
+
+	if (SourceX + Width > gfx_fb.framebuffer_common.framebuffer_width)
+		return (EINVAL);
+
+	if (DestinationY + Height >
+	    gfx_fb.framebuffer_common.framebuffer_height)
+		return (EINVAL);
+
+	if (DestinationX + Width > gfx_fb.framebuffer_common.framebuffer_width)
+		return (EINVAL);
+
+	if (Width == 0 || Height == 0)
+		return (EINVAL);
+
+	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
+	pitch = gfx_fb.framebuffer_common.framebuffer_pitch;
+
+	copybytes = Width * bpp;
+
+	off = SourceY * pitch + SourceX * bpp;
+	source = gfx_get_fb_address() + off;
+	off = DestinationY * pitch + DestinationX * bpp;
+	destination = gfx_get_fb_address() + off;
+
+	/*
+	 * To handle overlapping areas, set up reverse copy here.
+	 */
+	if ((uintptr_t)destination > (uintptr_t)source) {
+		source += Height * pitch;
+		destination += Height * pitch;
+		pitch = -pitch;
+	}
+
+	while (Height-- > 0) {
+		bcopy(source, destination, copybytes);
+		source += pitch;
+		destination += pitch;
+	}
+
+	return (0);
+}
+
+int
+gfxfb_blt(void *BltBuffer, GFXFB_BLT_OPERATION BltOperation,
+    uint32_t SourceX, uint32_t SourceY,
+    uint32_t DestinationX, uint32_t DestinationY,
+    uint32_t Width, uint32_t Height, uint32_t Delta)
+{
+	int rv;
+#if defined(EFI)
+	EFI_STATUS status;
+	extern EFI_GRAPHICS_OUTPUT *gop;
+
+	/*
+	 * We assume Blt() does work, if not, we will need to build
+	 * exception list case by case.
+	 */
+	if (gop != NULL) {
+		switch (BltOperation) {
+		case GfxFbBltVideoFill:
+			status = gop->Blt(gop, BltBuffer, EfiBltVideoFill,
+			    SourceX, SourceY, DestinationX, DestinationY,
+			    Width, Height, Delta);
+			break;
+
+		case GfxFbBltVideoToBltBuffer:
+			status = gop->Blt(gop, BltBuffer,
+			    EfiBltVideoToBltBuffer,
+			    SourceX, SourceY, DestinationX, DestinationY,
+			    Width, Height, Delta);
+			break;
+
+		case GfxFbBltBufferToVideo:
+			status = gop->Blt(gop, BltBuffer, EfiBltBufferToVideo,
+			    SourceX, SourceY, DestinationX, DestinationY,
+			    Width, Height, Delta);
+			break;
+
+		case GfxFbBltVideoToVideo:
+			status = gop->Blt(gop, BltBuffer, EfiBltVideoToVideo,
+			    SourceX, SourceY, DestinationX, DestinationY,
+			    Width, Height, Delta);
+			break;
+
+		default:
+			status = EFI_INVALID_PARAMETER;
+			break;
+		}
+
+		switch (status) {
+		case EFI_SUCCESS:
+			rv = 0;
+			break;
+
+		case EFI_INVALID_PARAMETER:
+			rv = EINVAL;
+			break;
+
+		case EFI_DEVICE_ERROR:
+		default:
+			rv = EIO;
+			break;
+		}
+
+		return (rv);
+	}
+#endif
+
+	switch (BltOperation) {
+	case GfxFbBltVideoFill:
+		rv = gfxfb_blt_fill(BltBuffer, DestinationX, DestinationY,
+		    Width, Height);
+		break;
+
+	case GfxFbBltVideoToBltBuffer:
+		rv = gfxfb_blt_video_to_buffer(BltBuffer, SourceX, SourceY,
+		    DestinationX, DestinationY, Width, Height, Delta);
+		break;
+
+	case GfxFbBltBufferToVideo:
+		rv = gfxfb_blt_buffer_to_video(BltBuffer, SourceX, SourceY,
+		    DestinationX, DestinationY, Width, Height, Delta);
+		break;
+
+	case GfxFbBltVideoToVideo:
+		rv = gfxfb_blt_video_to_video(SourceX, SourceY,
+		    DestinationX, DestinationY, Width, Height);
+		break;
+
+	default:
+		rv = EINVAL;
+		break;
+	}
+	return (rv);
+}
+
+/*
+ * visual io callbacks.
+ */
+int
 gfx_fb_cons_clear(struct vis_consclear *ca)
 {
+	int rv;
 	uint32_t data, width, height;
-	int ret;
-#if	defined(EFI)
+#if defined(EFI)
 	EFI_TPL tpl;
 #endif
 
@@ -478,74 +966,34 @@ gfx_fb_cons_clear(struct vis_consclear *ca)
 	width = gfx_fb.framebuffer_common.framebuffer_width;
 	height = gfx_fb.framebuffer_common.framebuffer_height;
 
-#if	defined(EFI)
+#if defined(EFI)
 	tpl = BS->RaiseTPL(TPL_NOTIFY);
 #endif
-	ret = gfx_fb_ops.gfx_cons_clear(data, width, height);
-#if	defined(EFI)
+	rv = gfxfb_blt(&data, GfxFbBltVideoFill, 0, 0,
+	    0, 0, width, height, 0);
+#if defined(EFI)
 	BS->RestoreTPL(tpl);
 #endif
-	return (ret);
+
+	return (rv);
 }
 
-#if	defined(EFI)
-static void
-gfx_gop_cons_copy(struct vis_conscopy *ma)
-{
-	UINTN width, height;
-	extern EFI_GRAPHICS_OUTPUT *gop;
-
-	width = ma->e_col - ma->s_col + 1;
-	height = ma->e_row - ma->s_row + 1;
-
-	(void) gop->Blt(gop, NULL, EfiBltVideoToVideo, ma->s_col, ma->s_row,
-	    ma->t_col, ma->t_row, width, height, 0);
-}
-#endif
-
-static void
-gfx_bm_cons_copy(struct vis_conscopy *ma)
-{
-	uint32_t soffset, toffset;
-	uint32_t width, height;
-	uint8_t *src, *dst, *fb;
-	uint32_t bpp, pitch;
-
-	fb = gfx_get_fb_address();
-	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
-	pitch = gfx_fb.framebuffer_common.framebuffer_pitch;
-
-	soffset = ma->s_col * bpp + ma->s_row * pitch;
-	toffset = ma->t_col * bpp + ma->t_row * pitch;
-	src = fb + soffset;
-	dst = fb + toffset;
-	width = (ma->e_col - ma->s_col + 1) * bpp;
-	height = ma->e_row - ma->s_row + 1;
-
-	if (toffset <= soffset) {
-		for (uint32_t i = 0; i < height; i++) {
-			uint32_t increment = i * pitch;
-			(void) memmove(dst + increment, src + increment, width);
-		}
-	} else {
-		for (int i = height - 1; i >= 0; i--) {
-			uint32_t increment = i * pitch;
-			(void) memmove(dst + increment, src + increment, width);
-		}
-	}
-}
-
-static void
+void
 gfx_fb_cons_copy(struct vis_conscopy *ma)
 {
-#if	defined(EFI)
+	uint32_t width, height;
+#if defined(EFI)
 	EFI_TPL tpl;
 
 	tpl = BS->RaiseTPL(TPL_NOTIFY);
 #endif
 
-	gfx_fb_ops.gfx_cons_copy(ma);
-#if	defined(EFI)
+	width = ma->e_col - ma->s_col + 1;
+	height = ma->e_row - ma->s_row + 1;
+
+	(void) gfxfb_blt(NULL, GfxFbBltVideoToVideo, ma->s_col, ma->s_row,
+	    ma->t_col, ma->t_row, width, height, 0);
+#if defined(EFI)
 	BS->RestoreTPL(tpl);
 #endif
 }
@@ -578,86 +1026,57 @@ alpha_blend(uint8_t fg, uint8_t bg, uint8_t alpha)
 
 /* Copy memory to framebuffer or to memory. */
 static void
-bitmap_cpy(uint8_t *dst, uint8_t *src, uint32_t len, int bpp)
+bitmap_cpy(void *dst, void *src, size_t size)
 {
+#if defined(EFI)
+	EFI_GRAPHICS_OUTPUT_BLT_PIXEL *ps, *pd;
+#else
+	struct paletteentry *ps, *pd;
+#endif
 	uint32_t i;
 	uint8_t a;
 
-	switch (bpp) {
-	case 4:
-		/*
-		 * we only implement alpha blending for depth 32,
-		 * use memcpy for other cases.
-		 */
-		for (i = 0; i < len; i += bpp) {
-			a = src[i+3];
-			dst[i] = alpha_blend(src[i], dst[i], a);
-			dst[i+1] = alpha_blend(src[i+1], dst[i+1], a);
-			dst[i+2] = alpha_blend(src[i+2], dst[i+2], a);
-			dst[i+3] = a;
-		}
-		break;
-	default:
-		(void) memcpy(dst, src, len);
-		break;
+	ps = src;
+	pd = dst;
+
+	/*
+	 * we only implement alpha blending for depth 32.
+	 */
+	for (i = 0; i < size; i++) {
+		a = ps[i].Reserved;
+		pd[i].Red = alpha_blend(ps[i].Red, pd[i].Red, a);
+		pd[i].Green = alpha_blend(ps[i].Green, pd[i].Green, a);
+		pd[i].Blue = alpha_blend(ps[i].Blue, pd[i].Blue, a);
+		pd[i].Reserved = a;
 	}
 }
 
-#if	defined(EFI)
-static void
-gfx_gop_cons_display(struct vis_consdisplay *da)
+static void *
+allocate_glyphbuffer(uint32_t width, uint32_t height)
 {
-	EFI_GRAPHICS_OUTPUT_BLT_PIXEL *BltBuffer;
-	uint32_t size;
-	int bpp;
-	extern EFI_GRAPHICS_OUTPUT *gop;
+	size_t size;
 
-	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
-	size = sizeof (*BltBuffer) * da->width * da->height;
-	BltBuffer = malloc(size);
-	if (BltBuffer == NULL && gfx_get_fb_address() != NULL) {
-		/* Fall back to bitmap implementation */
-		gfx_bm_cons_display(da);
-		return;
+	size = sizeof (*GlyphBuffer) * width * height;
+	if (size != GlyphBufferSize) {
+		free(GlyphBuffer);
+		GlyphBuffer = malloc(size);
+		if (GlyphBuffer == NULL)
+			return (NULL);
+		GlyphBufferSize = size;
 	}
-
-	(void) gop->Blt(gop, BltBuffer, EfiBltVideoToBltBuffer,
-	    da->col, da->row, 0, 0, da->width, da->height, 0);
-	bitmap_cpy((void *)BltBuffer, da->data, size, bpp);
-	(void) gop->Blt(gop, BltBuffer, EfiBltBufferToVideo,
-	    0, 0, da->col, da->row, da->width, da->height, 0);
-	free(BltBuffer);
-}
-#endif
-
-static void
-gfx_bm_cons_display(struct vis_consdisplay *da)
-{
-	uint32_t size;		/* write size per scanline */
-	uint8_t *fbp;		/* fb + calculated offset */
-	int i, bpp, pitch;
-
-	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
-	pitch = gfx_fb.framebuffer_common.framebuffer_pitch;
-
-	size = da->width * bpp;
-	fbp = gfx_get_fb_address();
-	fbp += da->col * bpp + da->row * pitch;
-
-	/* write all scanlines in rectangle */
-	for (i = 0; i < da->height; i++) {
-		uint8_t *dest = fbp + i * pitch;
-		uint8_t *src = da->data + i * size;
-		bitmap_cpy(dest, src, size, bpp);
-	}
+	return (GlyphBuffer);
 }
 
-static void
+void
 gfx_fb_cons_display(struct vis_consdisplay *da)
 {
-#if	defined(EFI)
+#if defined(EFI)
+	EFI_GRAPHICS_OUTPUT_BLT_PIXEL *BltBuffer;
 	EFI_TPL tpl;
+#else
+	struct paletteentry *BltBuffer;
 #endif
+	uint32_t size;
 
 	/* make sure we will not write past FB */
 	if ((uint32_t)da->col >= gfx_fb.framebuffer_common.framebuffer_width ||
@@ -668,101 +1087,101 @@ gfx_fb_cons_display(struct vis_consdisplay *da)
 	    gfx_fb.framebuffer_common.framebuffer_height)
 		return;
 
-#if	defined(EFI)
+	size = sizeof (*BltBuffer) * da->width * da->height;
+
+	/*
+	 * Common data to display is glyph, use preallocated
+	 * glyph buffer.
+	 */
+	if (tems.ts_pix_data_size != GlyphBufferSize)
+		(void) allocate_glyphbuffer(da->width, da->height);
+
+	if (size == GlyphBufferSize) {
+		BltBuffer = GlyphBuffer;
+	} else {
+		BltBuffer = malloc(size);
+	}
+	if (BltBuffer == NULL)
+		return;
+
+#if defined(EFI)
 	tpl = BS->RaiseTPL(TPL_NOTIFY);
 #endif
-	gfx_fb_ops.gfx_cons_display(da);
-#if	defined(EFI)
+	if (gfxfb_blt(BltBuffer, GfxFbBltVideoToBltBuffer,
+	    da->col, da->row, 0, 0, da->width, da->height, 0) == 0) {
+		bitmap_cpy(BltBuffer, da->data, da->width * da->height);
+		(void) gfxfb_blt(BltBuffer, GfxFbBltBufferToVideo,
+		    0, 0, da->col, da->row, da->width, da->height, 0);
+	}
+
+#if defined(EFI)
 	BS->RestoreTPL(tpl);
 #endif
+	if (BltBuffer != GlyphBuffer)
+		free(BltBuffer);
+}
+
+static void
+gfx_fb_cursor_impl(uint32_t fg, uint32_t bg, struct vis_conscursor *ca)
+{
+	union pixel {
+#if defined(EFI)
+		EFI_GRAPHICS_OUTPUT_BLT_PIXEL p;
+#else
+		struct paletteentry p;
+#endif
+		uint32_t p32;
+	} *row;
+
+	/*
+	 * Build inverse image of the glyph.
+	 * Since xor has self-inverse property, drawing cursor
+	 * second time on the same spot, will restore the original content.
+	 */
+	for (screen_size_t i = 0; i < ca->height; i++) {
+		row = (union pixel *)(GlyphBuffer + i * ca->width);
+		for (screen_size_t j = 0; j < ca->width; j++) {
+			row[j].p32 = (row[j].p32 ^ fg) ^ bg;
+		}
+	}
 }
 
 void
 gfx_fb_display_cursor(struct vis_conscursor *ca)
 {
-	uint32_t fg, bg;
-	uint32_t offset, size, *fb32;
-	uint16_t *fb16;
-	uint8_t *fb8, *fb;
-	uint32_t bpp, pitch;
-#if	defined(EFI)
-	EFI_TPL tpl;
+	union pixel {
+#if defined(EFI)
+		EFI_GRAPHICS_OUTPUT_BLT_PIXEL p;
+#else
+		struct paletteentry p;
 #endif
+		uint32_t p32;
+	} fg, bg;
+#if defined(EFI)
+	EFI_TPL tpl;
 
-	fb = gfx_get_fb_address();
-	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
-	pitch = gfx_fb.framebuffer_common.framebuffer_pitch;
-
-	size = ca->width * bpp;
-
-	/*
-	 * Build cursor image. We are building mirror image of data on
-	 * frame buffer by (D xor FG) xor BG.
-	 */
-	offset = ca->col * bpp + ca->row * pitch;
-#if	defined(EFI)
 	tpl = BS->RaiseTPL(TPL_NOTIFY);
 #endif
-	switch (gfx_fb.framebuffer_common.framebuffer_bpp) {
-	case 8:		/* 8 bit */
-		fg = ca->fg_color.mono;
-		bg = ca->bg_color.mono;
-		for (int i = 0; i < ca->height; i++) {
-			fb8 = fb + offset + i * pitch;
-			for (uint32_t j = 0; j < size; j += 1) {
-				fb8[j] = (fb8[j] ^ (fg & 0xff)) ^ (bg & 0xff);
-			}
-		}
-		break;
-	case 15:
-	case 16:	/* 16 bit */
-		fg = ca->fg_color.sixteen[0] << 8;
-		fg |= ca->fg_color.sixteen[1];
-		bg = ca->bg_color.sixteen[0] << 8;
-		bg |= ca->bg_color.sixteen[1];
-		for (int i = 0; i < ca->height; i++) {
-			fb16 = (uint16_t *)(fb + offset + i * pitch);
-			for (int j = 0; j < ca->width; j++) {
-				fb16[j] = (fb16[j] ^ (fg & 0xffff)) ^
-				    (bg & 0xffff);
-			}
-		}
-		break;
-	case 24:	/* 24 bit */
-		fg = ca->fg_color.twentyfour[0] << 16;
-		fg |= ca->fg_color.twentyfour[1] << 8;
-		fg |= ca->fg_color.twentyfour[2];
-		bg = ca->bg_color.twentyfour[0] << 16;
-		bg |= ca->bg_color.twentyfour[1] << 8;
-		bg |= ca->bg_color.twentyfour[2];
 
-		for (int i = 0; i < ca->height; i++) {
-			fb8 = fb + offset + i * pitch;
-			for (uint32_t j = 0; j < size; j += 3) {
-				fb8[j] = (fb8[j] ^ ((fg >> 16) & 0xff)) ^
-				    ((bg >> 16) & 0xff);
-				fb8[j+1] = (fb8[j+1] ^ ((fg >> 8) & 0xff)) ^
-				    ((bg >> 8) & 0xff);
-				fb8[j+2] = (fb8[j+2] ^ (fg & 0xff)) ^
-				    (bg & 0xff);
-			}
-		}
-		break;
-	case 32:	/* 32 bit */
-		fg = ca->fg_color.twentyfour[0] << 16;
-		fg |= ca->fg_color.twentyfour[1] << 8;
-		fg |= ca->fg_color.twentyfour[2];
-		bg = ca->bg_color.twentyfour[0] << 16;
-		bg |= ca->bg_color.twentyfour[1] << 8;
-		bg |= ca->bg_color.twentyfour[2];
-		for (int i = 0; i < ca->height; i++) {
-			fb32 = (uint32_t *)(fb + offset + i * pitch);
-			for (int j = 0; j < ca->width; j++)
-				fb32[j] = (fb32[j] ^ fg) ^ bg;
-		}
-		break;
+	fg.p.Reserved = 0;
+	fg.p.Red = ca->fg_color.twentyfour[0];
+	fg.p.Green = ca->fg_color.twentyfour[1];
+	fg.p.Blue = ca->fg_color.twentyfour[2];
+	bg.p.Reserved = 0;
+	bg.p.Red = ca->bg_color.twentyfour[0];
+	bg.p.Green = ca->bg_color.twentyfour[1];
+	bg.p.Blue = ca->bg_color.twentyfour[2];
+
+	if (allocate_glyphbuffer(ca->width, ca->height) != NULL) {
+		if (gfxfb_blt(GlyphBuffer, GfxFbBltVideoToBltBuffer,
+		    ca->col, ca->row, 0, 0, ca->width, ca->height, 0) == 0)
+			gfx_fb_cursor_impl(fg.p32, bg.p32, ca);
+
+		(void) gfxfb_blt(GlyphBuffer, GfxFbBltBufferToVideo, 0, 0,
+		    ca->col, ca->row, ca->width, ca->height, 0);
 	}
-#if	defined(EFI)
+
+#if defined(EFI)
 	BS->RestoreTPL(tpl);
 #endif
 }
@@ -796,8 +1215,7 @@ isqrt(int num)
 void
 gfx_fb_setpixel(uint32_t x, uint32_t y)
 {
-	uint32_t c, offset, pitch, bpp;
-	uint8_t *fb;
+	uint32_t c;
 	text_color_t fg, bg;
 
 	if (plat_stdout_is_framebuffer() == 0)
@@ -810,51 +1228,33 @@ gfx_fb_setpixel(uint32_t x, uint32_t y)
 	    y >= gfx_fb.framebuffer_common.framebuffer_height)
 		return;
 
-	fb = gfx_get_fb_address();
-	pitch = gfx_fb.framebuffer_common.framebuffer_pitch;
-	bpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
-
-	offset = y * pitch + x * bpp;
-	switch (gfx_fb.framebuffer_common.framebuffer_bpp) {
-	case 8:
-		fb[offset] = c & 0xff;
-		break;
-	case 15:
-	case 16:
-		*(uint16_t *)(fb + offset) = c & 0xffff;
-		break;
-	case 24:
-		fb[offset] = (c >> 16) & 0xff;
-		fb[offset + 1] = (c >> 8) & 0xff;
-		fb[offset + 2] = c & 0xff;
-		break;
-	case 32:
-		*(uint32_t *)(fb + offset) = c;
-		break;
-	}
+	gfxfb_blt(&c, GfxFbBltVideoFill, 0, 0, x, y, 1, 1, 0);
 }
 
 /*
  * draw rectangle in framebuffer using gfx coordinates.
- * The function is borrowed from fbsd vt_fb.c
  */
 void
 gfx_fb_drawrect(uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2,
     uint32_t fill)
 {
-	uint32_t x, y;
+	uint32_t c;
+	text_color_t fg, bg;
 
 	if (plat_stdout_is_framebuffer() == 0)
 		return;
 
-	for (y = y1; y <= y2; y++) {
-		if (fill || (y == y1) || (y == y2)) {
-			for (x = x1; x <= x2; x++)
-				gfx_fb_setpixel(x, y);
-		} else {
-			gfx_fb_setpixel(x1, y);
-			gfx_fb_setpixel(x2, y);
-		}
+	tem_get_colors((tem_vt_state_t)tems.ts_active, &fg, &bg);
+	c = gfx_fb_color_map(fg);
+
+	if (fill != 0) {
+		gfxfb_blt(&c, GfxFbBltVideoFill, 0, 0, x1, y1, x2 - x1,
+		    y2 - y1, 0);
+	} else {
+		gfxfb_blt(&c, GfxFbBltVideoFill, 0, 0, x1, y1, x2 - x1, 1, 0);
+		gfxfb_blt(&c, GfxFbBltVideoFill, 0, 0, x1, y2, x2 - x1, 1, 0);
+		gfxfb_blt(&c, GfxFbBltVideoFill, 0, 0, x1, y1, 1, y2 - y1, 0);
+		gfxfb_blt(&c, GfxFbBltVideoFill, 0, 0, x2, y1, 1, y2 - y1, 0);
 	}
 }
 
@@ -1001,14 +1401,17 @@ gfx_term_drawrect(uint32_t ux1, uint32_t uy1, uint32_t ux2, uint32_t uy2)
 	width = vf_width / 4;			/* line width */
 	xshift = (vf_width - width) / 2;
 	yshift = (vf_height - width) / 2;
-	/* Terminal coordinates start from (1,1) */
-	ux1--;
-	uy1--;
+
+	/* Shift coordinates */
+	if (ux1 != 0)
+		ux1--;
+	if (uy1 != 0)
+		uy1--;
 	ux2--;
 	uy2--;
 
 	/* mark area used in tem */
-	tem_image_display(tems.ts_active, uy1 - 1, ux1 - 1, uy2, ux2);
+	tem_image_display(tems.ts_active, uy1, ux1, uy2 + 1, ux2 + 1);
 
 	/*
 	 * Draw horizontal lines width points thick, shifted from outer edge.
@@ -1075,18 +1478,18 @@ gfx_term_drawrect(uint32_t ux1, uint32_t uy1, uint32_t ux2, uint32_t uy2)
 		gfx_fb_bezier(x1, y1 - i, x2 + i, y1 - i, x2 + i, y2, width-i);
 }
 
-#define	FL_PUTIMAGE_BORDER	0x1
-#define	FL_PUTIMAGE_NOSCROLL	0x2
-#define	FL_PUTIMAGE_DEBUG	0x80
-
 int
 gfx_fb_putimage(png_t *png, uint32_t ux1, uint32_t uy1, uint32_t ux2,
     uint32_t uy2, uint32_t flags)
 {
+#if defined(EFI)
+	EFI_GRAPHICS_OUTPUT_BLT_PIXEL *p;
+#else
+	struct paletteentry *p;
+#endif
 	struct vis_consdisplay da;
-	uint32_t i, j, x, y, fheight, fwidth, color;
-	int fbpp;
-	uint8_t r, g, b, a, *p;
+	uint32_t i, j, x, y, fheight, fwidth;
+	uint8_t r, g, b, a;
 	bool scale = false;
 	bool trace = false;
 
@@ -1204,18 +1607,17 @@ gfx_fb_putimage(png_t *png, uint32_t ux1, uint32_t uy1, uint32_t ux2,
 	 */
 	if (!(flags & FL_PUTIMAGE_NOSCROLL)) {
 		tem_image_display(tems.ts_active,
-		    da.row / tems.ts_font.vf_height - 1,
-		    da.col / tems.ts_font.vf_width - 1,
-		    (da.row + da.height) / tems.ts_font.vf_height - 1,
-		    (da.col + da.width) / tems.ts_font.vf_width - 1);
+		    da.row / tems.ts_font.vf_height,
+		    da.col / tems.ts_font.vf_width,
+		    (da.row + da.height) / tems.ts_font.vf_height,
+		    (da.col + da.width) / tems.ts_font.vf_width);
 	}
 
 	if ((flags & FL_PUTIMAGE_BORDER))
 		gfx_fb_drawrect(ux1, uy1, ux2, uy2, 0);
 
-	fbpp = roundup2(gfx_fb.framebuffer_common.framebuffer_bpp, 8) >> 3;
-
-	da.data = malloc(fwidth * fheight * fbpp);
+	da.data = malloc(fwidth * fheight * sizeof (*p));
+	p = (void *)da.data;
 	if (da.data == NULL) {
 		if (trace)
 			printf("Out of memory.\n");
@@ -1255,7 +1657,7 @@ gfx_fb_putimage(png_t *png, uint32_t ux1, uint32_t uy1, uint32_t ux2,
 			uint32_t offset_x1 = offset_x + 1;
 
 			/* Target pixel index */
-			j = (y * fwidth + x) * fbpp;
+			j = y * fwidth + x;
 
 			if (!scale) {
 				i = GETPIXEL(x, y);
@@ -1305,54 +1707,19 @@ gfx_fb_putimage(png_t *png, uint32_t ux1, uint32_t uy1, uint32_t ux2,
 				a = pixel[3];
 			}
 
-			color =
-			    r >> (8 - gfx_fb.u.fb2.framebuffer_red_mask_size)
-			    << gfx_fb.u.fb2.framebuffer_red_field_position |
-			    g >> (8 - gfx_fb.u.fb2.framebuffer_green_mask_size)
-			    << gfx_fb.u.fb2.framebuffer_green_field_position |
-			    b >> (8 - gfx_fb.u.fb2.framebuffer_blue_mask_size)
-			    << gfx_fb.u.fb2.framebuffer_blue_field_position;
+			if (trace)
+				printf("r/g/b: %x/%x/%x\n", r, g, b);
+			/*
+			 * Rough colorspace reduction for 15/16 bit colors.
+			 */
+			p[j].Red = r >>
+			    (8 - gfx_fb.u.fb2.framebuffer_red_mask_size);
+			p[j].Green = g >>
+			    (8 - gfx_fb.u.fb2.framebuffer_green_mask_size);
+			p[j].Blue = b >>
+			    (8 - gfx_fb.u.fb2.framebuffer_blue_mask_size);
+			p[j].Reserved = a;
 
-			switch (gfx_fb.framebuffer_common.framebuffer_bpp) {
-			case 8: {
-				uint32_t best, dist, k;
-				int diff;
-
-				color = 0;
-				best = 256 * 256 * 256;
-				for (k = 0; k < 16; k++) {
-					diff = r - cmap4_to_24.red[k];
-					dist = diff * diff;
-					diff = g - cmap4_to_24.green[k];
-					dist += diff * diff;
-					diff = b - cmap4_to_24.blue[k];
-					dist += diff * diff;
-
-					if (dist < best) {
-						color = k;
-						best = dist;
-						if (dist == 0)
-							break;
-					}
-				}
-				da.data[j] = solaris_color_to_pc_color[color];
-				break;
-			}
-			case 15:
-			case 16:
-				*(uint16_t *)(da.data+j) = color;
-				break;
-			case 24:
-				p = (uint8_t *)&color;
-				da.data[j] = p[0];
-				da.data[j+1] = p[1];
-				da.data[j+2] = p[2];
-				break;
-			case 32:
-				color |= a << 24;
-				*(uint32_t *)(da.data+j) = color;
-				break;
-			}
 			wc += wcstep;
 		}
 		hc += hcstep;
@@ -1361,6 +1728,113 @@ gfx_fb_putimage(png_t *png, uint32_t ux1, uint32_t uy1, uint32_t ux2,
 	gfx_fb_cons_display(&da);
 	free(da.data);
 	return (0);
+}
+
+/* Return  w^2 + h^2 or 0, if the dimensions are unknown */
+static unsigned
+edid_diagonal_squared(void)
+{
+	unsigned w, h;
+
+	if (edid_info == NULL)
+		return (0);
+
+	w = edid_info->display.max_horizontal_image_size;
+	h = edid_info->display.max_vertical_image_size;
+
+	/* If either one is 0, we have aspect ratio, not size */
+	if (w == 0 || h == 0)
+		return (0);
+
+	/*
+	 * some monitors encode the aspect ratio instead of the physical size.
+	 */
+	if ((w == 16 && h == 9) || (w == 16 && h == 10) ||
+	    (w == 4 && h == 3) || (w == 5 && h == 4))
+		return (0);
+
+	/*
+	 * translate cm to inch, note we scale by 100 here.
+	 */
+	w = w * 100 / 254;
+	h = h * 100 / 254;
+
+	/* Return w^2 + h^2 */
+	return (w * w + h * h);
+}
+
+/*
+ * calculate pixels per inch.
+ */
+static unsigned
+gfx_get_ppi(void)
+{
+	unsigned dp, di;
+
+	di = edid_diagonal_squared();
+	if (di == 0)
+		return (0);
+
+	dp = gfx_fb.framebuffer_common.framebuffer_width *
+	    gfx_fb.framebuffer_common.framebuffer_width +
+	    gfx_fb.framebuffer_common.framebuffer_height *
+	    gfx_fb.framebuffer_common.framebuffer_height;
+
+	return (isqrt(dp / di));
+}
+
+/*
+ * Calculate font size from density independent pixels (dp):
+ * ((16dp * ppi) / 160) * display_factor.
+ * Here we are using fixed constants: 1dp == 160 ppi and
+ * display_factor 2.
+ *
+ * We are rounding font size up and are searching for font which is
+ * not smaller than calculated size value.
+ */
+bitmap_data_t *
+gfx_get_font(void)
+{
+	unsigned ppi, size;
+	bitmap_data_t *font = NULL;
+	struct fontlist *fl, *next;
+
+	/* Text mode is not supported here. */
+	if (gfx_fb.framebuffer_common.framebuffer_type ==
+	    MULTIBOOT_FRAMEBUFFER_TYPE_EGA_TEXT)
+		return (NULL);
+
+	ppi = gfx_get_ppi();
+	if (ppi == 0)
+		return (NULL);
+
+	/*
+	 * We will search for 16dp font.
+	 * We are using scale up by 10 for roundup.
+	 */
+	size = (16 * ppi * 10) / 160;
+	/* Apply display factor 2.  */
+	size = roundup(size * 2, 10) / 10;
+
+	STAILQ_FOREACH(fl, &fonts, font_next) {
+		next = STAILQ_NEXT(fl, font_next);
+		/*
+		 * If this is last font or, if next font is smaller,
+		 * we have our font. Make sure, it actually is loaded.
+		 */
+		if (next == NULL || next->font_data->height < size) {
+			font = fl->font_data;
+			if (font->font == NULL ||
+			    fl->font_flags == FONT_RELOAD) {
+				if (fl->font_load != NULL &&
+				    fl->font_name != NULL)
+					font = fl->font_load(fl->font_name);
+			}
+			break;
+		}
+	}
+
+	return (font);
 }
 
 static int
@@ -1394,7 +1868,35 @@ load_mapping(int fd, struct font *fp, int n)
 	return (0);
 }
 
-/* Load font from file. */
+static int
+builtin_mapping(struct font *fp, int n)
+{
+	size_t size;
+	struct font_map *mp;
+
+	if (n >= VFNT_MAPS)
+		return (EINVAL);
+
+	if (fp->vf_map_count[n] == 0)
+		return (0);
+
+	size = fp->vf_map_count[n] * sizeof (*mp);
+	mp = malloc(size);
+	if (mp == NULL)
+		return (ENOMEM);
+	fp->vf_map[n] = mp;
+
+	memcpy(mp, DEFAULT_FONT_DATA.font->vf_map[n], size);
+	return (0);
+}
+
+/*
+ * Load font from builtin or from file.
+ * We do need special case for builtin because the builtin font glyphs
+ * are compressed and we do need to uncompress them.
+ * Having single load_font() for both cases will help us to simplify
+ * font switch handling.
+ */
 static bitmap_data_t *
 load_font(char *path)
 {
@@ -1402,7 +1904,7 @@ load_font(char *path)
 	uint32_t glyphs;
 	struct font_header fh;
 	struct fontlist *fl;
-	bitmap_data_t *bp = NULL;
+	bitmap_data_t *bp;
 	struct font *fp;
 	size_t size;
 	ssize_t rv;
@@ -1414,9 +1916,52 @@ load_font(char *path)
 	}
 	if (fl == NULL)
 		return (NULL);	/* Should not happen. */
+
 	bp = fl->font_data;
-	if (bp->font != NULL)
+	if (bp->font != NULL && fl->font_flags != FONT_RELOAD)
 		return (bp);
+
+	fd = -1;
+	/*
+	 * Special case for builtin font.
+	 * Builtin font is the very first font we load, we do not have
+	 * previous loads to be released.
+	 */
+	if (fl->font_flags == FONT_BUILTIN) {
+		if ((fp = calloc(1, sizeof (struct font))) == NULL)
+			return (NULL);
+
+		fp->vf_width = DEFAULT_FONT_DATA.width;
+		fp->vf_height = DEFAULT_FONT_DATA.height;
+
+		fp->vf_bytes = malloc(DEFAULT_FONT_DATA.uncompressed_size);
+		if (fp->vf_bytes == NULL) {
+			free(fp);
+			return (NULL);
+		}
+
+		bp->uncompressed_size = DEFAULT_FONT_DATA.uncompressed_size;
+		bp->compressed_size = DEFAULT_FONT_DATA.compressed_size;
+
+		if (lz4_decompress(DEFAULT_FONT_DATA.compressed_data,
+		    fp->vf_bytes,
+		    DEFAULT_FONT_DATA.compressed_size,
+		    DEFAULT_FONT_DATA.uncompressed_size, 0) != 0) {
+			free(fp->vf_bytes);
+			free(fp);
+			return (NULL);
+		}
+
+		for (i = 0; i < VFNT_MAPS; i++) {
+			fp->vf_map_count[i] =
+			    DEFAULT_FONT_DATA.font->vf_map_count[i];
+			if (builtin_mapping(fp, i) != 0)
+				goto free_done;
+		}
+
+		bp->font = fp;
+		return (bp);
+	}
 
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
@@ -1444,8 +1989,8 @@ load_font(char *path)
 	fp->vf_width = fh.fh_width;
 	fp->vf_height = fh.fh_height;
 
-	bp->uncompressed_size = howmany(bp->width, 8) * bp->height * glyphs;
-	size = bp->uncompressed_size;
+	size = howmany(fp->vf_width, 8) * fp->vf_height * glyphs;
+	bp->uncompressed_size = size;
 	if ((fp->vf_bytes = malloc(size)) == NULL)
 		goto free_done;
 
@@ -1456,42 +2001,36 @@ load_font(char *path)
 		if (load_mapping(fd, fp, i) != 0)
 			goto free_done;
 	}
-	bp->font = fp;
 
 	/*
-	 * Release previously loaded entry. We can do this now, as
+	 * Reset builtin flag now as we have full font loaded.
+	 */
+	if (fl->font_flags == FONT_BUILTIN)
+		fl->font_flags = FONT_AUTO;
+
+	/*
+	 * Release previously loaded entries. We can do this now, as
 	 * the new font is loaded. Note, there can be no console
 	 * output till the new font is in place and tem is notified.
 	 * We do need to keep fl->font_data for glyph dimensions.
 	 */
 	STAILQ_FOREACH(fl, &fonts, font_next) {
-		if (fl->font_data->width == bp->width &&
-		    fl->font_data->height == bp->height)
+		if (fl->font_data->font == NULL)
 			continue;
 
-		if (fl->font_data->font != NULL) {
-			for (i = 0; i < VFNT_MAPS; i++)
-				free(fl->font_data->font->vf_map[i]);
-
-			/* Unset vf_bytes pointer in tem. */
-			if (tems.ts_font.vf_bytes ==
-			    fl->font_data->font->vf_bytes) {
-				tems.ts_font.vf_bytes = NULL;
-			}
-			free(fl->font_data->font->vf_bytes);
-			free(fl->font_data->font);
-			fl->font_data->font = NULL;
-			fl->font_data->uncompressed_size = 0;
-			fl->font_flags = FONT_AUTO;
-		}
+		for (i = 0; i < VFNT_MAPS; i++)
+			free(fl->font_data->font->vf_map[i]);
+		free(fl->font_data->font->vf_bytes);
+		free(fl->font_data->font);
+		fl->font_data->font = NULL;
 	}
 
-	/* free the uncompressed builtin font data in tem. */
-	free(tems.ts_font.vf_bytes);
-	tems.ts_font.vf_bytes = NULL;
+	bp->font = fp;
+	bp->compressed_size = 0;
 
 done:
-	close(fd);
+	if (fd != -1)
+		close(fd);
 	return (bp);
 
 free_done:
@@ -1554,7 +2093,7 @@ read_list(char *fonts)
  * The font list is built in descending order.
  */
 static bool
-insert_font(char *name)
+insert_font(char *name, FONT_FLAGS flags)
 {
 	struct font_header fh;
 	struct fontlist *fp, *previous, *entry, *next;
@@ -1563,30 +2102,51 @@ insert_font(char *name)
 	int fd;
 	char *font_name;
 
-	fd = open(name, O_RDONLY);
-	if (fd < 0)
-		return (false);
-	rv = read(fd, &fh, sizeof (fh));
-	close(fd);
-	if (rv < 0 || (size_t)rv != sizeof (fh))
-		return (false);
+	font_name = NULL;
+	if (flags == FONT_BUILTIN) {
+		/*
+		 * We only install builtin font once, while setting up
+		 * initial console. Since this will happen very early,
+		 * we assume asprintf will not fail. Once we have access to
+		 * files, the builtin font will be replaced by font loaded
+		 * from file.
+		 */
+		if (!STAILQ_EMPTY(&fonts))
+			return (false);
 
-	if (memcmp(fh.fh_magic, FONT_HEADER_MAGIC, sizeof (fh.fh_magic)) != 0)
-		return (false);
+		fh.fh_width = DEFAULT_FONT_DATA.width;
+		fh.fh_height = DEFAULT_FONT_DATA.height;
 
-	font_name = strdup(name);
+		(void) asprintf(&font_name, "%dx%d",
+		    DEFAULT_FONT_DATA.width, DEFAULT_FONT_DATA.height);
+	} else {
+		fd = open(name, O_RDONLY);
+		if (fd < 0)
+			return (false);
+		rv = read(fd, &fh, sizeof (fh));
+		close(fd);
+		if (rv < 0 || (size_t)rv != sizeof (fh))
+			return (false);
+
+		if (memcmp(fh.fh_magic, FONT_HEADER_MAGIC,
+		    sizeof (fh.fh_magic)) != 0)
+			return (false);
+		font_name = strdup(name);
+	}
+
 	if (font_name == NULL)
 		return (false);
 
 	/*
-	 * If we have an entry with the same glyph dimensions, just replace
-	 * the file name. We only support unique dimensions.
+	 * If we have an entry with the same glyph dimensions, replace
+	 * the file name and mark us. We only support unique dimensions.
 	 */
 	STAILQ_FOREACH(entry, &fonts, font_next) {
 		if (fh.fh_width == entry->font_data->width &&
 		    fh.fh_height == entry->font_data->height) {
 			free(entry->font_name);
 			entry->font_name = font_name;
+			entry->font_flags = FONT_RELOAD;
 			return (true);
 		}
 	}
@@ -1603,7 +2163,7 @@ insert_font(char *name)
 		return (false);
 	}
 	fp->font_name = font_name;
-	fp->font_flags = FONT_AUTO;
+	fp->font_flags = flags;
 	fp->font_load = load_font;
 	fp->font_data->width = fh.fh_width;
 	fp->font_data->height = fh.fh_height;
@@ -1618,8 +2178,7 @@ insert_font(char *name)
 
 	STAILQ_FOREACH(entry, &fonts, font_next) {
 		/* Should fp be inserted before the entry? */
-		if (size >
-		    entry->font_data->width * entry->font_data->height) {
+		if (size > entry->font_data->width * entry->font_data->height) {
 			if (previous == NULL) {
 				STAILQ_INSERT_HEAD(&fonts, fp, font_next);
 			} else {
@@ -1681,7 +2240,17 @@ font_set(struct env_var *ev __unused, int flags __unused, const void *value)
 }
 
 void
-autoload_font(void)
+bios_text_font(bool use_vga_font)
+{
+	if (use_vga_font)
+		(void) insert_font(VGA_8X16_FONT, FONT_MANUAL);
+	else
+		(void) insert_font(DEFAULT_8X16_FONT, FONT_MANUAL);
+	tems.update_font = true;
+}
+
+void
+autoload_font(bool bios)
 {
 	struct name_list *nl;
 	struct name_entry *np;
@@ -1693,7 +2262,7 @@ autoload_font(void)
 	while (!SLIST_EMPTY(nl)) {
 		np = SLIST_FIRST(nl);
 		SLIST_REMOVE_HEAD(nl, n_entry);
-		if (insert_font(np->n_name) == false)
+		if (insert_font(np->n_name, FONT_AUTO) == false)
 			printf("failed to add font: %s\n", np->n_name);
 		free(np->n_name);
 		free(np);
@@ -1701,6 +2270,14 @@ autoload_font(void)
 
 	unsetenv("screen-font");
 	env_setenv("screen-font", EV_VOLATILE, NULL, font_set, env_nounset);
+
+	/*
+	 * If vga text mode was requested, load vga.font (8x16 bold) font.
+	 */
+	if (bios) {
+		bios_text_font(true);
+	}
+
 	/* Trigger tem update. */
 	tems.update_font = true;
 	plat_cons_update_mode(-1);
@@ -1711,44 +2288,62 @@ COMMAND_SET(load_font, "loadfont", "load console font from file", command_font);
 static int
 command_font(int argc, char *argv[])
 {
-	int i, rc = CMD_OK;
+	int i, c, rc = CMD_OK;
 	struct fontlist *fl;
-	bitmap_data_t *bd;
+	bool list;
 
-	if (argc > 2) {
-		printf("Usage: loadfont [file.fnt]\n");
+	list = false;
+	optind = 1;
+	optreset = 1;
+	rc = CMD_OK;
+
+	while ((c = getopt(argc, argv, "l")) != -1) {
+		switch (c) {
+		case 'l':
+			list = true;
+			break;
+		case '?':
+		default:
+			return (CMD_ERROR);
+		}
+	}
+
+	argc -= optind;
+	argv += optind;
+
+	if (argc > 1 || (list && argc != 0)) {
+		printf("Usage: loadfont [-l] | [file.fnt]\n");
 		return (CMD_ERROR);
 	}
 
-	if (argc == 2) {
-		char *name = argv[1];
-
-		if (insert_font(name) == false) {
-			printf("loadfont error: failed to load: %s\n", name);
-			return (CMD_ERROR);
-		}
-
-		bd = load_font(name);
-		if (bd == NULL) {
-			printf("loadfont error: failed to load: %s\n", name);
-			return (CMD_ERROR);
-		}
-
-		/* Get the font list entry and mark it manually loaded. */
+	if (list) {
 		STAILQ_FOREACH(fl, &fonts, font_next) {
-			if (strcmp(fl->font_name, name) == 0)
-				fl->font_flags = FONT_MANUAL;
+			printf("font %s: %dx%d%s\n", fl->font_name,
+			    fl->font_data->width,
+			    fl->font_data->height,
+			    fl->font_data->font == NULL? "" : " loaded");
 		}
+		return (CMD_OK);
+	}
+
+	if (argc == 1) {
+		char *name = argv[0];
+
+		if (insert_font(name, FONT_MANUAL) == false) {
+			printf("loadfont error: failed to load: %s\n", name);
+			return (CMD_ERROR);
+		}
+
 		tems.update_font = true;
 		plat_cons_update_mode(-1);
 		return (CMD_OK);
 	}
 
-	if (argc == 1) {
+	if (argc == 0) {
 		/*
 		 * Walk entire font list, release any loaded font, and set
-		 * autoload flag. If the font list is empty, the tem will
-		 * get the builtin default.
+		 * autoload flag. The font list does have at least the builtin
+		 * default font.
 		 */
 		STAILQ_FOREACH(fl, &fonts, font_next) {
 			if (fl->font_data->font != NULL) {
@@ -1765,4 +2360,86 @@ command_font(int argc, char *argv[])
 		plat_cons_update_mode(-1);
 	}
 	return (rc);
+}
+
+bool
+gfx_get_edid_resolution(struct vesa_edid_info *edid, edid_res_list_t *res)
+{
+	struct resolution *rp, *p;
+
+	/*
+	 * Walk detailed timings tables (4).
+	 */
+	if ((edid->display.supported_features
+	    & EDID_FEATURE_PREFERRED_TIMING_MODE) != 0) {
+		/* Walk detailed timing descriptors (4) */
+		for (int i = 0; i < DET_TIMINGS; i++) {
+			/*
+			 * Reserved value 0 is not used for display decriptor.
+			 */
+			if (edid->detailed_timings[i].pixel_clock == 0)
+				continue;
+			if ((rp = malloc(sizeof (*rp))) == NULL)
+				continue;
+			rp->width = GET_EDID_INFO_WIDTH(edid, i);
+			rp->height = GET_EDID_INFO_HEIGHT(edid, i);
+			if (rp->width > 0 && rp->width <= EDID_MAX_PIXELS &&
+			    rp->height > 0 && rp->height <= EDID_MAX_LINES)
+				TAILQ_INSERT_TAIL(res, rp, next);
+			else
+				free(rp);
+		}
+	}
+
+	/*
+	 * Walk standard timings list (8).
+	 */
+	for (int i = 0; i < STD_TIMINGS; i++) {
+		/* Is this field unused? */
+		if (edid->standard_timings[i] == 0x0101)
+			continue;
+
+		if ((rp = malloc(sizeof (*rp))) == NULL)
+			continue;
+
+		rp->width = HSIZE(edid->standard_timings[i]);
+		switch (RATIO(edid->standard_timings[i])) {
+		case RATIO1_1:
+			rp->height = HSIZE(edid->standard_timings[i]);
+			if (edid->header.version > 1 ||
+			    edid->header.revision > 2) {
+				rp->height = rp->height * 10 / 16;
+			}
+			break;
+		case RATIO4_3:
+			rp->height = HSIZE(edid->standard_timings[i]) * 3 / 4;
+			break;
+		case RATIO5_4:
+			rp->height = HSIZE(edid->standard_timings[i]) * 4 / 5;
+			break;
+		case RATIO16_9:
+			rp->height = HSIZE(edid->standard_timings[i]) * 9 / 16;
+			break;
+		}
+
+		/*
+		 * Create resolution list in decreasing order, except keep
+		 * first entry (preferred timing mode).
+		 */
+		TAILQ_FOREACH(p, res, next) {
+			if (p->width * p->height < rp->width * rp->height) {
+				/* Keep preferred mode first */
+				if (TAILQ_FIRST(res) == p)
+					TAILQ_INSERT_AFTER(res, p, rp, next);
+				else
+					TAILQ_INSERT_BEFORE(p, rp, next);
+				break;
+			}
+			if (TAILQ_NEXT(p, next) == NULL) {
+				TAILQ_INSERT_TAIL(res, rp, next);
+				break;
+			}
+		}
+	}
+	return (!TAILQ_EMPTY(res));
 }

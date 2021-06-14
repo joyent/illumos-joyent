@@ -60,6 +60,7 @@
 
 #include <sys/vdev_impl.h>
 #include <libzutil.h>
+#include <sys/arc_impl.h>
 
 #include "libzfs.h"
 #include "libzfs_impl.h"
@@ -168,24 +169,93 @@ zpool_clear_label(int fd)
 	struct stat64 statbuf;
 	int l;
 	vdev_label_t *label;
+	l2arc_dev_hdr_phys_t *l2dhdr;
 	uint64_t size;
+	int labels_cleared = 0, header_cleared = 0;
+	boolean_t clear_l2arc_header = B_FALSE;
 
 	if (fstat64(fd, &statbuf) == -1)
 		return (0);
+
 	size = P2ALIGN_TYPED(statbuf.st_size, sizeof (vdev_label_t), uint64_t);
 
 	if ((label = calloc(sizeof (vdev_label_t), 1)) == NULL)
 		return (-1);
 
+	if ((l2dhdr = calloc(1, sizeof (l2arc_dev_hdr_phys_t))) == NULL) {
+		free(label);
+		return (-1);
+	}
+
 	for (l = 0; l < VDEV_LABELS; l++) {
-		if (pwrite64(fd, label, sizeof (vdev_label_t),
+		uint64_t state, guid, l2cache;
+		nvlist_t *config;
+
+		if (pread64(fd, label, sizeof (vdev_label_t),
 		    label_offset(size, l)) != sizeof (vdev_label_t)) {
-			free(label);
-			return (-1);
+			continue;
+		}
+
+		if (nvlist_unpack(label->vl_vdev_phys.vp_nvlist,
+		    sizeof (label->vl_vdev_phys.vp_nvlist), &config, 0) != 0) {
+			continue;
+		}
+
+		/* Skip labels which do not have a valid guid. */
+		if (nvlist_lookup_uint64(config, ZPOOL_CONFIG_GUID,
+		    &guid) != 0 || guid == 0) {
+			nvlist_free(config);
+			continue;
+		}
+
+		/* Skip labels which are not in a known valid state. */
+		if (nvlist_lookup_uint64(config, ZPOOL_CONFIG_POOL_STATE,
+		    &state) != 0 || state > POOL_STATE_L2CACHE) {
+			nvlist_free(config);
+			continue;
+		}
+
+		/* If the device is a cache device clear the header. */
+		if (!clear_l2arc_header) {
+			if (nvlist_lookup_uint64(config,
+			    ZPOOL_CONFIG_POOL_STATE, &l2cache) == 0 &&
+			    l2cache == POOL_STATE_L2CACHE) {
+				clear_l2arc_header = B_TRUE;
+			}
+		}
+
+		nvlist_free(config);
+
+		/*
+		 * A valid label was found, overwrite this label's nvlist
+		 * and uberblocks with zeros on disk.  This is done to prevent
+		 * system utilities, like blkid, from incorrectly detecting a
+		 * partial label.  The leading pad space is left untouched.
+		 */
+		memset(label, 0, sizeof (vdev_label_t));
+		size_t label_size = sizeof (vdev_label_t) - (2 * VDEV_PAD_SIZE);
+
+		if (pwrite64(fd, label, label_size, label_offset(size, l) +
+		    (2 * VDEV_PAD_SIZE)) == label_size) {
+			labels_cleared++;
+		}
+	}
+
+	/* Clear the L2ARC header. */
+	if (clear_l2arc_header) {
+		memset(l2dhdr, 0, sizeof (l2arc_dev_hdr_phys_t));
+		if (pwrite64(fd, l2dhdr, sizeof (l2arc_dev_hdr_phys_t),
+		    VDEV_LABEL_START_SIZE) == sizeof (l2arc_dev_hdr_phys_t)) {
+			header_cleared++;
 		}
 	}
 
 	free(label);
+	free(l2dhdr);
+
+	if (labels_cleared == 0)
+		return (-1);
+
 	return (0);
 }
 

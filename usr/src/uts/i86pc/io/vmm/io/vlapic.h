@@ -30,6 +30,7 @@
 
 /*
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #ifndef _VLAPIC_H_
@@ -38,10 +39,12 @@
 struct vm;
 enum x2apic_state;
 
+void vlapic_reset(struct vlapic *vlapic);
+
 int vlapic_write(struct vlapic *vlapic, int mmio_access, uint64_t offset,
-    uint64_t data, bool *retu);
+    uint64_t data);
 int vlapic_read(struct vlapic *vlapic, int mmio_access, uint64_t offset,
-    uint64_t *data, bool *retu);
+    uint64_t *data);
 
 /*
  * Returns 0 if there is no eligible vector that can be delivered to the
@@ -63,10 +66,8 @@ int vlapic_pending_intr(struct vlapic *vlapic, int *vecptr);
  */
 void vlapic_intr_accepted(struct vlapic *vlapic, int vector);
 
-/*
- * Returns 1 if the vcpu needs to be notified of the interrupt and 0 otherwise.
- */
-int vlapic_set_intr_ready(struct vlapic *vlapic, int vector, bool level);
+vcpu_notify_t vlapic_set_intr_ready(struct vlapic *vlapic, int vector,
+    bool level);
 
 /*
  * Post an interrupt to the vcpu running on 'hostcpu'. This will use a
@@ -91,9 +92,6 @@ void vlapic_deliver_intr(struct vm *vm, bool level, uint32_t dest, bool phys,
 void vlapic_calcdest(struct vm *vm, cpuset_t *dmask, uint32_t dest, bool phys,
     bool lowprio, bool x2apic_dest);
 
-void vlapic_tmr_update(struct vlapic *vlapic);
-void vlapic_tmr_set(struct vlapic *vlapic, uint8_t vector, bool active);
-
 void vlapic_set_cr8(struct vlapic *vlapic, uint64_t val);
 uint64_t vlapic_get_cr8(struct vlapic *vlapic);
 
@@ -103,14 +101,12 @@ void vlapic_ldr_write_handler(struct vlapic *vlapic);
 void vlapic_dfr_write_handler(struct vlapic *vlapic);
 void vlapic_svr_write_handler(struct vlapic *vlapic);
 void vlapic_esr_write_handler(struct vlapic *vlapic);
-int vlapic_icrlo_write_handler(struct vlapic *vlapic, bool *retu);
+int vlapic_icrlo_write_handler(struct vlapic *vlapic);
 void vlapic_icrtmr_write_handler(struct vlapic *vlapic);
 void vlapic_dcr_write_handler(struct vlapic *vlapic);
 void vlapic_lvt_write_handler(struct vlapic *vlapic, uint32_t offset);
 void vlapic_self_ipi_handler(struct vlapic *vlapic, uint64_t val);
 
-#ifndef __FreeBSD__
 void vlapic_localize_resources(struct vlapic *vlapic);
-#endif
 
 #endif	/* _VLAPIC_H_ */

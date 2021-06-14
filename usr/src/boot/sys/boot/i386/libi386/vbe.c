@@ -47,7 +47,15 @@ static struct vbeinfoblock *vbe =
 	(struct vbeinfoblock *)&vbestate.vbe_control_info;
 static struct modeinfoblock *vbe_mode =
 	(struct modeinfoblock *)&vbestate.vbe_mode_info;
-multiboot_color_t cmap[16];
+static uint16_t *vbe_mode_list;
+static size_t vbe_mode_list_size;
+struct vesa_edid_info *edid_info = NULL;
+multiboot_color_t *cmap;
+/* The default VGA color palette format is 6 bits per primary color. */
+int palette_format = 6;
+
+#define	VESA_MODE_BASE		0x100
+#define	VESA_END_OF_MODE_LIST	0xffff
 
 /* Actually assuming mode 3. */
 void
@@ -55,6 +63,18 @@ bios_set_text_mode(int mode)
 {
 	int atr;
 
+	if (vbe->Capabilities & VBE_CAP_DAC8) {
+		int m;
+
+		/*
+		 * The mode change should reset the palette format to
+		 * 6 bits, but apparently some systems do fail with 8-bit
+		 * palette, so we switch to 6-bit here.
+		 */
+		m = 0x0600;
+		(void) biosvbe_palette_format(&m);
+		palette_format = m;
+	}
 	v86.ctl = V86_FLAGS;
 	v86.addr = 0x10;
 	v86.eax = mode;				/* set VGA text mode */
@@ -107,6 +127,20 @@ biosvbe_get_mode_info(int mode, struct modeinfoblock *mi)
 static int
 biosvbe_set_mode(int mode, struct crtciinfoblock *ci)
 {
+	int rv;
+
+	if (vbe->Capabilities & VBE_CAP_DAC8) {
+		int m;
+
+		/*
+		 * The mode change should reset the palette format to
+		 * 6 bits, but apparently some systems do fail with 8-bit
+		 * palette, so we switch to 6-bit here.
+		 */
+		m = 0x0600;
+		if (biosvbe_palette_format(&m) == VBE_SUCCESS)
+			palette_format = m;
+	}
 	v86.ctl = V86_FLAGS;
 	v86.addr = 0x10;
 	v86.eax = 0x4f02;
@@ -114,7 +148,16 @@ biosvbe_set_mode(int mode, struct crtciinfoblock *ci)
 	v86.es = VTOPSEG(ci);
 	v86.edi = VTOPOFF(ci);
 	v86int();
-	return (v86.eax & 0xffff);
+	rv = v86.eax & 0xffff;
+	if (vbe->Capabilities & VBE_CAP_DAC8) {
+		int m;
+
+		/* Switch to 8-bits per primary color. */
+		m = 0x0800;
+		if (biosvbe_palette_format(&m) == VBE_SUCCESS)
+			palette_format = m;
+	}
+	return (rv);
 }
 
 /* Function 03h - Get VBE Mode */
@@ -138,7 +181,7 @@ biosvbe_palette_format(int *format)
 	v86.eax = 0x4f08;
 	v86.ebx = *format;
 	v86int();
-	*format = v86.ebx & 0xffff;
+	*format = (v86.ebx >> 8) & 0xff;
 	return (v86.eax & 0xffff);
 }
 
@@ -178,6 +221,20 @@ biosvbe_ddc_caps(void)
 	if (VBE_ERROR(v86.eax & 0xffff))
 		return (0);
 	return (v86.ebx & 0xffff);
+}
+
+/* Function 11h BL=01h - Flat Panel status */
+static int
+biosvbe_ddc_read_flat_panel_info(void *buf)
+{
+	v86.ctl = V86_FLAGS;
+	v86.addr = 0x10;
+	v86.eax = 0x4f11;	/* Flat Panel Interface extensions */
+	v86.ebx = 1;		/* Return Flat Panel Information */
+	v86.es = VTOPSEG(buf);
+	v86.edi = VTOPOFF(buf);
+	v86int();
+	return (v86.eax & 0xffff);
 }
 
 /* Function 15h BL=01h - Read EDID */
@@ -223,9 +280,25 @@ vbe_check(void)
 	return (1);
 }
 
+/*
+ * Translate selector:offset style address to linear adress.
+ * selector = farptr >> 16;
+ * offset = farptr & 0xffff;
+ * linear = (selector * 4) + offset.
+ * By using mask 0xffff0000, we wil get the optimised line below.
+ * As a final step, translate physical address to loader virtual address.
+ */
+static void *
+vbe_farptr(uint32_t farptr)
+{
+	return (PTOV((((farptr & 0xffff0000) >> 12) + (farptr & 0xffff))));
+}
+
 void
 vbe_init(void)
 {
+	uint16_t *p, *ml;
+
 	/* First set FB for text mode. */
 	gfx_fb.framebuffer_common.mb_type = MULTIBOOT_TAG_TYPE_FRAMEBUFFER;
 	gfx_fb.framebuffer_common.framebuffer_type =
@@ -246,9 +319,37 @@ vbe_init(void)
 	if (memcmp(vbe->VbeSignature, "VESA", 4) != 0)
 		return;
 
+	/*
+	 * Copy mode list array. We must do this because some systems do
+	 * place this array to scratch memory, which will be reused by
+	 * subsequent VBE calls. (vbox 6.1 is one example).
+	 */
+	p = ml = vbe_farptr(vbe->VideoModePtr);
+	while (*p++ != VESA_END_OF_MODE_LIST)
+		;
+
+	vbe_mode_list_size = (uintptr_t)p - (uintptr_t)ml;
+
+	/*
+	 * Since vbe_init() is used only once at very start of the loader,
+	 * we assume malloc will not fail there. But in case it does,
+	 * we point vbe_mode_list to memory pointed by VideoModePtr.
+	 * If the VideoModePtr memory area is not valid, we will fail to
+	 * pick usable VBE mode and fall back to use text mode.
+	 */
+	vbe_mode_list = malloc(vbe_mode_list_size);
+	if (vbe_mode_list == NULL)
+		vbe_mode_list = ml;
+	else
+		bcopy(ml, vbe_mode_list, vbe_mode_list_size);
+
+	/* reset VideoModePtr, to make sure, we only do use vbe_mode_list. */
+	vbe->VideoModePtr = 0;
+
 	vbestate.mb_type = MULTIBOOT_TAG_TYPE_VBE;
 	vbestate.mb_size = sizeof (vbestate);
 	vbestate.vbe_mode = 0;
+
 	/* vbe_set_mode() will set up the rest. */
 }
 
@@ -262,9 +363,9 @@ int
 vbe_set_palette(const struct paletteentry *entry, size_t slot)
 {
 	struct paletteentry pe;
-	int ret;
+	int mode, ret;
 
-	if (!vbe_check())
+	if (!vbe_check() || (vbe->Capabilities & VBE_CAP_DAC8) == 0)
 		return (1);
 
 	if (gfx_fb.framebuffer_common.framebuffer_type !=
@@ -272,13 +373,21 @@ vbe_set_palette(const struct paletteentry *entry, size_t slot)
 		return (1);
 	}
 
+	if (cmap == NULL)
+		cmap = calloc(CMAP_SIZE, sizeof (*cmap));
+
 	pe.Blue = entry->Blue;
 	pe.Green = entry->Green;
 	pe.Red = entry->Red;
-	pe.Alignment = entry->Alignment;
+	pe.Reserved = entry->Reserved;
 
-	ret = biosvbe_palette_data(0x00, slot, &pe);
-	if (ret == VBE_SUCCESS && slot < sizeof (cmap)) {
+	if (vbe->Capabilities & VBE_CAP_SNOW)
+		mode = 0x80;
+	else
+		mode = 0;
+
+	ret = biosvbe_palette_data(mode, slot, &pe);
+	if (cmap != NULL && slot < CMAP_SIZE) {
 		cmap[slot].mb_red = entry->Red;
 		cmap[slot].mb_green = entry->Green;
 		cmap[slot].mb_blue = entry->Blue;
@@ -347,15 +456,7 @@ vbe_set_mode(int modenum)
 	case 0x4:
 		gfx_fb.framebuffer_common.framebuffer_type =
 		    MULTIBOOT_FRAMEBUFFER_TYPE_INDEXED;
-		if (vbe->VbeVersion >= 0x300) {
-			gfx_fb.framebuffer_common.framebuffer_pitch =
-			    mi.LinBytesPerScanLine;
-		} else {
-			gfx_fb.framebuffer_common.framebuffer_pitch =
-			    mi.BytesPerScanLine;
-		}
-		gfx_fb.u.fb1.framebuffer_palette_num_colors = 16;
-		return (0);	/* done */
+		break;
 	case 0x6:
 		gfx_fb.framebuffer_common.framebuffer_type =
 		    MULTIBOOT_FRAMEBUFFER_TYPE_RGB;
@@ -391,12 +492,6 @@ vbe_set_mode(int modenum)
 	return (0);
 }
 
-static void *
-vbe_farptr(uint32_t farptr)
-{
-	return (PTOV((((farptr & 0xffff0000) >> 12) + (farptr & 0xffff))));
-}
-
 /*
  * Verify existance of mode number or find mode by
  * dimensions. If depth is not given, walk values 32, 24, 16, 8.
@@ -405,18 +500,15 @@ static int
 vbe_find_mode_xydm(int x, int y, int depth, int m)
 {
 	struct modeinfoblock mi;
-	uint32_t farptr;
 	uint16_t mode;
-	int safety = 0, i;
+	size_t idx, nentries;
+	int i;
 
 	memset(vbe, 0, sizeof (vbe));
 	memcpy(vbe->VbeSignature, "VBE2", 4);
 	if (biosvbe_info(vbe) != VBE_SUCCESS)
 		return (0);
 	if (memcmp(vbe->VbeSignature, "VESA", 4) != 0)
-		return (0);
-	farptr = vbe->VideoModePtr;
-	if (farptr == 0)
 		return (0);
 
 	if (m != -1)
@@ -426,19 +518,19 @@ vbe_find_mode_xydm(int x, int y, int depth, int m)
 	else
 		i = depth;
 
+	nentries = vbe_mode_list_size / sizeof (*vbe_mode_list);
 	while (i > 0) {
-		while ((mode = *(uint16_t *)vbe_farptr(farptr)) != 0xffff) {
-			safety++;
-			farptr += 2;
-			if (safety == 100)
-				return (0);
-			if (biosvbe_get_mode_info(mode, &mi) != VBE_SUCCESS) {
+		for (idx = 0; idx < nentries; idx++) {
+			mode = vbe_mode_list[idx];
+			if (mode == VESA_END_OF_MODE_LIST)
+				break;
+
+			if (biosvbe_get_mode_info(mode, &mi) != VBE_SUCCESS)
 				continue;
-			}
+
 			/* we only care about linear modes here */
 			if (vbe_mode_is_supported(&mi) == 0)
 				continue;
-			safety = 0;
 
 			if (m != -1) {
 				if (m == mode)
@@ -480,40 +572,65 @@ vbe_dump_mode(int modenum, struct modeinfoblock *mi)
 }
 
 static bool
-vbe_get_edid(uint_t *pwidth, uint_t *pheight)
+vbe_get_edid(edid_res_list_t *res)
 {
-	struct vesa_edid_info *edid_info;
+	struct vesa_edid_info *edidp;
 	const uint8_t magic[] = EDID_MAGIC;
 	int ddc_caps;
 	bool ret = false;
+
+	if (edid_info != NULL)
+		return (gfx_get_edid_resolution(edid_info, res));
 
 	ddc_caps = biosvbe_ddc_caps();
 	if (ddc_caps == 0) {
 		return (ret);
 	}
 
-	edid_info = bio_alloc(sizeof (*edid_info));
-	if (edid_info == NULL)
+	edidp = bio_alloc(sizeof (*edidp));
+	if (edidp == NULL)
 		return (ret);
+	memset(edidp, 0, sizeof (*edidp));
 
-	if (VBE_ERROR(biosvbe_ddc_read_edid(0, edid_info)))
+	if (VBE_ERROR(biosvbe_ddc_read_edid(0, edidp)))
 		goto done;
 
-	if (memcmp(edid_info, magic, sizeof (magic)) != 0)
+	if (memcmp(edidp, magic, sizeof (magic)) != 0)
 		goto done;
 
-	if (!(edid_info->header.version == 1 &&
-	    (edid_info->display.supported_features
-	    & EDID_FEATURE_PREFERRED_TIMING_MODE) &&
-	    edid_info->detailed_timings[0].pixel_clock))
+	/* Unknown EDID version. */
+	if (edidp->header.version != 1)
 		goto done;
 
-	*pwidth = GET_EDID_INFO_WIDTH(edid_info, 0);
-	*pheight = GET_EDID_INFO_HEIGHT(edid_info, 0);
-
-	ret = true;
+	ret = gfx_get_edid_resolution(edidp, res);
+	edid_info = malloc(sizeof (*edid_info));
+	if (edid_info != NULL)
+		memcpy(edid_info, edidp, sizeof (*edid_info));
 done:
-	bio_free(edid_info, sizeof (*edid_info));
+	bio_free(edidp, sizeof (*edidp));
+	return (ret);
+}
+
+static bool
+vbe_get_flatpanel(uint_t *pwidth, uint_t *pheight)
+{
+	struct flatpanelinfo *fp_info;
+	bool ret = false;
+
+	fp_info = bio_alloc(sizeof (*fp_info));
+	if (fp_info == NULL)
+		return (ret);
+	memset(fp_info, 0, sizeof (*fp_info));
+
+	if (VBE_ERROR(biosvbe_ddc_read_flat_panel_info(fp_info)))
+		goto done;
+
+	*pwidth = fp_info->HorizontalSize;
+	*pheight = fp_info->VerticalSize;
+	ret = true;
+
+done:
+	bio_free(fp_info, sizeof (*fp_info));
 	return (ret);
 }
 
@@ -550,11 +667,13 @@ void
 vbe_modelist(int depth)
 {
 	struct modeinfoblock mi;
-	uint32_t farptr;
 	uint16_t mode;
-	int nmodes = 0, safety = 0;
+	int nmodes, idx, nentries;
 	int ddc_caps;
-	uint_t edid_width, edid_height;
+	uint_t width, height;
+	bool edid = false;
+	edid_res_list_t res;
+	struct resolution *rp;
 
 	if (!vbe_check())
 		return;
@@ -567,12 +686,25 @@ vbe_modelist(int depth)
 		if (ddc_caps & 2)
 			printf(" [DDC2]");
 
-		if (vbe_get_edid(&edid_width, &edid_height))
-			printf(": EDID %dx%d\n", edid_width, edid_height);
-		else
+		TAILQ_INIT(&res);
+		edid = vbe_get_edid(&res);
+		if (edid) {
+			printf(": EDID");
+			while ((rp = TAILQ_FIRST(&res)) != NULL) {
+				printf(" %dx%d", rp->width, rp->height);
+				TAILQ_REMOVE(&res, rp, next);
+				free(rp);
+			}
+			printf("\n");
+		} else {
 			printf(": no EDID information\n");
+		}
 	}
+	if (!edid)
+		if (vbe_get_flatpanel(&width, &height))
+			printf(": Panel %dx%d\n", width, height);
 
+	nmodes = 0;
 	memset(vbe, 0, sizeof (vbe));
 	memcpy(vbe->VbeSignature, "VBE2", 4);
 	if (biosvbe_info(vbe) != VBE_SUCCESS)
@@ -583,25 +715,18 @@ vbe_modelist(int depth)
 	vbe_print_vbe_info(vbe);
 	printf("Modes: ");
 
-	farptr = vbe->VideoModePtr;
-	if (farptr == 0)
-		goto done;
-
-	while ((mode = *(uint16_t *)vbe_farptr(farptr)) != 0xffff) {
-		safety++;
-		farptr += 2;
-		if (safety == 100) {
-			printf("[?] ");
+	nentries = vbe_mode_list_size / sizeof (*vbe_mode_list);
+	for (idx = 0; idx < nentries; idx++) {
+		mode = vbe_mode_list[idx];
+		if (mode == VESA_END_OF_MODE_LIST)
 			break;
-		}
+
 		if (biosvbe_get_mode_info(mode, &mi) != VBE_SUCCESS)
 			continue;
+
 		/* we only care about linear modes here */
 		if (vbe_mode_is_supported(&mi) == 0)
 			continue;
-
-		/* we found some mode so reset safety counter */
-		safety = 0;
 
 		/* apply requested filter */
 		if (depth != -1 && mi.BitsPerPixel != depth)
@@ -623,10 +748,14 @@ done:
 }
 
 static void
-vbe_print_mode(void)
+vbe_print_mode(bool verbose)
 {
-	int mode, i, rc;
-	struct paletteentry pe;
+	int nc, mode, i, rc;
+
+	if (verbose)
+		nc = 256;
+	else
+		nc = 16;
 
 	memset(vbe, 0, sizeof (vbe));
 	memcpy(vbe->VbeSignature, "VBE2", 4);
@@ -680,30 +809,54 @@ vbe_print_mode(void)
 	if (rc != VBE_SUCCESS)
 		return;
 
-	printf("    palette format: %x bits per primary\n", mode >> 8);
-	for (i = 0; i < 16; i++) {
-		rc = biosvbe_palette_data(1, i, &pe);
-		if (rc != VBE_SUCCESS)
-			break;
+	printf("    palette format: %x bits per primary\n", mode);
+	if (cmap == NULL)
+		return;
 
-		printf("%d: R=%02x, G=%02x, B=%02x\n", i,
-		    pe.Red, pe.Green, pe.Blue);
+	pager_open();
+	for (i = 0; i < nc; i++) {
+		printf("%d: R=%02x, G=%02x, B=%02x", i,
+		    cmap[i].mb_red, cmap[i].mb_green, cmap[i].mb_blue);
+		if (pager_output("\n") != 0)
+			break;
 	}
+	pager_close();
 }
 
+/*
+ * Try EDID preferred mode, if EDID or the suggested mode is not available,
+ * then try flat panel information.
+ * Fall back to VBE_DEFAULT_MODE.
+ */
 int
 vbe_default_mode(void)
 {
+	edid_res_list_t res;
+	struct resolution *rp;
 	int modenum;
-	uint_t edid_width, edid_height;
+	uint_t width, height;
 
-	if (vbe_get_edid(&edid_width, &edid_height)) {
-		modenum = vbe_find_mode_xydm(edid_width, edid_height, -1, -1);
-		if (modenum == 0)
-			modenum = vbe_find_mode(VBE_DEFAULT_MODE);
-	} else {
-		modenum = vbe_find_mode(VBE_DEFAULT_MODE);
+	modenum = 0;
+	TAILQ_INIT(&res);
+	if (vbe_get_edid(&res)) {
+		while ((rp = TAILQ_FIRST(&res)) != NULL) {
+			if (modenum == 0) {
+				modenum = vbe_find_mode_xydm(
+				    rp->width, rp->height, -1, -1);
+			}
+			TAILQ_REMOVE(&res, rp, next);
+			free(rp);
+		}
 	}
+
+	if (modenum == 0 &&
+	    vbe_get_flatpanel(&width, &height)) {
+		modenum = vbe_find_mode_xydm(width, height, -1, -1);
+	}
+
+	/* Still no mode? Fall back to default. */
+	if (modenum == 0)
+		modenum = vbe_find_mode(VBE_DEFAULT_MODE);
 	return (modenum);
 }
 
@@ -743,10 +896,15 @@ command_vesa(int argc, char *argv[])
 	}
 
 	if (strcmp(argv[1], "get") == 0) {
-		if (argc != 2)
-			goto usage;
+		bool verbose = false;
 
-		vbe_print_mode();
+		if (argc > 2) {
+			if (argc > 3 || strcmp(argv[2], "-v") != 0)
+				goto usage;
+			verbose = true;
+		}
+
+		vbe_print_mode(verbose);
 		return (CMD_OK);
 	}
 
@@ -758,6 +916,7 @@ command_vesa(int argc, char *argv[])
 			return (CMD_OK);
 
 		reset_font_flags();
+		bios_text_font(true);
 		bios_set_text_mode(VGA_TEXT_MODE);
 		plat_cons_update_mode(0);
 		return (CMD_OK);
@@ -802,9 +961,10 @@ command_vesa(int argc, char *argv[])
 		return (CMD_ERROR);
 	}
 
-	if (modenum >= 0x100) {
+	if (modenum >= VESA_MODE_BASE) {
 		if (vbestate.vbe_mode != modenum) {
 			reset_font_flags();
+			bios_text_font(false);
 			vbe_set_mode(modenum);
 			plat_cons_update_mode(1);
 		}
@@ -817,7 +977,7 @@ command_vesa(int argc, char *argv[])
 
 usage:
 	snprintf(command_errbuf, sizeof (command_errbuf),
-	    "usage: %s on | off | get | list [depth] | "
+	    "usage: %s on | off | get [-v] | list [depth] | "
 	    "set <display or VBE mode number>", argv[0]);
 	return (CMD_ERROR);
 }

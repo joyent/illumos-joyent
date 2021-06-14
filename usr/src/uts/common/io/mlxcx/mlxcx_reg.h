@@ -60,6 +60,11 @@
 #define	MLXCX_CMD_HW_OWNED		0x01
 #define	MLXCX_CMD_STATUS(x)		((x) >> 1)
 
+/*
+ * You can't have more commands pending, than bit size of a doorbell
+ */
+#define	MLXCX_CMD_MAX		(sizeof (uint32_t) * NBBY)
+
 #define	MLXCX_UAR_CQ_ARM	0x0020
 #define	MLXCX_UAR_EQ_ARM	0x0040
 #define	MLXCX_UAR_EQ_NOARM	0x0048
@@ -152,6 +157,11 @@ typedef struct {
 	uint24be_t	mled_completion_cqn;
 } mlxcx_evdata_completion_t;
 
+typedef struct {
+	uint32be_t	mled_cmd_completion_vec;
+	uint8_t		mled_cmd_completion_rsvd[24];
+} mlxcx_evdata_cmd_completion_t;
+
 typedef enum {
 	MLXCX_EV_QUEUE_TYPE_QP	= 0x0,
 	MLXCX_EV_QUEUE_TYPE_RQ	= 0x1,
@@ -175,6 +185,7 @@ typedef struct {
 	uint8_t		mleqe_rsvd3[28];
 	union {
 		uint8_t				mleqe_unknown_data[28];
+		mlxcx_evdata_cmd_completion_t	mleqe_cmd_completion;
 		mlxcx_evdata_completion_t	mleqe_completion;
 		mlxcx_evdata_page_request_t	mleqe_page_request;
 		mlxcx_evdata_port_state_t	mleqe_port_state;
@@ -1293,22 +1304,25 @@ typedef struct {
 
 /*
  * This is an artificial limit that we're imposing on our actions.
+ * Large enough to limit the number of manage pages calls we have to
+ * make, but not so large that it will overflow any of the command
+ * mailboxes.
  */
-#define	MLXCX_MANAGE_PAGES_MAX_PAGES	512
+#define	MLXCX_MANAGE_PAGES_MAX_PAGES	4096
 
 typedef struct {
 	mlxcx_cmd_in_t	mlxi_manage_pages_head;
 	uint8_t		mlxi_manage_pages_rsvd[2];
 	uint16be_t	mlxi_manage_pages_func;
 	uint32be_t	mlxi_manage_pages_npages;
-	uint64be_t	mlxi_manage_pages_pas[MLXCX_MANAGE_PAGES_MAX_PAGES];
+	uint64be_t	mlxi_manage_pages_pas[];
 } mlxcx_cmd_manage_pages_in_t;
 
 typedef struct {
 	mlxcx_cmd_out_t	mlxo_manage_pages_head;
 	uint32be_t	mlxo_manage_pages_npages;
 	uint8_t		mlxo_manage_pages_rsvd[4];
-	uint64be_t	mlxo_manage_pages_pas[MLXCX_MANAGE_PAGES_MAX_PAGES];
+	uint64be_t	mlxo_manage_pages_pas[];
 } mlxcx_cmd_manage_pages_out_t;
 
 typedef enum {
@@ -2068,6 +2082,10 @@ typedef struct {
 	uint8_t		mlxi_set_flow_table_root_rsvd3[4];
 	uint24be_t	mlxi_set_flow_table_root_table_id;
 	uint8_t		mlxi_set_flow_table_root_rsvd4[4];
+	uint8_t		mlxi_set_flow_table_root_esw_owner_vhca_id_valid;
+	uint8_t		mlxi_set_flow_table_root_rsvd5;
+	uint16be_t	mlxi_set_flow_table_root_esw_owner_vhca_id;
+	uint8_t		mlxi_set_flow_table_root_rsvd6[32];
 } mlxcx_cmd_set_flow_table_root_in_t;
 
 typedef struct {
@@ -2516,6 +2534,30 @@ typedef struct {
 	uint16be_t	mlrd_pplm_fec_override_admin_fdr10;
 } mlxcx_reg_pplm_t;
 
+typedef struct {
+	uint8_t		mlrd_mtcap_rsvd[3];
+	uint8_t		mlrd_mtcap_sensor_count;
+	uint8_t		mlrd_mtcap_rsvd1[4];
+	uint64be_t	mlrd_mtcap_sensor_map;
+} mlxcx_reg_mtcap_t;
+
+#define	MLXCX_MTMP_NAMELEN	8
+
+typedef struct {
+	uint8_t		mlrd_mtmp_rsvd[2];
+	uint16be_t	mlrd_mtmp_sensor_index;
+	uint8_t		mlrd_mtmp_rsvd1[2];
+	uint16be_t	mlrd_mtmp_temperature;
+	bits16_t	mlrd_mtmp_max_flags;
+	uint16be_t	mlrd_mtmp_max_temperature;
+	bits16_t	mlrd_mtmp_tee;
+	uint16be_t	mlrd_mtmp_temp_thresh_hi;
+	uint8_t		mlrd_mtmp_rsvd2[2];
+	uint16be_t	mlrd_mtmp_temp_thresh_lo;
+	uint8_t		mlrd_mtmp_rsvd3[4];
+	uint8_t		mlrd_mtmp_name[MLXCX_MTMP_NAMELEN];
+} mlxcx_reg_mtmp_t;
+
 typedef enum {
 	MLXCX_REG_PMTU		= 0x5003,
 	MLXCX_REG_PTYS		= 0x5004,
@@ -2526,6 +2568,8 @@ typedef enum {
 	MLXCX_REG_MCIA		= 0x9014,
 	MLXCX_REG_PPCNT		= 0x5008,
 	MLXCX_REG_PPLM		= 0x5023,
+	MLXCX_REG_MTCAP		= 0x9009,
+	MLXCX_REG_MTMP		= 0x900A
 } mlxcx_register_id_t;
 
 typedef union {
@@ -2537,6 +2581,8 @@ typedef union {
 	mlxcx_reg_mcia_t		mlrd_mcia;
 	mlxcx_reg_ppcnt_t		mlrd_ppcnt;
 	mlxcx_reg_pplm_t		mlrd_pplm;
+	mlxcx_reg_mtcap_t		mlrd_mtcap;
+	mlxcx_reg_mtmp_t		mlrd_mtmp;
 } mlxcx_register_data_t;
 
 typedef enum {

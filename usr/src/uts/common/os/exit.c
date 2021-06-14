@@ -22,6 +22,8 @@
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
+ * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -71,6 +73,7 @@
 #include <sys/pool.h>
 #include <sys/sdt.h>
 #include <sys/corectl.h>
+#include <sys/core.h>
 #include <sys/brand.h>
 #include <sys/libc_kernel.h>
 
@@ -176,6 +179,7 @@ restart_init(int what, int why)
 	kthread_t *t = curthread;
 	klwp_t *lwp = ttolwp(t);
 	proc_t *p = ttoproc(t);
+	proc_t *pp = p->p_zone->zone_zsched;
 	user_t *up = PTOU(p);
 
 	vnode_t *oldcd, *oldrd;
@@ -270,12 +274,34 @@ restart_init(int what, int why)
 		up->u_cwd = NULL;
 	}
 
+	/* Reset security flags */
+	mutex_enter(&pp->p_lock);
+	p->p_secflags = pp->p_secflags;
+	mutex_exit(&pp->p_lock);
+
 	mutex_exit(&p->p_lock);
 
 	if (oldrd != NULL)
 		VN_RELE(oldrd);
 	if (oldcd != NULL)
 		VN_RELE(oldcd);
+
+	/*
+	 * It's possible that a zone's init will have become privilege aware
+	 * and modified privilege sets; reset them.
+	 */
+	cred_t *oldcr, *newcr;
+
+	mutex_enter(&p->p_crlock);
+	oldcr = p->p_cred;
+	mutex_enter(&pp->p_crlock);
+	crhold(newcr = p->p_cred = pp->p_cred);
+	mutex_exit(&pp->p_crlock);
+	mutex_exit(&p->p_crlock);
+	crfree(oldcr);
+	/* Additional hold for the current thread - expected by crset() */
+	crhold(newcr);
+	crset(p, newcr);
 
 	/* Free the controlling tty.  (freectty() always assumes curproc.) */
 	ASSERT(p == curproc);
@@ -597,6 +623,14 @@ proc_exit(int why, int what)
 	if ((tmp_id = p->p_alarmid) != 0) {
 		p->p_alarmid = 0;
 		(void) untimeout(tmp_id);
+	}
+
+	/*
+	 * If we had generated any upanic(2) state, free that now.
+	 */
+	if (p->p_upanic != NULL) {
+		kmem_free(p->p_upanic, PRUPANIC_BUFLEN);
+		p->p_upanic = NULL;
 	}
 
 	/*

@@ -20,7 +20,7 @@
 #
 
 #
-# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2020 Tintri by DDN, Inc. All rights reserved.
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2011 by Delphix. All rights reserved.
 # Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
@@ -402,10 +402,8 @@ usr/src/lib/krb5/ss/mit-sipb-copyright.h
 usr/src/lib/krb5/ss/options.c
 usr/src/lib/krb5/ss/std_rqs.c
 usr/src/lib/krb5/ss/utils.c
-usr/src/lib/libast/common/tm/tvsleep.c
 usr/src/lib/librstp/common/*.[ch]
 usr/src/lib/librstp/common/[CRT]*
-usr/src/lib/libshell/common/bltins/sleep.c
 # these have copyrights that the nit checker doesn't grok
 usr/src/lib/libsmbfs/netsmb/spnego.h
 usr/src/lib/libsmbfs/smb/derparse.[ch]
@@ -413,11 +411,16 @@ usr/src/lib/libsmbfs/smb/spnego.c
 usr/src/lib/libsmbfs/smb/spnegoparse.[ch]
 usr/src/test/crypto-tests/tests/digest/data/*.rsp
 usr/src/test/crypto-tests/tests/digest/data/README
+usr/src/test/libmlrpc-tests/tests/netrlogon/krb5_pac_tests/krb5_pac.bin
 usr/src/test/util-tests/tests/dis/*/*.out
 usr/src/test/util-tests/tests/libsff/*.out
 usr/src/test/util-tests/tests/grep_xpg4/files/gout*
 usr/src/test/util-tests/tests/grep_xpg4/files/test*
+usr/src/test/util-tests/tests/head/*.in
+usr/src/test/util-tests/tests/head/*.out
 usr/src/test/util-tests/tests/libsff/*.out
+usr/src/test/util-tests/tests/pcieadm/*.out
+usr/src/test/util-tests/tests/pcieadm/*.pci
 usr/src/test/zfs-tests/tests/functional/history/*Z
 usr/src/test/zfs-tests/tests/functional/history/*txt
 usr/src/tools/btxld/btx.h
@@ -495,6 +498,9 @@ usr/src/uts/common/sys/scsi/adapters/mpt_sas/mpi/*
 usr/src/uts/sparc/nsmb/ioc_check.ref
 
 # bhyve sources
+usr/src/cmd/bhyve/README.sync
+usr/src/cmd/bhyve/THIRDPARTYLICENSE
+usr/src/cmd/bhyve/THIRDPARTYLICENSE.descrip
 usr/src/cmd/bhyve/acpi.[ch]
 usr/src/cmd/bhyve/ahci.h
 usr/src/cmd/bhyve/atkbdc.[ch]
@@ -502,21 +508,26 @@ usr/src/cmd/bhyve/bhyvegc.[ch]
 usr/src/cmd/bhyve/bhyverun.[ch]
 usr/src/cmd/bhyve/block_if.[ch]
 usr/src/cmd/bhyve/bootrom.[ch]
+usr/src/cmd/bhyve/config.[ch]
 usr/src/cmd/bhyve/console.[ch]
 usr/src/cmd/bhyve/consport.c
 usr/src/cmd/bhyve/dbgport.[ch]
 usr/src/cmd/bhyve/fwctl.[ch]
 usr/src/cmd/bhyve/gdb.[ch]
+usr/src/cmd/bhyve/hda_codec.c
 usr/src/cmd/bhyve/inout.[ch]
 usr/src/cmd/bhyve/ioapic.[ch]
 usr/src/cmd/bhyve/mem.[ch]
 usr/src/cmd/bhyve/mevent.[ch]
 usr/src/cmd/bhyve/mevent_test.c
 usr/src/cmd/bhyve/mptbl.[ch]
+usr/src/cmd/bhyve/net_backends.[ch]
+usr/src/cmd/bhyve/net_utils.[ch]
 usr/src/cmd/bhyve/pci_ahci.c
 usr/src/cmd/bhyve/pci_e82545.c
 usr/src/cmd/bhyve/pci_emul.[ch]
 usr/src/cmd/bhyve/pci_fbuf.c
+usr/src/cmd/bhyve/pci_hda.[ch]
 usr/src/cmd/bhyve/pci_hostbridge.c
 usr/src/cmd/bhyve/pci_irq.[ch]
 usr/src/cmd/bhyve/pci_lpc.[ch]
@@ -524,10 +535,13 @@ usr/src/cmd/bhyve/pci_nvme.c
 usr/src/cmd/bhyve/pci_passthru.c
 usr/src/cmd/bhyve/pci_uart.c
 usr/src/cmd/bhyve/pci_virtio_block.c
+usr/src/cmd/bhyve/pci_virtio_console.c
 usr/src/cmd/bhyve/pci_virtio_net.c
 usr/src/cmd/bhyve/pci_virtio_rnd.c
 usr/src/cmd/bhyve/pci_virtio_scsi.c
+usr/src/cmd/bhyve/pci_virtio_viona.c
 usr/src/cmd/bhyve/pci_xhci.[ch]
+usr/src/cmd/bhyve/pctestdev.[ch]
 usr/src/cmd/bhyve/pm.c
 usr/src/cmd/bhyve/pmtmr.c
 usr/src/cmd/bhyve/post.c
@@ -545,10 +559,16 @@ usr/src/cmd/bhyve/usb_mouse.c
 usr/src/cmd/bhyve/vga.[ch]
 usr/src/cmd/bhyve/virtio.[ch]
 usr/src/cmd/bhyve/xmsr.[ch]
+usr/src/cmd/bhyvectl/THIRDPARTYLICENSE
+usr/src/cmd/bhyvectl/THIRDPARTYLICENSE.descrip
 usr/src/cmd/bhyvectl/bhyvectl.c
 usr/src/compat/bhyve/*
 usr/src/contrib/bhyve/*
+usr/src/lib/libvmmapi/THIRDPARTYLICENSE
+usr/src/lib/libvmmapi/THIRDPARTYLICENSE.descrip
 usr/src/lib/libvmmapi/common/vmmapi.[ch]
+usr/src/uts/i86pc/io/vmm/THIRDPARTYLICENSE
+usr/src/uts/i86pc/io/vmm/THIRDPARTYLICENSE.descrip
 usr/src/uts/i86pc/io/vmm/amd/*.[chs]
 usr/src/uts/i86pc/io/vmm/intel/*.[chs]
 usr/src/uts/i86pc/io/vmm/intel/offsets.in
@@ -571,4 +591,9 @@ usr/src/uts/i86pc/io/vmm/vmx_assym.s
 usr/src/uts/i86pc/io/vmm/x86.[ch]
 usr/src/uts/i86pc/sys/vmm.h
 usr/src/uts/i86pc/sys/vmm_dev.h
-usr/src/uts/i86pc/sys/vmm_instruction_emul.h
+usr/src/cmd/bhyve/README.license
+usr/src/cmd/bhyvectl/README.license
+usr/src/lib/libvmmapi/README.license
+usr/src/uts/i86pc/io/vmm/README.license
+usr/src/uts/i86pc/io/viona/THIRDPARTYLICENSE
+usr/src/uts/i86pc/io/viona/THIRDPARTYLICENSE.descrip

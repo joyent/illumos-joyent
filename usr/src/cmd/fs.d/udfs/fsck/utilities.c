@@ -51,6 +51,8 @@
 #include <sys/lockfs.h>
 #include <locale.h>
 
+static struct bufarea bufhead;
+
 extern int32_t	verifytag(struct tag *, uint32_t, struct tag *, int);
 extern char	*tagerrs[];
 extern void	maketag(struct tag *, struct tag *);
@@ -145,6 +147,7 @@ printfree()
 	int i, startfree, endfree;
 
 	startfree = -1;
+	endfree = -1;
 	for (i = 0; i < part_len; i++) {
 		if (!testbusy(i)) {
 			if (startfree <= 0)
@@ -278,7 +281,6 @@ bufinit()
 		initbarea(bp);
 	}
 	bufhead.b_size = i;	/* save number of buffers */
-	pbp = pdirbp = NULL;
 }
 
 /*
@@ -364,7 +366,6 @@ ckfini()
 		free(bp->b_un.b_buf);
 		free((char *)bp);
 	}
-	pbp = pdirbp = NULL;
 	if (bufhead.b_size != cnt)
 		errexit(gettext("Panic: lost %d buffers\n"),
 		    bufhead.b_size - cnt);

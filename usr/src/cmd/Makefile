@@ -29,6 +29,7 @@
 # Copyright 2018 Nexenta Systems, Inc.
 # Copyright 2018 Gary Mills
 # Copyright 2019 Peter Tribble
+# Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include ../Makefile.master
@@ -135,7 +136,6 @@ COMMON_SUBDIRS=		\
 	dirname		\
 	dis		\
 	diskinfo	\
-	diskmgtd	\
 	dispadmin	\
 	dladm		\
 	dlstat		\
@@ -220,7 +220,6 @@ COMMON_SUBDIRS=		\
 	ipf		\
 	isainfo		\
 	isalist		\
-	itutools	\
 	iscsiadm	\
 	iscsid		\
 	iscsitsvc	\
@@ -230,7 +229,6 @@ COMMON_SUBDIRS=		\
 	keyserv		\
 	killall		\
 	krb5		\
-	ksh		\
 	kvmstat		\
 	last		\
 	lastcomm	\
@@ -306,7 +304,9 @@ COMMON_SUBDIRS=		\
 	passwd		\
 	pathchk		\
 	pbind		\
+	pcidb		\
 	pcidr		\
+	pcieadm		\
 	pcieb		\
 	pcitool		\
 	pfexec		\
@@ -379,7 +379,6 @@ COMMON_SUBDIRS=		\
 	setuname	\
 	sgs		\
 	sh		\
-	shcomp		\
 	sleep		\
 	smbios		\
 	smbsrv		\
@@ -488,6 +487,7 @@ i386_SUBDIRS=		\
 	acpihpd		\
 	addbadsec	\
 	ahciem		\
+	amdzen		\
 	bhyve		\
 	bhyvectl	\
 	biosdev		\
@@ -529,6 +529,7 @@ MSGSUBDIRS=		\
 	acctadm		\
 	allocate	\
 	asa		\
+	ast		\
 	audio		\
 	audit		\
 	auditconfig	\
@@ -622,7 +623,6 @@ MSGSUBDIRS=		\
 	itadm		\
 	kbd		\
 	krb5		\
-	ksh		\
 	last		\
 	ldap		\
 	ldapcachemgr	\
@@ -695,7 +695,6 @@ MSGSUBDIRS=		\
 	sdpadm		\
 	sgs		\
 	sh		\
-	shcomp		\
 	smbsrv		\
 	sort		\
 	split		\
@@ -795,17 +794,10 @@ AUDITSUBDIRS=		\
 	auditstat	\
 	praudit
 
-#
-# commands not owned by the systems group
-#
-BWOSDIRS=
-
-
 all :=		TARGET = all
 install :=	TARGET = install
 clean :=	TARGET = clean
 clobber :=	TARGET = clobber
-lint :=		TARGET = lint
 _msg :=		TARGET = _msg
 _dc :=		TARGET = _dc
 
@@ -813,9 +805,9 @@ _dc :=		TARGET = _dc
 
 SUBDIRS = $(COMMON_SUBDIRS) $($(MACH)_SUBDIRS)
 
-.PARALLEL:	$(BWOSDIRS) $(SUBDIRS) $(MSGSUBDIRS) $(AUDITSUBDIRS)
+.PARALLEL:	$(SUBDIRS) $(MSGSUBDIRS) $(AUDITSUBDIRS)
 
-all install clean clobber lint: $(FIRST_SUBDIRS) .WAIT $(SUBDIRS) \
+all install clean clobber: $(FIRST_SUBDIRS) .WAIT $(SUBDIRS) \
 	$(AUDITSUBDIRS)
 
 #
@@ -841,15 +833,11 @@ _dc: $(DCSUBDIRS)
 # Dependencies
 #
 fs.d:	fstyp
-ksh:	shcomp isaexec
+ast:	isaexec
 print:	lp
 fmt:	mailx
 
-$(FIRST_SUBDIRS) $(BWOSDIRS) $(SUBDIRS) $(AUDITSUBDIRS): FRC
-	@if [ -f $@/Makefile  ]; then \
-		cd $@; pwd; $(MAKE) $(TARGET); \
-	else \
-		true; \
-	fi
+$(FIRST_SUBDIRS) $(SUBDIRS) $(AUDITSUBDIRS): FRC
+		cd $@; pwd; $(MAKE) $(TARGET)
 
 FRC:

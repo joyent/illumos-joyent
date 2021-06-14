@@ -121,7 +121,6 @@ extern struct fs_ops ufs_fsops;
 extern struct fs_ops tftp_fsops;
 extern struct fs_ops nfs_fsops;
 extern struct fs_ops cd9660_fsops;
-extern struct fs_ops nandfs_fsops;
 extern struct fs_ops gzipfs_fsops;
 extern struct fs_ops bzipfs_fsops;
 extern struct fs_ops dosfs_fsops;
@@ -238,6 +237,22 @@ static __inline int isalnum(int c)
 	return (isalpha(c) || isdigit(c));
 }
 
+static __inline int iscntrl(int c)
+{
+	return ((c >= 0 && c < ' ') || c == 127);
+}
+
+static __inline int isgraph(int c)
+{
+	return (c >= '!' && c <= '~');
+}
+
+static __inline int ispunct(int c)
+{
+	return ((c >= '!' && c <= '/') || (c >= ':' && c <= '@') ||
+	    (c >= '[' && c <= '`') || (c >= '{' && c <= '~'));
+}
+
 static __inline int toupper(int c)
 {
 	return (islower(c) ? c - 'a' + 'A' : c);
@@ -283,9 +298,6 @@ extern struct	dirent *readdirfd(int);
 extern void	srandom(ulong_t seed);
 extern ulong_t	random(void);
 
-/* imports from stdlib, locally modified */
-extern long	strtol(const char *, char **, int);
-extern unsigned long	strtoul(const char *, char **, int);
 extern char	*optarg;		/* getopt(3) external variables */
 extern int	optind, opterr, optopt, optreset;
 extern int	getopt(int, char * const [], const char *);
@@ -329,6 +341,7 @@ extern struct env_var	*env_getenv(const char *name);
 extern int		env_setenv(const char *name, int flags,
 				const void *value, ev_sethook_t sethook,
 				ev_unsethook_t unsethook);
+extern void		env_discard(struct env_var *);
 extern char		*getenv(const char *name);
 extern int		setenv(const char *name, const char *value,
 				int overwrite);
@@ -337,6 +350,13 @@ extern int		unsetenv(const char *name);
 
 extern ev_sethook_t	env_noset;		/* refuse set operation */
 extern ev_unsethook_t	env_nounset;		/* refuse unset operation */
+
+/* stdlib.h routines */
+extern long strtol(const char *__restrict, char **__restrict, int);
+extern long long strtoll(const char *__restrict, char **__restrict, int);
+extern unsigned long strtoul(const char *__restrict, char **__restrict, int);
+extern unsigned long long strtoull(const char *__restrict, char **__restrict,
+    int);
 
 /* BCD conversions (undocumented) */
 extern uchar_t const	bcd2bin_data[];

@@ -91,8 +91,6 @@ ld_eprintf(Ofl_desc *ofl, Error error, const char *format, ...)
 		ofl->ofl_flags |= FLG_OF_WARN;
 		break;
 	case ERR_GUIDANCE:
-		if ((ofl->ofl_guideflags & FLG_OFG_ENABLE) == 0)
-			return;
 		ofl->ofl_guideflags |= FLG_OFG_ISSUED;
 		ofl->ofl_flags |= FLG_OF_WARN;
 		break;
@@ -196,6 +194,7 @@ ld_main(int argc, char **argv, Half mach)
 			    MSG_INTL(MSG_GUIDE_SUMMARY));
 		return (1);
 	}
+
 	if (ofl->ofl_flags & FLG_OF_FATAL) {
 		ld_eprintf(ofl, ERR_FATAL, MSG_INTL(MSG_ARG_FLAGS));
 		/* If any ERR_GUIDANCE messages were issued, add a summary */

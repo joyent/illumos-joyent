@@ -49,17 +49,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/smp.h>
 #include <sys/sysctl.h>
-#ifndef __FreeBSD__
 #include <sys/hma.h>
-#endif
 
-#include <vm/vm.h>
-#include <vm/pmap.h>
-#include <vm/vm_extern.h>
-
+#include <machine/specialreg.h>
 #include <machine/vmm.h>
+#include <sys/vmm_vm.h>
 
-#include "vmx_cpufunc.h"
 #include "ept.h"
 
 #define	EPT_SUPPORTS_EXEC_ONLY(cap)	((cap) & (1UL << 0))
@@ -89,8 +84,6 @@ SYSCTL_NODE(_hw_vmm, OID_AUTO, ept, CTLFLAG_RW | CTLFLAG_MPSAFE, NULL,
 static int ept_enable_ad_bits;
 
 static int ept_pmap_flags;
-SYSCTL_INT(_hw_vmm_ept, OID_AUTO, pmap_flags, CTLFLAG_RD,
-    &ept_pmap_flags, 0, NULL);
 
 int
 ept_init(int ipinum)
@@ -137,65 +130,11 @@ ept_init(int ipinum)
 	return (0);
 }
 
-#if 0
-static void
-ept_dump(uint64_t *ptp, int nlevels)
-{
-	int i, t, tabs;
-	uint64_t *ptpnext, ptpval;
-
-	if (--nlevels < 0)
-		return;
-
-	tabs = 3 - nlevels;
-	for (t = 0; t < tabs; t++)
-		printf("\t");
-	printf("PTP = %p\n", ptp);
-
-	for (i = 0; i < 512; i++) {
-		ptpval = ptp[i];
-
-		if (ptpval == 0)
-			continue;
-		
-		for (t = 0; t < tabs; t++)
-			printf("\t");
-		printf("%3d 0x%016lx\n", i, ptpval);
-
-		if (nlevels != 0 && (ptpval & EPT_PG_SUPERPAGE) == 0) {
-			ptpnext = (uint64_t *)
-				  PHYS_TO_DMAP(ptpval & EPT_ADDR_MASK);
-			ept_dump(ptpnext, nlevels);
-		}
-	}
-}
-#endif
-
-#ifdef __FreeBSD__
-static void
-invept_single_context(void *arg)
-{
-	struct invept_desc desc = *(struct invept_desc *)arg;
-
-	invept(INVEPT_TYPE_SINGLE_CONTEXT, desc);
-}
-
 void
-ept_invalidate_mappings(u_long eptp)
-{
-	struct invept_desc invept_desc = { 0 };
-
-	invept_desc.eptp = eptp;
-
-	smp_rendezvous(NULL, invept_single_context, NULL, &invept_desc);
-}
-#else /* __FreeBSD__ */
-void
-ept_invalidate_mappings(u_long eptp)
+ept_invalidate_mappings(ulong_t eptp)
 {
 	hma_vmx_invept_allcpus((uintptr_t)eptp);
 }
-#endif /* __FreeBSD__ */
 
 static int
 ept_pinit(pmap_t pmap)

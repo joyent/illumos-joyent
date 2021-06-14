@@ -12,6 +12,7 @@
 #
 # Copyright (c) 2012, 2016 by Delphix. All rights reserved.
 # Copyright 2020 Joyent, Inc.
+# Copyright 2021 Tintri by DDN, Inc. All rights reserved.
 #
 
 SUBDIRS_i386 = i386 imc
@@ -19,6 +20,7 @@ SUBDIRS_i386 = i386 imc
 SUBDIRS =       \
 		ddi_ufm \
 		file-locking \
+		ksensor \
 		libtopo \
 		pf_key \
 		poll \
@@ -27,7 +29,9 @@ SUBDIRS =       \
 		sigqueue \
 		sockfs \
 		spoof-ras \
+		stackalign \
 		stress \
+		syscall \
 		timer \
 		tmpfs \
 		uccid \

@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2019 Joyent, Inc.
+ * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/asm_linkage.h>
@@ -1301,8 +1302,10 @@ fcnname/**/_info:							\
 	MODULE(ppt,drv);
 	WSTUB(ppt, ppt_unassign_all,		nomod_zero);
 	WSTUB(ppt, ppt_map_mmio,		nomod_einval);
+	WSTUB(ppt, ppt_unmap_mmio,		nomod_einval);
 	WSTUB(ppt, ppt_setup_msi,		nomod_einval);
 	WSTUB(ppt, ppt_setup_msix,		nomod_einval);
+	WSTUB(ppt, ppt_disable_msix,		nomod_einval);
 	WSTUB(ppt, ppt_assigned_devices,	nomod_zero);
 	WSTUB(ppt, ppt_is_mmio,			nomod_zero);
 	WSTUB(ppt, ppt_assign_device,		nomod_einval);

@@ -30,6 +30,7 @@
 
 /*
  * Copyright 2017 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #ifndef _VMCS_H_
@@ -40,126 +41,21 @@
 struct vmcs {
 	uint32_t	identifier;
 	uint32_t	abort_code;
-	char		_impl_specific[PAGE_SIZE - sizeof(uint32_t) * 2];
-#ifndef __FreeBSD__
-	/*
-	 * Keep the physical address of the VMCS cached adjacent for the
-	 * structure so it can be referenced in contexts which are too delicate
-	 * for a call into the HAT.  For the moment it means wasting a whole
-	 * page on padding for the PA value to maintain alignment, but it
-	 * allows the consumers of 'struct vmcs *' to easily access the value
-	 * without a significant change to the interface.
-	 */
-	uint64_t	vmcs_pa;
-	char		_pa_pad[PAGE_SIZE - sizeof (vm_paddr_t)];
-#endif
+	char		_impl_specific[PAGE_SIZE - sizeof (uint32_t) * 2];
 };
-#ifdef __FreeBSD__
-CTASSERT(sizeof(struct vmcs) == PAGE_SIZE);
-#else
-CTASSERT(sizeof(struct vmcs) == (2*PAGE_SIZE));
-#endif
+CTASSERT(sizeof (struct vmcs) == PAGE_SIZE);
 
-/* MSR save region is composed of an array of 'struct msr_entry' */
-struct msr_entry {
-	uint32_t	index;
-	uint32_t	reserved;
-	uint64_t	val;
+uint32_t vmcs_field_encoding(int ident);
+void vmcs_seg_desc_encoding(int seg, uint32_t *base, uint32_t *lim,
+    uint32_t *acc);
 
-};
+void vmcs_initialize(struct vmcs *vmcs, uintptr_t vmcs_pa);
 
-int vmcs_set_msr_save(struct vmcs *vmcs, u_long g_area, u_int g_count);
-int	vmcs_init(struct vmcs *vmcs);
-int	vmcs_getreg(struct vmcs *vmcs, int running, int ident, uint64_t *rv);
-int	vmcs_setreg(struct vmcs *vmcs, int running, int ident, uint64_t val);
-int	vmcs_getdesc(struct vmcs *vmcs, int running, int ident,
-		     struct seg_desc *desc);
-int	vmcs_setdesc(struct vmcs *vmcs, int running, int ident,
-		     struct seg_desc *desc);
+void vmcs_load(uintptr_t vmcs_pa);
+void vmcs_clear(uintptr_t vmcs_pa);
 
-/*
- * Avoid header pollution caused by inline use of 'vtophys()' in vmx_cpufunc.h
- */
-#ifdef _VMX_CPUFUNC_H_
-static __inline uint64_t
-vmcs_read(uint32_t encoding)
-{
-	int error;
-	uint64_t val;
-
-	error = vmread(encoding, &val);
-	KASSERT(error == 0, ("vmcs_read(%u) error %d", encoding, error));
-	return (val);
-}
-
-static __inline void
-vmcs_write(uint32_t encoding, uint64_t val)
-{
-	int error;
-
-	error = vmwrite(encoding, val);
-	KASSERT(error == 0, ("vmcs_write(%u) error %d", encoding, error));
-}
-
-#ifndef __FreeBSD__
-/*
- * Due to header complexity combined with the need to cache the physical
- * address for the VMCS, these must be defined here rather than vmx_cpufunc.h.
- */
-static __inline int
-vmclear(struct vmcs *vmcs)
-{
-	int error;
-	uint64_t addr = vmcs->vmcs_pa;
-
-	__asm __volatile("vmclear %[addr];"
-			 VMX_SET_ERROR_CODE
-			 : [error] "=r" (error)
-			 : [addr] "m" (*(uint64_t *)&addr)
-			 : "memory");
-	return (error);
-}
-
-static __inline int
-vmptrld(struct vmcs *vmcs)
-{
-	int error;
-	uint64_t addr = vmcs->vmcs_pa;
-
-	__asm __volatile("vmptrld %[addr];"
-			 VMX_SET_ERROR_CODE
-			 : [error] "=r" (error)
-			 : [addr] "m" (*(uint64_t *)&addr)
-			 : "memory");
-	return (error);
-}
-
-static __inline void
-VMCLEAR(struct vmcs *vmcs)
-{
-	int err;
-
-	err = vmclear(vmcs);
-	if (err != 0)
-		panic("%s: vmclear(%p) error %d", __func__, vmcs, err);
-
-	critical_exit();
-}
-
-static __inline void
-VMPTRLD(struct vmcs *vmcs)
-{
-	int err;
-
-	critical_enter();
-
-	err = vmptrld(vmcs);
-	if (err != 0)
-		panic("%s: vmptrld(%p) error %d", __func__, vmcs, err);
-}
-#endif /* __FreeBSD__ */
-
-#endif	/* _VMX_CPUFUNC_H_ */
+uint64_t vmcs_read(uint32_t encoding);
+void vmcs_write(uint32_t encoding, uint64_t val);
 
 #define	vmexit_instruction_length()	vmcs_read(VMCS_EXIT_INSTRUCTION_LENGTH)
 #define	vmcs_guest_rip()		vmcs_read(VMCS_GUEST_RIP)
@@ -177,7 +73,6 @@ VMPTRLD(struct vmcs *vmcs)
 
 #define	VMCS_INITIAL			0xffffffffffffffff
 
-#define	VMCS_IDENT(encoding)		((encoding) | 0x80000000)
 /*
  * VMCS field encodings from Appendix H, Intel Architecture Manual Vol3B.
  */
@@ -296,7 +191,7 @@ VMPTRLD(struct vmcs *vmcs)
 #define	VMCS_GUEST_TR_ACCESS_RIGHTS	0x00004822
 #define	VMCS_GUEST_INTERRUPTIBILITY	0x00004824
 #define	VMCS_GUEST_ACTIVITY		0x00004826
-#define VMCS_GUEST_SMBASE		0x00004828
+#define	VMCS_GUEST_SMBASE		0x00004828
 #define	VMCS_GUEST_IA32_SYSENTER_CS	0x0000482A
 #define	VMCS_PREEMPTION_TIMER_VALUE	0x0000482E
 
@@ -365,59 +260,59 @@ VMPTRLD(struct vmcs *vmcs)
 /*
  * VMCS exit reasons
  */
-#define EXIT_REASON_EXCEPTION		0
-#define EXIT_REASON_EXT_INTR		1
-#define EXIT_REASON_TRIPLE_FAULT	2
-#define EXIT_REASON_INIT		3
-#define EXIT_REASON_SIPI		4
-#define EXIT_REASON_IO_SMI		5
-#define EXIT_REASON_SMI			6
-#define EXIT_REASON_INTR_WINDOW		7
-#define EXIT_REASON_NMI_WINDOW		8
-#define EXIT_REASON_TASK_SWITCH		9
-#define EXIT_REASON_CPUID		10
-#define EXIT_REASON_GETSEC		11
-#define EXIT_REASON_HLT			12
-#define EXIT_REASON_INVD		13
-#define EXIT_REASON_INVLPG		14
-#define EXIT_REASON_RDPMC		15
-#define EXIT_REASON_RDTSC		16
-#define EXIT_REASON_RSM			17
-#define EXIT_REASON_VMCALL		18
-#define EXIT_REASON_VMCLEAR		19
-#define EXIT_REASON_VMLAUNCH		20
-#define EXIT_REASON_VMPTRLD		21
-#define EXIT_REASON_VMPTRST		22
-#define EXIT_REASON_VMREAD		23
-#define EXIT_REASON_VMRESUME		24
-#define EXIT_REASON_VMWRITE		25
-#define EXIT_REASON_VMXOFF		26
-#define EXIT_REASON_VMXON		27
-#define EXIT_REASON_CR_ACCESS		28
-#define EXIT_REASON_DR_ACCESS		29
-#define EXIT_REASON_INOUT		30
-#define EXIT_REASON_RDMSR		31
-#define EXIT_REASON_WRMSR		32
-#define EXIT_REASON_INVAL_VMCS		33
-#define EXIT_REASON_INVAL_MSR		34
-#define EXIT_REASON_MWAIT		36
-#define EXIT_REASON_MTF			37
-#define EXIT_REASON_MONITOR		39
-#define EXIT_REASON_PAUSE		40
-#define EXIT_REASON_MCE_DURING_ENTRY	41
-#define EXIT_REASON_TPR			43
-#define EXIT_REASON_APIC_ACCESS		44
+#define	EXIT_REASON_EXCEPTION		0
+#define	EXIT_REASON_EXT_INTR		1
+#define	EXIT_REASON_TRIPLE_FAULT	2
+#define	EXIT_REASON_INIT		3
+#define	EXIT_REASON_SIPI		4
+#define	EXIT_REASON_IO_SMI		5
+#define	EXIT_REASON_SMI			6
+#define	EXIT_REASON_INTR_WINDOW		7
+#define	EXIT_REASON_NMI_WINDOW		8
+#define	EXIT_REASON_TASK_SWITCH		9
+#define	EXIT_REASON_CPUID		10
+#define	EXIT_REASON_GETSEC		11
+#define	EXIT_REASON_HLT			12
+#define	EXIT_REASON_INVD		13
+#define	EXIT_REASON_INVLPG		14
+#define	EXIT_REASON_RDPMC		15
+#define	EXIT_REASON_RDTSC		16
+#define	EXIT_REASON_RSM			17
+#define	EXIT_REASON_VMCALL		18
+#define	EXIT_REASON_VMCLEAR		19
+#define	EXIT_REASON_VMLAUNCH		20
+#define	EXIT_REASON_VMPTRLD		21
+#define	EXIT_REASON_VMPTRST		22
+#define	EXIT_REASON_VMREAD		23
+#define	EXIT_REASON_VMRESUME		24
+#define	EXIT_REASON_VMWRITE		25
+#define	EXIT_REASON_VMXOFF		26
+#define	EXIT_REASON_VMXON		27
+#define	EXIT_REASON_CR_ACCESS		28
+#define	EXIT_REASON_DR_ACCESS		29
+#define	EXIT_REASON_INOUT		30
+#define	EXIT_REASON_RDMSR		31
+#define	EXIT_REASON_WRMSR		32
+#define	EXIT_REASON_INVAL_VMCS		33
+#define	EXIT_REASON_INVAL_MSR		34
+#define	EXIT_REASON_MWAIT		36
+#define	EXIT_REASON_MTF			37
+#define	EXIT_REASON_MONITOR		39
+#define	EXIT_REASON_PAUSE		40
+#define	EXIT_REASON_MCE_DURING_ENTRY	41
+#define	EXIT_REASON_TPR			43
+#define	EXIT_REASON_APIC_ACCESS		44
 #define	EXIT_REASON_VIRTUALIZED_EOI	45
-#define EXIT_REASON_GDTR_IDTR		46
-#define EXIT_REASON_LDTR_TR		47
-#define EXIT_REASON_EPT_FAULT		48
-#define EXIT_REASON_EPT_MISCONFIG	49
-#define EXIT_REASON_INVEPT		50
-#define EXIT_REASON_RDTSCP		51
-#define EXIT_REASON_VMX_PREEMPT		52
-#define EXIT_REASON_INVVPID		53
-#define EXIT_REASON_WBINVD		54
-#define EXIT_REASON_XSETBV		55
+#define	EXIT_REASON_GDTR_IDTR		46
+#define	EXIT_REASON_LDTR_TR		47
+#define	EXIT_REASON_EPT_FAULT		48
+#define	EXIT_REASON_EPT_MISCONFIG	49
+#define	EXIT_REASON_INVEPT		50
+#define	EXIT_REASON_RDTSCP		51
+#define	EXIT_REASON_VMX_PREEMPT		52
+#define	EXIT_REASON_INVVPID		53
+#define	EXIT_REASON_WBINVD		54
+#define	EXIT_REASON_XSETBV		55
 #define	EXIT_REASON_APIC_WRITE		56
 #define	EXIT_REASON_RDRAND		57
 #define	EXIT_REASON_INVPCID		58

@@ -40,7 +40,7 @@
  *
  * Copyright 2015 Pluribus Networks Inc.
  * Copyright 2018 Joyent, Inc.
- * Copyright 2020 Oxide Computer Company
+ * Copyright 2021 Oxide Computer Company
  */
 
 #include <sys/cdefs.h>
@@ -55,16 +55,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/sysctl.h>
 
-#ifndef __FreeBSD__
 #include <sys/x86_archext.h>
 #include <sys/smp_impldefs.h>
 #include <sys/smt.h>
 #include <sys/hma.h>
 #include <sys/trap.h>
-#endif
-
-#include <vm/vm.h>
-#include <vm/pmap.h>
 
 #include <machine/psl.h>
 #include <machine/cpufunc.h>
@@ -74,10 +69,11 @@ __FBSDID("$FreeBSD$");
 #include <machine/smp.h>
 #include <machine/specialreg.h>
 #include <machine/vmparam.h>
+#include <sys/vmm_vm.h>
 
 #include <machine/vmm.h>
 #include <machine/vmm_dev.h>
-#include <machine/vmm_instruction_emul.h>
+#include <sys/vmm_instruction_emul.h>
 #include "vmm_lapic.h"
 #include "vmm_host.h"
 #include "vmm_ioport.h"
@@ -88,7 +84,6 @@ __FBSDID("$FreeBSD$");
 #include "vlapic_priv.h"
 
 #include "ept.h"
-#include "vmx_cpufunc.h"
 #include "vmcs.h"
 #include "vmx.h"
 #include "vmx_msr.h"
@@ -97,44 +92,39 @@ __FBSDID("$FreeBSD$");
 
 #define	PINBASED_CTLS_ONE_SETTING					\
 	(PINBASED_EXTINT_EXITING	|				\
-	 PINBASED_NMI_EXITING		|				\
-	 PINBASED_VIRTUAL_NMI)
+	PINBASED_NMI_EXITING		|				\
+	PINBASED_VIRTUAL_NMI)
 #define	PINBASED_CTLS_ZERO_SETTING	0
 
-#define PROCBASED_CTLS_WINDOW_SETTING					\
+#define	PROCBASED_CTLS_WINDOW_SETTING					\
 	(PROCBASED_INT_WINDOW_EXITING	|				\
-	 PROCBASED_NMI_WINDOW_EXITING)
+	PROCBASED_NMI_WINDOW_EXITING)
 
-#ifdef __FreeBSD__
+/* We consider TSC offset a necessity for unsynched TSC handling */
 #define	PROCBASED_CTLS_ONE_SETTING					\
 	(PROCBASED_SECONDARY_CONTROLS	|				\
-	 PROCBASED_MWAIT_EXITING	|				\
-	 PROCBASED_MONITOR_EXITING	|				\
-	 PROCBASED_IO_EXITING		|				\
-	 PROCBASED_MSR_BITMAPS		|				\
-	 PROCBASED_CTLS_WINDOW_SETTING	|				\
-	 PROCBASED_CR8_LOAD_EXITING	|				\
-	 PROCBASED_CR8_STORE_EXITING)
-#else
-/* We consider TSC offset a necessity for unsynched TSC handling */
-#define	PROCBASED_CTLS_ONE_SETTING 					\
-	(PROCBASED_SECONDARY_CONTROLS	|				\
-	 PROCBASED_TSC_OFFSET		|				\
-	 PROCBASED_MWAIT_EXITING	|				\
-	 PROCBASED_MONITOR_EXITING	|				\
-	 PROCBASED_IO_EXITING		|				\
-	 PROCBASED_MSR_BITMAPS		|				\
-	 PROCBASED_CTLS_WINDOW_SETTING	|				\
-	 PROCBASED_CR8_LOAD_EXITING	|				\
-	 PROCBASED_CR8_STORE_EXITING)
-#endif /* __FreeBSD__ */
+	PROCBASED_TSC_OFFSET		|				\
+	PROCBASED_MWAIT_EXITING		|				\
+	PROCBASED_MONITOR_EXITING	|				\
+	PROCBASED_IO_EXITING		|				\
+	PROCBASED_MSR_BITMAPS		|				\
+	PROCBASED_CTLS_WINDOW_SETTING	|				\
+	PROCBASED_CR8_LOAD_EXITING	|				\
+	PROCBASED_CR8_STORE_EXITING)
 
 #define	PROCBASED_CTLS_ZERO_SETTING	\
 	(PROCBASED_CR3_LOAD_EXITING |	\
 	PROCBASED_CR3_STORE_EXITING |	\
 	PROCBASED_IO_BITMAPS)
 
-#define	PROCBASED_CTLS2_ONE_SETTING	PROCBASED2_ENABLE_EPT
+/*
+ * EPT and Unrestricted Guest are considered necessities.  The latter is not a
+ * requirement on FreeBSD, where grub2-bhyve is used to load guests directly
+ * without a bootrom starting in real mode.
+ */
+#define	PROCBASED_CTLS2_ONE_SETTING		\
+	(PROCBASED2_ENABLE_EPT |		\
+	PROCBASED2_UNRESTRICTED_GUEST)
 #define	PROCBASED_CTLS2_ZERO_SETTING	0
 
 #define	VM_EXIT_CTLS_ONE_SETTING					\
@@ -165,86 +155,51 @@ SYSCTL_DECL(_hw_vmm);
 SYSCTL_NODE(_hw_vmm, OID_AUTO, vmx, CTLFLAG_RW | CTLFLAG_MPSAFE, NULL,
     NULL);
 
-#ifdef __FreeBSD__
-int vmxon_enabled[MAXCPU];
-static char vmxon_region[MAXCPU][PAGE_SIZE] __aligned(PAGE_SIZE);
-#endif /*__FreeBSD__ */
-
 static uint32_t pinbased_ctls, procbased_ctls, procbased_ctls2;
 static uint32_t exit_ctls, entry_ctls;
 
 static uint64_t cr0_ones_mask, cr0_zeros_mask;
-SYSCTL_ULONG(_hw_vmm_vmx, OID_AUTO, cr0_ones_mask, CTLFLAG_RD,
-	     &cr0_ones_mask, 0, NULL);
-SYSCTL_ULONG(_hw_vmm_vmx, OID_AUTO, cr0_zeros_mask, CTLFLAG_RD,
-	     &cr0_zeros_mask, 0, NULL);
 
 static uint64_t cr4_ones_mask, cr4_zeros_mask;
-SYSCTL_ULONG(_hw_vmm_vmx, OID_AUTO, cr4_ones_mask, CTLFLAG_RD,
-	     &cr4_ones_mask, 0, NULL);
-SYSCTL_ULONG(_hw_vmm_vmx, OID_AUTO, cr4_zeros_mask, CTLFLAG_RD,
-	     &cr4_zeros_mask, 0, NULL);
 
 static int vmx_initialized;
-SYSCTL_INT(_hw_vmm_vmx, OID_AUTO, initialized, CTLFLAG_RD,
-	   &vmx_initialized, 0, "Intel VMX initialized");
+
+/* Do not flush RSB upon vmexit */
+static int no_flush_rsb;
 
 /*
  * Optional capabilities
  */
-#ifdef __FreeBSD__
-static SYSCTL_NODE(_hw_vmm_vmx, OID_AUTO, cap,
-    CTLFLAG_RW | CTLFLAG_MPSAFE, NULL,
-    NULL);
-#endif
 
+/* HLT triggers a VM-exit */
 static int cap_halt_exit;
-SYSCTL_INT(_hw_vmm_vmx_cap, OID_AUTO, halt_exit, CTLFLAG_RD, &cap_halt_exit, 0,
-    "HLT triggers a VM-exit");
 
+/* PAUSE triggers a VM-exit */
 static int cap_pause_exit;
-SYSCTL_INT(_hw_vmm_vmx_cap, OID_AUTO, pause_exit, CTLFLAG_RD, &cap_pause_exit,
-    0, "PAUSE triggers a VM-exit");
 
-static int cap_unrestricted_guest;
-SYSCTL_INT(_hw_vmm_vmx_cap, OID_AUTO, unrestricted_guest, CTLFLAG_RD,
-    &cap_unrestricted_guest, 0, "Unrestricted guests");
-
+/* Monitor trap flag */
 static int cap_monitor_trap;
-SYSCTL_INT(_hw_vmm_vmx_cap, OID_AUTO, monitor_trap, CTLFLAG_RD,
-    &cap_monitor_trap, 0, "Monitor trap flag");
 
+/* Guests are allowed to use INVPCID */
 static int cap_invpcid;
-SYSCTL_INT(_hw_vmm_vmx_cap, OID_AUTO, invpcid, CTLFLAG_RD, &cap_invpcid,
-    0, "Guests are allowed to use INVPCID");
 
-static int tpr_shadowing;
-SYSCTL_INT(_hw_vmm_vmx_cap, OID_AUTO, tpr_shadowing, CTLFLAG_RD,
-    &tpr_shadowing, 0, "TPR shadowing support");
+/* Extra capabilities (VMX_CAP_*) beyond the minimum */
+static enum vmx_caps vmx_capabilities;
 
-static int virtual_interrupt_delivery;
-SYSCTL_INT(_hw_vmm_vmx_cap, OID_AUTO, virtual_interrupt_delivery, CTLFLAG_RD,
-    &virtual_interrupt_delivery, 0, "APICv virtual interrupt delivery support");
-
-static int posted_interrupts;
-SYSCTL_INT(_hw_vmm_vmx_cap, OID_AUTO, posted_interrupts, CTLFLAG_RD,
-    &posted_interrupts, 0, "APICv posted interrupt support");
-
+/* APICv posted interrupt vector */
 static int pirvec = -1;
-SYSCTL_INT(_hw_vmm_vmx, OID_AUTO, posted_interrupt_vector, CTLFLAG_RD,
-    &pirvec, 0, "APICv posted interrupt vector");
 
-static struct unrhdr *vpid_unr;
-static u_int vpid_alloc_failed;
-SYSCTL_UINT(_hw_vmm_vmx, OID_AUTO, vpid_alloc_failed, CTLFLAG_RD,
-	    &vpid_alloc_failed, 0, NULL);
+static uint_t vpid_alloc_failed;
 
 int guest_l1d_flush;
-SYSCTL_INT(_hw_vmm_vmx, OID_AUTO, l1d_flush, CTLFLAG_RD,
-    &guest_l1d_flush, 0, NULL);
 int guest_l1d_flush_sw;
-SYSCTL_INT(_hw_vmm_vmx, OID_AUTO, l1d_flush_sw, CTLFLAG_RD,
-    &guest_l1d_flush_sw, 0, NULL);
+
+/* MSR save region is composed of an array of 'struct msr_entry' */
+struct msr_entry {
+	uint32_t	index;
+	uint32_t	reserved;
+	uint64_t	val;
+};
 
 static struct msr_entry msr_load_list[1] __aligned(16);
 
@@ -252,6 +207,7 @@ static struct msr_entry msr_load_list[1] __aligned(16);
  * The definitions of SDT probes for VMX.
  */
 
+/* BEGIN CSTYLED */
 SDT_PROBE_DEFINE3(vmm, vmx, exit, entry,
     "struct vmx *", "int", "struct vm_exit *");
 
@@ -326,6 +282,7 @@ SDT_PROBE_DEFINE4(vmm, vmx, exit, unknown,
 
 SDT_PROBE_DEFINE4(vmm, vmx, exit, return,
     "struct vmx *", "int", "struct vm_exit *", "int");
+/* END CSTYLED */
 
 /*
  * Use the last page below 4GB as the APIC access address. This address is
@@ -336,131 +293,10 @@ SDT_PROBE_DEFINE4(vmm, vmx, exit, return,
 
 static int vmx_getdesc(void *arg, int vcpu, int reg, struct seg_desc *desc);
 static int vmx_getreg(void *arg, int vcpu, int reg, uint64_t *retval);
-static int vmxctx_setreg(struct vmxctx *vmxctx, int reg, uint64_t val);
-static void vmx_inject_pir(struct vlapic *vlapic);
-#ifndef __FreeBSD__
-static int vmx_apply_tsc_adjust(struct vmx *, int);
-#endif /* __FreeBSD__ */
-
-#ifdef KTR
-static const char *
-exit_reason_to_str(int reason)
-{
-	static char reasonbuf[32];
-
-	switch (reason) {
-	case EXIT_REASON_EXCEPTION:
-		return "exception";
-	case EXIT_REASON_EXT_INTR:
-		return "extint";
-	case EXIT_REASON_TRIPLE_FAULT:
-		return "triplefault";
-	case EXIT_REASON_INIT:
-		return "init";
-	case EXIT_REASON_SIPI:
-		return "sipi";
-	case EXIT_REASON_IO_SMI:
-		return "iosmi";
-	case EXIT_REASON_SMI:
-		return "smi";
-	case EXIT_REASON_INTR_WINDOW:
-		return "intrwindow";
-	case EXIT_REASON_NMI_WINDOW:
-		return "nmiwindow";
-	case EXIT_REASON_TASK_SWITCH:
-		return "taskswitch";
-	case EXIT_REASON_CPUID:
-		return "cpuid";
-	case EXIT_REASON_GETSEC:
-		return "getsec";
-	case EXIT_REASON_HLT:
-		return "hlt";
-	case EXIT_REASON_INVD:
-		return "invd";
-	case EXIT_REASON_INVLPG:
-		return "invlpg";
-	case EXIT_REASON_RDPMC:
-		return "rdpmc";
-	case EXIT_REASON_RDTSC:
-		return "rdtsc";
-	case EXIT_REASON_RSM:
-		return "rsm";
-	case EXIT_REASON_VMCALL:
-		return "vmcall";
-	case EXIT_REASON_VMCLEAR:
-		return "vmclear";
-	case EXIT_REASON_VMLAUNCH:
-		return "vmlaunch";
-	case EXIT_REASON_VMPTRLD:
-		return "vmptrld";
-	case EXIT_REASON_VMPTRST:
-		return "vmptrst";
-	case EXIT_REASON_VMREAD:
-		return "vmread";
-	case EXIT_REASON_VMRESUME:
-		return "vmresume";
-	case EXIT_REASON_VMWRITE:
-		return "vmwrite";
-	case EXIT_REASON_VMXOFF:
-		return "vmxoff";
-	case EXIT_REASON_VMXON:
-		return "vmxon";
-	case EXIT_REASON_CR_ACCESS:
-		return "craccess";
-	case EXIT_REASON_DR_ACCESS:
-		return "draccess";
-	case EXIT_REASON_INOUT:
-		return "inout";
-	case EXIT_REASON_RDMSR:
-		return "rdmsr";
-	case EXIT_REASON_WRMSR:
-		return "wrmsr";
-	case EXIT_REASON_INVAL_VMCS:
-		return "invalvmcs";
-	case EXIT_REASON_INVAL_MSR:
-		return "invalmsr";
-	case EXIT_REASON_MWAIT:
-		return "mwait";
-	case EXIT_REASON_MTF:
-		return "mtf";
-	case EXIT_REASON_MONITOR:
-		return "monitor";
-	case EXIT_REASON_PAUSE:
-		return "pause";
-	case EXIT_REASON_MCE_DURING_ENTRY:
-		return "mce-during-entry";
-	case EXIT_REASON_TPR:
-		return "tpr";
-	case EXIT_REASON_APIC_ACCESS:
-		return "apic-access";
-	case EXIT_REASON_GDTR_IDTR:
-		return "gdtridtr";
-	case EXIT_REASON_LDTR_TR:
-		return "ldtrtr";
-	case EXIT_REASON_EPT_FAULT:
-		return "eptfault";
-	case EXIT_REASON_EPT_MISCONFIG:
-		return "eptmisconfig";
-	case EXIT_REASON_INVEPT:
-		return "invept";
-	case EXIT_REASON_RDTSCP:
-		return "rdtscp";
-	case EXIT_REASON_VMX_PREEMPT:
-		return "vmxpreempt";
-	case EXIT_REASON_INVVPID:
-		return "invvpid";
-	case EXIT_REASON_WBINVD:
-		return "wbinvd";
-	case EXIT_REASON_XSETBV:
-		return "xsetbv";
-	case EXIT_REASON_APIC_WRITE:
-		return "apic-write";
-	default:
-		snprintf(reasonbuf, sizeof(reasonbuf), "%d", reason);
-		return (reasonbuf);
-	}
-}
-#endif	/* KTR */
+static void vmx_apply_tsc_adjust(struct vmx *, int);
+static void vmx_apicv_sync_tmr(struct vlapic *vlapic);
+static void vmx_tpr_shadow_enter(struct vlapic *vlapic);
+static void vmx_tpr_shadow_exit(struct vlapic *vlapic);
 
 static int
 vmx_allow_x2apic_msrs(struct vmx *vmx)
@@ -510,17 +346,15 @@ vmx_allow_x2apic_msrs(struct vmx *vmx)
 	return (error);
 }
 
-u_long
-vmx_fix_cr0(u_long cr0)
+static ulong_t
+vmx_fix_cr0(ulong_t cr0)
 {
-
 	return ((cr0 | cr0_ones_mask) & ~cr0_zeros_mask);
 }
 
-u_long
-vmx_fix_cr4(u_long cr4)
+static ulong_t
+vmx_fix_cr4(ulong_t cr4)
 {
-
 	return ((cr4 | cr4_ones_mask) & ~cr4_zeros_mask);
 }
 
@@ -536,11 +370,7 @@ vpid_free(int vpid)
 	 */
 
 	if (vpid > VM_MAXCPU)
-#ifdef __FreeBSD__
-		free_unr(vpid_unr, vpid);
-#else
 		hma_vmx_vpid_free((uint16_t)vpid);
-#endif
 }
 
 static void
@@ -565,14 +395,11 @@ vpid_alloc(uint16_t *vpid, int num)
 	 * Allocate a unique VPID for each vcpu from the unit number allocator.
 	 */
 	for (i = 0; i < num; i++) {
-#ifdef __FreeBSD__
-		x = alloc_unr(vpid_unr);
-#else
 		uint16_t tmp;
 
 		tmp = hma_vmx_vpid_alloc();
 		x = (tmp == 0) ? -1 : tmp;
-#endif
+
 		if (x == -1)
 			break;
 		else
@@ -601,94 +428,6 @@ vpid_alloc(uint16_t *vpid, int num)
 	}
 }
 
-#ifdef __FreeBSD__
-static void
-vpid_init(void)
-{
-	/*
-	 * VPID 0 is required when the "enable VPID" execution control is
-	 * disabled.
-	 *
-	 * VPIDs [1,VM_MAXCPU] are used as the "overflow namespace" when the
-	 * unit number allocator does not have sufficient unique VPIDs to
-	 * satisfy the allocation.
-	 *
-	 * The remaining VPIDs are managed by the unit number allocator.
-	 */
-	vpid_unr = new_unrhdr(VM_MAXCPU + 1, 0xffff, NULL);
-}
-
-static void
-vmx_disable(void *arg __unused)
-{
-	struct invvpid_desc invvpid_desc = { 0 };
-	struct invept_desc invept_desc = { 0 };
-
-	if (vmxon_enabled[curcpu]) {
-		/*
-		 * See sections 25.3.3.3 and 25.3.3.4 in Intel Vol 3b.
-		 *
-		 * VMXON or VMXOFF are not required to invalidate any TLB
-		 * caching structures. This prevents potential retention of
-		 * cached information in the TLB between distinct VMX episodes.
-		 */
-		invvpid(INVVPID_TYPE_ALL_CONTEXTS, invvpid_desc);
-		invept(INVEPT_TYPE_ALL_CONTEXTS, invept_desc);
-		vmxoff();
-	}
-	load_cr4(rcr4() & ~CR4_VMXE);
-}
-
-static int
-vmx_cleanup(void)
-{
-
-	if (pirvec >= 0)
-		lapic_ipi_free(pirvec);
-
-	if (vpid_unr != NULL) {
-		delete_unrhdr(vpid_unr);
-		vpid_unr = NULL;
-	}
-
-	if (nmi_flush_l1d_sw == 1)
-		nmi_flush_l1d_sw = 0;
-
-	smp_rendezvous(NULL, vmx_disable, NULL, NULL);
-
-	return (0);
-}
-
-static void
-vmx_enable(void *arg __unused)
-{
-	int error;
-	uint64_t feature_control;
-
-	feature_control = rdmsr(MSR_IA32_FEATURE_CONTROL);
-	if ((feature_control & IA32_FEATURE_CONTROL_LOCK) == 0 ||
-	    (feature_control & IA32_FEATURE_CONTROL_VMX_EN) == 0) {
-		wrmsr(MSR_IA32_FEATURE_CONTROL,
-		    feature_control | IA32_FEATURE_CONTROL_VMX_EN |
-		    IA32_FEATURE_CONTROL_LOCK);
-	}
-
-	load_cr4(rcr4() | CR4_VMXE);
-
-	*(uint32_t *)vmxon_region[curcpu] = vmx_revision();
-	error = vmxon(vmxon_region[curcpu]);
-	if (error == 0)
-		vmxon_enabled[curcpu] = 1;
-}
-
-static void
-vmx_restore(void)
-{
-
-	if (vmxon_enabled[curcpu])
-		vmxon(vmxon_region[curcpu]);
-}
-#else /* __FreeBSD__ */
 static int
 vmx_cleanup(void)
 {
@@ -701,57 +440,23 @@ vmx_restore(void)
 {
 	/* No-op on illumos */
 }
-#endif /* __FreeBSD__ */
 
 static int
 vmx_init(int ipinum)
 {
 	int error;
-#ifdef __FreeBSD__
-	uint64_t basic, fixed0, fixed1, feature_control;
-#else
 	uint64_t fixed0, fixed1;
-#endif
-	uint32_t tmp, procbased2_vid_bits;
-
-#ifdef __FreeBSD__
-	/* CPUID.1:ECX[bit 5] must be 1 for processor to support VMX */
-	if (!(cpu_feature2 & CPUID2_VMX)) {
-		printf("vmx_init: processor does not support VMX operation\n");
-		return (ENXIO);
-	}
-
-	/*
-	 * Verify that MSR_IA32_FEATURE_CONTROL lock and VMXON enable bits
-	 * are set (bits 0 and 2 respectively).
-	 */
-	feature_control = rdmsr(MSR_IA32_FEATURE_CONTROL);
-	if ((feature_control & IA32_FEATURE_CONTROL_LOCK) == 1 &&
-	    (feature_control & IA32_FEATURE_CONTROL_VMX_EN) == 0) {
-		printf("vmx_init: VMX operation disabled by BIOS\n");
-		return (ENXIO);
-	}
-
-	/*
-	 * Verify capabilities MSR_VMX_BASIC:
-	 * - bit 54 indicates support for INS/OUTS decoding
-	 */
-	basic = rdmsr(MSR_VMX_BASIC);
-	if ((basic & (1UL << 54)) == 0) {
-		printf("vmx_init: processor does not support desired basic "
-		    "capabilities\n");
-		return (EINVAL);
-	}
-#endif /* __FreeBSD__ */
+	uint32_t tmp;
+	enum vmx_caps avail_caps = VMX_CAP_NONE;
 
 	/* Check support for primary processor-based VM-execution controls */
 	error = vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS,
-			       MSR_VMX_TRUE_PROCBASED_CTLS,
-			       PROCBASED_CTLS_ONE_SETTING,
-			       PROCBASED_CTLS_ZERO_SETTING, &procbased_ctls);
+	    MSR_VMX_TRUE_PROCBASED_CTLS,
+	    PROCBASED_CTLS_ONE_SETTING,
+	    PROCBASED_CTLS_ZERO_SETTING, &procbased_ctls);
 	if (error) {
 		printf("vmx_init: processor does not support desired primary "
-		       "processor-based controls\n");
+		    "processor-based controls\n");
 		return (error);
 	}
 
@@ -760,37 +465,39 @@ vmx_init(int ipinum)
 
 	/* Check support for secondary processor-based VM-execution controls */
 	error = vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS2,
-			       MSR_VMX_PROCBASED_CTLS2,
-			       PROCBASED_CTLS2_ONE_SETTING,
-			       PROCBASED_CTLS2_ZERO_SETTING, &procbased_ctls2);
+	    MSR_VMX_PROCBASED_CTLS2,
+	    PROCBASED_CTLS2_ONE_SETTING,
+	    PROCBASED_CTLS2_ZERO_SETTING, &procbased_ctls2);
 	if (error) {
 		printf("vmx_init: processor does not support desired secondary "
-		       "processor-based controls\n");
+		    "processor-based controls\n");
 		return (error);
 	}
 
 	/* Check support for VPID */
-	error = vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS2, MSR_VMX_PROCBASED_CTLS2,
-			       PROCBASED2_ENABLE_VPID, 0, &tmp);
+	error = vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS2,
+	    MSR_VMX_PROCBASED_CTLS2,
+	    PROCBASED2_ENABLE_VPID,
+	    0, &tmp);
 	if (error == 0)
 		procbased_ctls2 |= PROCBASED2_ENABLE_VPID;
 
 	/* Check support for pin-based VM-execution controls */
 	error = vmx_set_ctlreg(MSR_VMX_PINBASED_CTLS,
-			       MSR_VMX_TRUE_PINBASED_CTLS,
-			       PINBASED_CTLS_ONE_SETTING,
-			       PINBASED_CTLS_ZERO_SETTING, &pinbased_ctls);
+	    MSR_VMX_TRUE_PINBASED_CTLS,
+	    PINBASED_CTLS_ONE_SETTING,
+	    PINBASED_CTLS_ZERO_SETTING, &pinbased_ctls);
 	if (error) {
 		printf("vmx_init: processor does not support desired "
-		       "pin-based controls\n");
+		    "pin-based controls\n");
 		return (error);
 	}
 
 	/* Check support for VM-exit controls */
 	error = vmx_set_ctlreg(MSR_VMX_EXIT_CTLS, MSR_VMX_TRUE_EXIT_CTLS,
-			       VM_EXIT_CTLS_ONE_SETTING,
-			       VM_EXIT_CTLS_ZERO_SETTING,
-			       &exit_ctls);
+	    VM_EXIT_CTLS_ONE_SETTING,
+	    VM_EXIT_CTLS_ZERO_SETTING,
+	    &exit_ctls);
 	if (error) {
 		printf("vmx_init: processor does not support desired "
 		    "exit controls\n");
@@ -812,106 +519,67 @@ vmx_init(int ipinum)
 	 * as individual bits
 	 */
 	cap_halt_exit = (vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS,
-					MSR_VMX_TRUE_PROCBASED_CTLS,
-					PROCBASED_HLT_EXITING, 0,
-					&tmp) == 0);
+	    MSR_VMX_TRUE_PROCBASED_CTLS,
+	    PROCBASED_HLT_EXITING, 0,
+	    &tmp) == 0);
 
 	cap_monitor_trap = (vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS,
-					MSR_VMX_PROCBASED_CTLS,
-					PROCBASED_MTF, 0,
-					&tmp) == 0);
+	    MSR_VMX_PROCBASED_CTLS,
+	    PROCBASED_MTF, 0,
+	    &tmp) == 0);
 
 	cap_pause_exit = (vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS,
-					 MSR_VMX_TRUE_PROCBASED_CTLS,
-					 PROCBASED_PAUSE_EXITING, 0,
-					 &tmp) == 0);
-
-	cap_unrestricted_guest = (vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS2,
-					MSR_VMX_PROCBASED_CTLS2,
-					PROCBASED2_UNRESTRICTED_GUEST, 0,
-				        &tmp) == 0);
+	    MSR_VMX_TRUE_PROCBASED_CTLS,
+	    PROCBASED_PAUSE_EXITING, 0,
+	    &tmp) == 0);
 
 	cap_invpcid = (vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS2,
 	    MSR_VMX_PROCBASED_CTLS2, PROCBASED2_ENABLE_INVPCID, 0,
 	    &tmp) == 0);
 
 	/*
-	 * Check support for TPR shadow.
+	 * Check for APIC virtualization capabilities:
+	 * - TPR shadowing
+	 * - Full APICv (with or without x2APIC support)
+	 * - Posted interrupt handling
 	 */
-	error = vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS,
-	    MSR_VMX_TRUE_PROCBASED_CTLS, PROCBASED_USE_TPR_SHADOW, 0,
-	    &tmp);
-	if (error == 0) {
-		tpr_shadowing = 1;
-		TUNABLE_INT_FETCH("hw.vmm.vmx.use_tpr_shadowing",
-		    &tpr_shadowing);
-	}
+	if (vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS, MSR_VMX_TRUE_PROCBASED_CTLS,
+	    PROCBASED_USE_TPR_SHADOW, 0, &tmp) == 0) {
+		avail_caps |= VMX_CAP_TPR_SHADOW;
 
-	if (tpr_shadowing) {
-		procbased_ctls |= PROCBASED_USE_TPR_SHADOW;
-		procbased_ctls &= ~PROCBASED_CR8_LOAD_EXITING;
-		procbased_ctls &= ~PROCBASED_CR8_STORE_EXITING;
-	}
+		const uint32_t apicv_bits =
+		    PROCBASED2_VIRTUALIZE_APIC_ACCESSES |
+		    PROCBASED2_APIC_REGISTER_VIRTUALIZATION |
+		    PROCBASED2_VIRTUALIZE_X2APIC_MODE |
+		    PROCBASED2_VIRTUAL_INTERRUPT_DELIVERY;
+		if (vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS2,
+		    MSR_VMX_PROCBASED_CTLS2, apicv_bits, 0, &tmp) == 0) {
+			avail_caps |= VMX_CAP_APICV;
 
-	/*
-	 * Check support for virtual interrupt delivery.
-	 */
-	procbased2_vid_bits = (PROCBASED2_VIRTUALIZE_APIC_ACCESSES |
-	    PROCBASED2_VIRTUALIZE_X2APIC_MODE |
-	    PROCBASED2_APIC_REGISTER_VIRTUALIZATION |
-	    PROCBASED2_VIRTUAL_INTERRUPT_DELIVERY);
-
-	error = vmx_set_ctlreg(MSR_VMX_PROCBASED_CTLS2, MSR_VMX_PROCBASED_CTLS2,
-	    procbased2_vid_bits, 0, &tmp);
-	if (error == 0 && tpr_shadowing) {
-		virtual_interrupt_delivery = 1;
-		TUNABLE_INT_FETCH("hw.vmm.vmx.use_apic_vid",
-		    &virtual_interrupt_delivery);
-	}
-
-	if (virtual_interrupt_delivery) {
-		procbased_ctls |= PROCBASED_USE_TPR_SHADOW;
-		procbased_ctls2 |= procbased2_vid_bits;
-		procbased_ctls2 &= ~PROCBASED2_VIRTUALIZE_X2APIC_MODE;
-
-		/*
-		 * Check for Posted Interrupts only if Virtual Interrupt
-		 * Delivery is enabled.
-		 */
-		error = vmx_set_ctlreg(MSR_VMX_PINBASED_CTLS,
-		    MSR_VMX_TRUE_PINBASED_CTLS, PINBASED_POSTED_INTERRUPT, 0,
-		    &tmp);
-		if (error == 0) {
-#ifdef __FreeBSD__
-			pirvec = lapic_ipi_alloc(pti ? &IDTVEC(justreturn1_pti) :
-			    &IDTVEC(justreturn));
-			if (pirvec < 0) {
-				if (bootverbose) {
-					printf("vmx_init: unable to allocate "
-					    "posted interrupt vector\n");
-				}
-			} else {
-				posted_interrupts = 1;
-				TUNABLE_INT_FETCH("hw.vmm.vmx.use_apic_pir",
-				    &posted_interrupts);
-			}
-#else
 			/*
-			 * If the PSM-provided interfaces for requesting and
-			 * using a PIR IPI vector are present, use them for
-			 * posted interrupts.
+			 * It may make sense in the future to differentiate
+			 * hardware (or software) configurations with APICv but
+			 * no support for accelerating x2APIC mode.
 			 */
-			if (psm_get_pir_ipivect != NULL &&
-			    psm_send_pir_ipi != NULL) {
-				pirvec = psm_get_pir_ipivect();
-				posted_interrupts = 1;
+			avail_caps |= VMX_CAP_APICV_X2APIC;
+
+			error = vmx_set_ctlreg(MSR_VMX_PINBASED_CTLS,
+			    MSR_VMX_TRUE_PINBASED_CTLS,
+			    PINBASED_POSTED_INTERRUPT, 0, &tmp);
+			if (error == 0) {
+				/*
+				 * If the PSM-provided interfaces for requesting
+				 * and using a PIR IPI vector are present, use
+				 * them for posted interrupts.
+				 */
+				if (psm_get_pir_ipivect != NULL &&
+				    psm_send_pir_ipi != NULL) {
+					pirvec = psm_get_pir_ipivect();
+					avail_caps |= VMX_CAP_APICV_PIR;
+				}
 			}
-#endif
 		}
 	}
-
-	if (posted_interrupts)
-		    pinbased_ctls |= PINBASED_POSTED_INTERRUPT;
 
 	/* Initialize EPT */
 	error = ept_init(ipinum);
@@ -960,11 +628,10 @@ vmx_init(int ipinum)
 	cr0_zeros_mask = ~fixed0 & ~fixed1;
 
 	/*
-	 * CR0_PE and CR0_PG can be set to zero in VMX non-root operation
-	 * if unrestricted guest execution is allowed.
+	 * Since Unrestricted Guest was already verified present, CR0_PE and
+	 * CR0_PG are allowed to be set to zero in VMX non-root operation
 	 */
-	if (cap_unrestricted_guest)
-		cr0_ones_mask &= ~(CR0_PG | CR0_PE);
+	cr0_ones_mask &= ~(CR0_PG | CR0_PE);
 
 	/*
 	 * Do not allow the guest to set CR0_NW or CR0_CD.
@@ -976,17 +643,9 @@ vmx_init(int ipinum)
 	cr4_ones_mask = fixed0 & fixed1;
 	cr4_zeros_mask = ~fixed0 & ~fixed1;
 
-#ifdef __FreeBSD__
-	vpid_init();
-#endif
-
 	vmx_msr_init();
 
-#ifdef __FreeBSD__
-	/* enable VMX operation */
-	smp_rendezvous(NULL, vmx_enable, NULL, NULL);
-#endif
-
+	vmx_capabilities = avail_caps;
 	vmx_initialized = 1;
 
 	return (0);
@@ -995,79 +654,24 @@ vmx_init(int ipinum)
 static void
 vmx_trigger_hostintr(int vector)
 {
-#ifdef __FreeBSD__
-	uintptr_t func;
-	struct gate_descriptor *gd;
-
-	gd = &idt[vector];
-
-	KASSERT(vector >= 32 && vector <= 255, ("vmx_trigger_hostintr: "
-	    "invalid vector %d", vector));
-	KASSERT(gd->gd_p == 1, ("gate descriptor for vector %d not present",
-	    vector));
-	KASSERT(gd->gd_type == SDT_SYSIGT, ("gate descriptor for vector %d "
-	    "has invalid type %d", vector, gd->gd_type));
-	KASSERT(gd->gd_dpl == SEL_KPL, ("gate descriptor for vector %d "
-	    "has invalid dpl %d", vector, gd->gd_dpl));
-	KASSERT(gd->gd_selector == GSEL(GCODE_SEL, SEL_KPL), ("gate descriptor "
-	    "for vector %d has invalid selector %d", vector, gd->gd_selector));
-	KASSERT(gd->gd_ist == 0, ("gate descriptor for vector %d has invalid "
-	    "IST %d", vector, gd->gd_ist));
-
-	func = ((long)gd->gd_hioffset << 16 | gd->gd_looffset);
-	vmx_call_isr(func);
-#else
 	VERIFY(vector >= 32 && vector <= 255);
 	vmx_call_isr(vector - 32);
-#endif /* __FreeBSD__ */
 }
-
-static int
-vmx_setup_cr_shadow(int which, struct vmcs *vmcs, uint32_t initial)
-{
-	int error, mask_ident, shadow_ident;
-	uint64_t mask_value;
-
-	if (which != 0 && which != 4)
-		panic("vmx_setup_cr_shadow: unknown cr%d", which);
-
-	if (which == 0) {
-		mask_ident = VMCS_CR0_MASK;
-		mask_value = cr0_ones_mask | cr0_zeros_mask;
-		shadow_ident = VMCS_CR0_SHADOW;
-	} else {
-		mask_ident = VMCS_CR4_MASK;
-		mask_value = cr4_ones_mask | cr4_zeros_mask;
-		shadow_ident = VMCS_CR4_SHADOW;
-	}
-
-	error = vmcs_setreg(vmcs, 0, VMCS_IDENT(mask_ident), mask_value);
-	if (error)
-		return (error);
-
-	error = vmcs_setreg(vmcs, 0, VMCS_IDENT(shadow_ident), initial);
-	if (error)
-		return (error);
-
-	return (0);
-}
-#define	vmx_setup_cr0_shadow(vmcs,init)	vmx_setup_cr_shadow(0, (vmcs), (init))
-#define	vmx_setup_cr4_shadow(vmcs,init)	vmx_setup_cr_shadow(4, (vmcs), (init))
 
 static void *
 vmx_vminit(struct vm *vm, pmap_t pmap)
 {
 	uint16_t vpid[VM_MAXCPU];
-	int i, error;
+	int i, error, datasel;
 	struct vmx *vmx;
-	struct vmcs *vmcs;
 	uint32_t exc_bitmap;
 	uint16_t maxcpus;
+	uint32_t proc_ctls, proc2_ctls, pin_ctls;
 
-	vmx = malloc(sizeof(struct vmx), M_VMX, M_WAITOK | M_ZERO);
+	vmx = malloc(sizeof (struct vmx), M_VMX, M_WAITOK | M_ZERO);
 	if ((uintptr_t)vmx & PAGE_MASK) {
 		panic("malloc of struct vmx not aligned on %d byte boundary",
-		      PAGE_SIZE);
+		    PAGE_SIZE);
 	}
 	vmx->vm = vm;
 
@@ -1117,16 +721,39 @@ vmx_vminit(struct vm *vm, pmap_t pmap)
 
 	vpid_alloc(vpid, VM_MAXCPU);
 
-	if (virtual_interrupt_delivery) {
+	/* Grab the established defaults */
+	proc_ctls = procbased_ctls;
+	proc2_ctls = procbased_ctls2;
+	pin_ctls = pinbased_ctls;
+	/* For now, default to the available capabilities */
+	vmx->vmx_caps = vmx_capabilities;
+
+	if (vmx_cap_en(vmx, VMX_CAP_TPR_SHADOW)) {
+		proc_ctls |= PROCBASED_USE_TPR_SHADOW;
+		proc_ctls &= ~PROCBASED_CR8_LOAD_EXITING;
+		proc_ctls &= ~PROCBASED_CR8_STORE_EXITING;
+	}
+	if (vmx_cap_en(vmx, VMX_CAP_APICV)) {
+		ASSERT(vmx_cap_en(vmx, VMX_CAP_TPR_SHADOW));
+
+		proc2_ctls |= (PROCBASED2_VIRTUALIZE_APIC_ACCESSES |
+		    PROCBASED2_APIC_REGISTER_VIRTUALIZATION |
+		    PROCBASED2_VIRTUAL_INTERRUPT_DELIVERY);
+
 		error = vm_map_mmio(vm, DEFAULT_APIC_BASE, PAGE_SIZE,
 		    APIC_ACCESS_ADDRESS);
 		/* XXX this should really return an error to the caller */
 		KASSERT(error == 0, ("vm_map_mmio(apicbase) error %d", error));
 	}
+	if (vmx_cap_en(vmx, VMX_CAP_APICV_PIR)) {
+		ASSERT(vmx_cap_en(vmx, VMX_CAP_APICV));
+
+		pin_ctls |= PINBASED_POSTED_INTERRUPT;
+	}
 
 	maxcpus = vm_get_maxcpus(vm);
+	datasel = vmm_get_host_datasel();
 	for (i = 0; i < maxcpus; i++) {
-#ifndef __FreeBSD__
 		/*
 		 * Cache physical address lookups for various components which
 		 * may be required inside the critical_enter() section implied
@@ -1135,46 +762,60 @@ vmx_vminit(struct vm *vm, pmap_t pmap)
 		vm_paddr_t msr_bitmap_pa = vtophys(vmx->msr_bitmap);
 		vm_paddr_t apic_page_pa = vtophys(&vmx->apic_page[i]);
 		vm_paddr_t pir_desc_pa = vtophys(&vmx->pir_desc[i]);
-#endif /* __FreeBSD__ */
 
-		vmcs = &vmx->vmcs[i];
-		vmcs->identifier = vmx_revision();
-#ifndef __FreeBSD__
-		vmcs->vmcs_pa = (uint64_t)vtophys(vmcs);
-#endif
-		error = vmclear(vmcs);
-		if (error != 0) {
-			panic("vmx_vminit: vmclear error %d on vcpu %d\n",
-			      error, i);
-		}
+		vmx->vmcs_pa[i] = (uintptr_t)vtophys(&vmx->vmcs[i]);
+		vmcs_initialize(&vmx->vmcs[i], vmx->vmcs_pa[i]);
 
 		vmx_msr_guest_init(vmx, i);
 
-		error = vmcs_init(vmcs);
-		KASSERT(error == 0, ("vmcs_init error %d", error));
+		vmcs_load(vmx->vmcs_pa[i]);
 
-		VMPTRLD(vmcs);
-		error = 0;
-#ifdef __FreeBSD__
+		vmcs_write(VMCS_HOST_IA32_PAT, vmm_get_host_pat());
+		vmcs_write(VMCS_HOST_IA32_EFER, vmm_get_host_efer());
+
+		/* Load the control registers */
+		vmcs_write(VMCS_HOST_CR0, vmm_get_host_cr0());
+		vmcs_write(VMCS_HOST_CR4, vmm_get_host_cr4() | CR4_VMXE);
+
+		/* Load the segment selectors */
+		vmcs_write(VMCS_HOST_CS_SELECTOR, vmm_get_host_codesel());
+
+		vmcs_write(VMCS_HOST_ES_SELECTOR, datasel);
+		vmcs_write(VMCS_HOST_SS_SELECTOR, datasel);
+		vmcs_write(VMCS_HOST_DS_SELECTOR, datasel);
+
+		vmcs_write(VMCS_HOST_FS_SELECTOR, vmm_get_host_fssel());
+		vmcs_write(VMCS_HOST_GS_SELECTOR, vmm_get_host_gssel());
+		vmcs_write(VMCS_HOST_TR_SELECTOR, vmm_get_host_tsssel());
+
 		/*
-		 * The illumos vmx_enter_guest implementation avoids some of
-		 * the %rsp-manipulation games which are present in the stock
-		 * one from FreeBSD.
+		 * Configure host sysenter MSRs to be restored on VM exit.
+		 * The thread-specific MSR_INTC_SEP_ESP value is loaded in
+		 * vmx_run.
 		 */
-		error += vmwrite(VMCS_HOST_RSP, (u_long)&vmx->ctx[i]);
-#endif
-		error += vmwrite(VMCS_EPTP, vmx->eptp);
-		error += vmwrite(VMCS_PIN_BASED_CTLS, pinbased_ctls);
-		error += vmwrite(VMCS_PRI_PROC_BASED_CTLS, procbased_ctls);
-		error += vmwrite(VMCS_SEC_PROC_BASED_CTLS, procbased_ctls2);
-		error += vmwrite(VMCS_EXIT_CTLS, exit_ctls);
-		error += vmwrite(VMCS_ENTRY_CTLS, entry_ctls);
-#ifdef __FreeBSD__
-		error += vmwrite(VMCS_MSR_BITMAP, vtophys(vmx->msr_bitmap));
-#else
-		error += vmwrite(VMCS_MSR_BITMAP, msr_bitmap_pa);
-#endif
-		error += vmwrite(VMCS_VPID, vpid[i]);
+		vmcs_write(VMCS_HOST_IA32_SYSENTER_CS, KCS_SEL);
+		vmcs_write(VMCS_HOST_IA32_SYSENTER_EIP,
+		    rdmsr(MSR_SYSENTER_EIP_MSR));
+
+		/* instruction pointer */
+		if (no_flush_rsb) {
+			vmcs_write(VMCS_HOST_RIP, (uint64_t)vmx_exit_guest);
+		} else {
+			vmcs_write(VMCS_HOST_RIP,
+			    (uint64_t)vmx_exit_guest_flush_rsb);
+		}
+
+		/* link pointer */
+		vmcs_write(VMCS_LINK_POINTER, ~0);
+
+		vmcs_write(VMCS_EPTP, vmx->eptp);
+		vmcs_write(VMCS_PIN_BASED_CTLS, pin_ctls);
+		vmcs_write(VMCS_PRI_PROC_BASED_CTLS, proc_ctls);
+		vmcs_write(VMCS_SEC_PROC_BASED_CTLS, proc2_ctls);
+		vmcs_write(VMCS_EXIT_CTLS, exit_ctls);
+		vmcs_write(VMCS_ENTRY_CTLS, entry_ctls);
+		vmcs_write(VMCS_MSR_BITMAP, msr_bitmap_pa);
+		vmcs_write(VMCS_VPID, vpid[i]);
 
 		if (guest_l1d_flush && !guest_l1d_flush_sw) {
 			vmcs_write(VMCS_ENTRY_MSR_LOAD, pmap_kextract(
@@ -1190,61 +831,49 @@ vmx_vminit(struct vm *vm, pmap_t pmap)
 			exc_bitmap = 0xffffffff;
 		else
 			exc_bitmap = 1 << IDT_MC;
-		error += vmwrite(VMCS_EXCEPTION_BITMAP, exc_bitmap);
+		vmcs_write(VMCS_EXCEPTION_BITMAP, exc_bitmap);
 
 		vmx->ctx[i].guest_dr6 = DBREG_DR6_RESERVED1;
-		error += vmwrite(VMCS_GUEST_DR7, DBREG_DR7_RESERVED1);
+		vmcs_write(VMCS_GUEST_DR7, DBREG_DR7_RESERVED1);
 
-		if (tpr_shadowing) {
-#ifdef __FreeBSD__
-			error += vmwrite(VMCS_VIRTUAL_APIC,
-			    vtophys(&vmx->apic_page[i]));
-#else
-			error += vmwrite(VMCS_VIRTUAL_APIC, apic_page_pa);
-#endif
+		if (vmx_cap_en(vmx, VMX_CAP_TPR_SHADOW)) {
+			vmcs_write(VMCS_VIRTUAL_APIC, apic_page_pa);
 		}
 
-		if (virtual_interrupt_delivery) {
-			error += vmwrite(VMCS_APIC_ACCESS, APIC_ACCESS_ADDRESS);
-			error += vmwrite(VMCS_EOI_EXIT0, 0);
-			error += vmwrite(VMCS_EOI_EXIT1, 0);
-			error += vmwrite(VMCS_EOI_EXIT2, 0);
-			error += vmwrite(VMCS_EOI_EXIT3, 0);
+		if (vmx_cap_en(vmx, VMX_CAP_APICV)) {
+			vmcs_write(VMCS_APIC_ACCESS, APIC_ACCESS_ADDRESS);
+			vmcs_write(VMCS_EOI_EXIT0, 0);
+			vmcs_write(VMCS_EOI_EXIT1, 0);
+			vmcs_write(VMCS_EOI_EXIT2, 0);
+			vmcs_write(VMCS_EOI_EXIT3, 0);
 		}
-		if (posted_interrupts) {
-			error += vmwrite(VMCS_PIR_VECTOR, pirvec);
-#ifdef __FreeBSD__
-			error += vmwrite(VMCS_PIR_DESC,
-			    vtophys(&vmx->pir_desc[i]));
-#else
-			error += vmwrite(VMCS_PIR_DESC, pir_desc_pa);
-#endif
+		if (vmx_cap_en(vmx, VMX_CAP_APICV_PIR)) {
+			vmcs_write(VMCS_PIR_VECTOR, pirvec);
+			vmcs_write(VMCS_PIR_DESC, pir_desc_pa);
 		}
-		VMCLEAR(vmcs);
-		KASSERT(error == 0, ("vmx_vminit: error customizing the vmcs"));
+
+		/*
+		 * Set up the CR0/4 masks and configure the read shadow state
+		 * to the power-on register value from the Intel Sys Arch.
+		 *  CR0 - 0x60000010
+		 *  CR4 - 0
+		 */
+		vmcs_write(VMCS_CR0_MASK, cr0_ones_mask | cr0_zeros_mask);
+		vmcs_write(VMCS_CR0_SHADOW, 0x60000010);
+		vmcs_write(VMCS_CR4_MASK, cr4_ones_mask | cr4_zeros_mask);
+		vmcs_write(VMCS_CR4_SHADOW, 0);
+
+		vmcs_clear(vmx->vmcs_pa[i]);
 
 		vmx->cap[i].set = 0;
-		vmx->cap[i].proc_ctls = procbased_ctls;
-		vmx->cap[i].proc_ctls2 = procbased_ctls2;
+		vmx->cap[i].proc_ctls = proc_ctls;
+		vmx->cap[i].proc_ctls2 = proc2_ctls;
 		vmx->cap[i].exc_bitmap = exc_bitmap;
 
 		vmx->state[i].nextrip = ~0;
 		vmx->state[i].lastcpu = NOCPU;
 		vmx->state[i].vpid = vpid[i];
 
-		/*
-		 * Set up the CR0/4 shadows, and init the read shadow
-		 * to the power-on register value from the Intel Sys Arch.
-		 *  CR0 - 0x60000010
-		 *  CR4 - 0
-		 */
-		error = vmx_setup_cr0_shadow(vmcs, 0x60000010);
-		if (error != 0)
-			panic("vmx_setup_cr0_shadow %d", error);
-
-		error = vmx_setup_cr4_shadow(vmcs, 0);
-		if (error != 0)
-			panic("vmx_setup_cr4_shadow %d", error);
 
 		vmx->ctx[i].pmap = pmap;
 	}
@@ -1255,13 +884,7 @@ vmx_vminit(struct vm *vm, pmap_t pmap)
 static int
 vmx_handle_cpuid(struct vm *vm, int vcpu, struct vmxctx *vmxctx)
 {
-#ifdef __FreeBSD__
-	int handled, func;
-
-	func = vmxctx->guest_rax;
-#else
 	int handled;
-#endif
 
 	handled = x86_emulate_cpuid(vm, vcpu, (uint64_t *)&vmxctx->guest_rax,
 	    (uint64_t *)&vmxctx->guest_rbx, (uint64_t *)&vmxctx->guest_rcx,
@@ -1273,21 +896,8 @@ static __inline void
 vmx_run_trace(struct vmx *vmx, int vcpu)
 {
 #ifdef KTR
-	VCPU_CTR1(vmx->vm, vcpu, "Resume execution at %#lx", vmcs_guest_rip());
+	VCPU_CTR1(vmx->vm, vcpu, "Resume execution at %lx", vmcs_guest_rip());
 #endif
-}
-
-static __inline void
-vmx_exit_trace(struct vmx *vmx, int vcpu, uint64_t rip, uint32_t exit_reason,
-	       int handled)
-{
-#ifdef KTR
-	VCPU_CTR3(vmx->vm, vcpu, "%s %s vmexit at 0x%0lx",
-		 handled ? "handled" : "unhandled",
-		 exit_reason_to_str(exit_reason), rip);
-#endif
-	DTRACE_PROBE3(vmm__vexit, int, vcpu, uint64_t, rip,
-	    uint32_t, exit_reason);
 }
 
 static __inline void
@@ -1300,6 +910,33 @@ vmx_astpending_trace(struct vmx *vmx, int vcpu, uint64_t rip)
 
 static VMM_STAT_INTEL(VCPU_INVVPID_SAVED, "Number of vpid invalidations saved");
 static VMM_STAT_INTEL(VCPU_INVVPID_DONE, "Number of vpid invalidations done");
+
+#define	INVVPID_TYPE_ADDRESS		0UL
+#define	INVVPID_TYPE_SINGLE_CONTEXT	1UL
+#define	INVVPID_TYPE_ALL_CONTEXTS	2UL
+
+struct invvpid_desc {
+	uint16_t	vpid;
+	uint16_t	_res1;
+	uint32_t	_res2;
+	uint64_t	linear_addr;
+};
+CTASSERT(sizeof (struct invvpid_desc) == 16);
+
+static __inline void
+invvpid(uint64_t type, struct invvpid_desc desc)
+{
+	int error;
+
+	__asm __volatile("invvpid %[desc], %[type];"
+	    VMX_SET_ERROR_CODE_ASM
+	    : [error] "=r" (error)
+	    : [desc] "m" (desc), [type] "r" (type)
+	    : "memory");
+
+	if (error)
+		panic("invvpid error %d", error);
+}
 
 /*
  * Invalidate guest mappings identified by its vpid from the TLB.
@@ -1324,11 +961,6 @@ vmx_invvpid(struct vmx *vmx, int vcpu, pmap_t pmap, int running)
 		vmxstate->lastcpu = NOCPU;
 		return;
 	}
-
-#ifdef __FreeBSD__
-	KASSERT(curthread->td_critnest > 0, ("%s: vcpu %d running outside "
-	    "critical section", __func__, vcpu));
-#endif
 
 	/*
 	 * Invalidate all mappings tagged with 'vpid'
@@ -1368,7 +1000,6 @@ vmx_set_pcpu_defaults(struct vmx *vmx, int vcpu, pmap_t pmap)
 {
 	struct vmxstate *vmxstate;
 
-#ifndef __FreeBSD__
 	/*
 	 * Regardless of whether the VM appears to have migrated between CPUs,
 	 * save the host sysenter stack pointer.  As it points to the kernel
@@ -1381,8 +1012,7 @@ vmx_set_pcpu_defaults(struct vmx *vmx, int vcpu, pmap_t pmap)
 	 * Perform any needed TSC_OFFSET adjustment based on TSC_MSR writes or
 	 * migration between host CPUs with differing TSC values.
 	 */
-	VERIFY0(vmx_apply_tsc_adjust(vmx, vcpu));
-#endif
+	vmx_apply_tsc_adjust(vmx, vcpu);
 
 	vmxstate = &vmx->state[vcpu];
 	if (vmxstate->lastcpu == curcpu)
@@ -1392,10 +1022,8 @@ vmx_set_pcpu_defaults(struct vmx *vmx, int vcpu, pmap_t pmap)
 
 	vmm_stat_incr(vmx->vm, vcpu, VCPU_MIGRATIONS, 1);
 
-#ifndef __FreeBSD__
 	/* Load the per-CPU IDT address */
 	vmcs_write(VMCS_HOST_IDTR_BASE, vmm_get_host_idtrbase());
-#endif
 	vmcs_write(VMCS_HOST_TR_BASE, vmm_get_host_trbase());
 	vmcs_write(VMCS_HOST_GDTR_BASE, vmm_get_host_gdtrbase());
 	vmcs_write(VMCS_HOST_GS_BASE, vmm_get_host_gsbase());
@@ -1423,51 +1051,35 @@ vmx_clear_int_window_exiting(struct vmx *vmx, int vcpu)
 {
 
 	KASSERT((vmx->cap[vcpu].proc_ctls & PROCBASED_INT_WINDOW_EXITING) != 0,
-	    ("intr_window_exiting not set: %#x", vmx->cap[vcpu].proc_ctls));
+	    ("intr_window_exiting not set: %x", vmx->cap[vcpu].proc_ctls));
 	vmx->cap[vcpu].proc_ctls &= ~PROCBASED_INT_WINDOW_EXITING;
 	vmcs_write(VMCS_PRI_PROC_BASED_CTLS, vmx->cap[vcpu].proc_ctls);
 	VCPU_CTR0(vmx->vm, vcpu, "Disabling interrupt window exiting");
 }
 
+static __inline bool
+vmx_nmi_window_exiting(struct vmx *vmx, int vcpu)
+{
+	return ((vmx->cap[vcpu].proc_ctls & PROCBASED_NMI_WINDOW_EXITING) != 0);
+}
+
 static __inline void
 vmx_set_nmi_window_exiting(struct vmx *vmx, int vcpu)
 {
-
-	if ((vmx->cap[vcpu].proc_ctls & PROCBASED_NMI_WINDOW_EXITING) == 0) {
+	if (!vmx_nmi_window_exiting(vmx, vcpu)) {
 		vmx->cap[vcpu].proc_ctls |= PROCBASED_NMI_WINDOW_EXITING;
 		vmcs_write(VMCS_PRI_PROC_BASED_CTLS, vmx->cap[vcpu].proc_ctls);
-		VCPU_CTR0(vmx->vm, vcpu, "Enabling NMI window exiting");
 	}
 }
 
 static __inline void
 vmx_clear_nmi_window_exiting(struct vmx *vmx, int vcpu)
 {
-
-	KASSERT((vmx->cap[vcpu].proc_ctls & PROCBASED_NMI_WINDOW_EXITING) != 0,
-	    ("nmi_window_exiting not set %#x", vmx->cap[vcpu].proc_ctls));
+	ASSERT(vmx_nmi_window_exiting(vmx, vcpu));
 	vmx->cap[vcpu].proc_ctls &= ~PROCBASED_NMI_WINDOW_EXITING;
 	vmcs_write(VMCS_PRI_PROC_BASED_CTLS, vmx->cap[vcpu].proc_ctls);
-	VCPU_CTR0(vmx->vm, vcpu, "Disabling NMI window exiting");
 }
 
-#ifdef __FreeBSD__
-int
-vmx_set_tsc_offset(struct vmx *vmx, int vcpu, uint64_t offset)
-{
-	int error;
-
-	if ((vmx->cap[vcpu].proc_ctls & PROCBASED_TSC_OFFSET) == 0) {
-		vmx->cap[vcpu].proc_ctls |= PROCBASED_TSC_OFFSET;
-		vmcs_write(VMCS_PRI_PROC_BASED_CTLS, vmx->cap[vcpu].proc_ctls);
-		VCPU_CTR0(vmx->vm, vcpu, "Enabling TSC offsetting");
-	}
-
-	error = vmwrite(VMCS_TSC_OFFSET, offset);
-
-	return (error);
-}
-#else /* __FreeBSD__ */
 /*
  * Set the TSC adjustment, taking into account the offsets measured between
  * host physical CPUs.  This is required even if the guest has not set a TSC
@@ -1475,85 +1087,64 @@ vmx_set_tsc_offset(struct vmx *vmx, int vcpu, uint64_t offset)
  * migrated onto.  Without this mitigation, un-synched host TSCs will convey
  * the appearance of TSC time-travel to the guest as its vCPUs migrate.
  */
-static int
+static void
 vmx_apply_tsc_adjust(struct vmx *vmx, int vcpu)
 {
-	extern hrtime_t tsc_gethrtime_tick_delta(void);
-	const uint64_t target_offset = (vcpu_tsc_offset(vmx->vm, vcpu) +
-	    (uint64_t)tsc_gethrtime_tick_delta());
-	int error = 0;
+	const uint64_t offset = vcpu_tsc_offset(vmx->vm, vcpu, true);
 
 	ASSERT(vmx->cap[vcpu].proc_ctls & PROCBASED_TSC_OFFSET);
 
-	if (vmx->tsc_offset_active[vcpu] != target_offset) {
-		error = vmwrite(VMCS_TSC_OFFSET, target_offset);
-		vmx->tsc_offset_active[vcpu] = target_offset;
+	if (vmx->tsc_offset_active[vcpu] != offset) {
+		vmcs_write(VMCS_TSC_OFFSET, offset);
+		vmx->tsc_offset_active[vcpu] = offset;
 	}
-
-	return (error);
 }
-#endif /* __FreeBSD__ */
 
 #define	NMI_BLOCKING	(VMCS_INTERRUPTIBILITY_NMI_BLOCKING |		\
-			 VMCS_INTERRUPTIBILITY_MOVSS_BLOCKING)
+			VMCS_INTERRUPTIBILITY_MOVSS_BLOCKING)
 #define	HWINTR_BLOCKING	(VMCS_INTERRUPTIBILITY_STI_BLOCKING |		\
-			 VMCS_INTERRUPTIBILITY_MOVSS_BLOCKING)
+			VMCS_INTERRUPTIBILITY_MOVSS_BLOCKING)
 
-#ifndef __FreeBSD__
-static uint32_t
-vmx_inject_nmi(struct vmx *vmx, int vcpu)
-#else
 static void
 vmx_inject_nmi(struct vmx *vmx, int vcpu)
-#endif
 {
-	uint32_t gi, info;
-
-	gi = vmcs_read(VMCS_GUEST_INTERRUPTIBILITY);
-	KASSERT((gi & NMI_BLOCKING) == 0, ("vmx_inject_nmi: invalid guest "
-	    "interruptibility-state %#x", gi));
-
-	info = vmcs_read(VMCS_ENTRY_INTR_INFO);
-	KASSERT((info & VMCS_INTR_VALID) == 0, ("vmx_inject_nmi: invalid "
-	    "VM-entry interruption information %#x", info));
+	ASSERT0(vmcs_read(VMCS_GUEST_INTERRUPTIBILITY) & NMI_BLOCKING);
+	ASSERT0(vmcs_read(VMCS_ENTRY_INTR_INFO) & VMCS_INTR_VALID);
 
 	/*
 	 * Inject the virtual NMI. The vector must be the NMI IDT entry
 	 * or the VMCS entry check will fail.
 	 */
-	info = IDT_NMI | VMCS_INTR_T_NMI | VMCS_INTR_VALID;
-	vmcs_write(VMCS_ENTRY_INTR_INFO, info);
-
-	VCPU_CTR0(vmx->vm, vcpu, "Injecting vNMI");
+	vmcs_write(VMCS_ENTRY_INTR_INFO,
+	    IDT_NMI | VMCS_INTR_T_NMI | VMCS_INTR_VALID);
 
 	/* Clear the request */
 	vm_nmi_clear(vmx->vm, vcpu);
-
-#ifndef __FreeBSD__
-	return (info);
-#endif
 }
 
-#ifndef __FreeBSD__
-static void
-vmx_inject_interrupts(struct vmx *vmx, int vcpu, struct vlapic *vlapic,
-    uint64_t guestrip)
+/*
+ * Inject exceptions, NMIs, and ExtINTs.
+ *
+ * The logic behind these are complicated and may involve mutex contention, so
+ * the injection is performed without the protection of host CPU interrupts
+ * being disabled.  This means a racing notification could be "lost",
+ * necessitating a later call to vmx_inject_recheck() to close that window
+ * of opportunity.
+ */
+static enum event_inject_state
+vmx_inject_events(struct vmx *vmx, int vcpu, uint64_t rip)
 {
-	uint64_t entryinfo, rflags;
+	uint64_t entryinfo;
 	uint32_t gi, info;
 	int vector;
-	boolean_t extint_pending = B_FALSE;
-
-	vlapic_tmr_update(vlapic);
+	enum event_inject_state state;
 
 	gi = vmcs_read(VMCS_GUEST_INTERRUPTIBILITY);
 	info = vmcs_read(VMCS_ENTRY_INTR_INFO);
+	state = EIS_CAN_INJECT;
 
-	if (vmx->state[vcpu].nextrip != guestrip &&
-	    (gi & HWINTR_BLOCKING) != 0) {
-		VCPU_CTR2(vmx->vm, vcpu, "Guest interrupt blocking "
-		    "cleared due to rip change: %#lx/%#lx",
-		    vmx->state[vcpu].nextrip, guestrip);
+	/* Clear any interrupt blocking if the guest %rip has changed */
+	if (vmx->state[vcpu].nextrip != rip && (gi & HWINTR_BLOCKING) != 0) {
 		gi &= ~HWINTR_BLOCKING;
 		vmcs_write(VMCS_GUEST_INTERRUPTIBILITY, gi);
 	}
@@ -1564,15 +1155,11 @@ vmx_inject_interrupts(struct vmx *vmx, int vcpu, struct vlapic *vlapic,
 	 * such as an AST before a vm-entry delivered the injection.
 	 */
 	if ((info & VMCS_INTR_VALID) != 0) {
-		goto cantinject;
+		return (EIS_EV_EXISTING | EIS_REQ_EXIT);
 	}
 
 	if (vm_entry_intinfo(vmx->vm, vcpu, &entryinfo)) {
-		KASSERT((entryinfo & VMCS_INTR_VALID) != 0, ("%s: entry "
-		    "intinfo is not valid: %#lx", __func__, entryinfo));
-
-		KASSERT((info & VMCS_INTR_VALID) == 0, ("%s: cannot inject "
-		     "pending exception: %#lx/%#x", __func__, entryinfo, info));
+		ASSERT(entryinfo & VMCS_INTR_VALID);
 
 		info = entryinfo;
 		vector = info & 0xff;
@@ -1585,245 +1172,47 @@ vmx_inject_interrupts(struct vmx *vmx, int vcpu, struct vlapic *vlapic,
 			info |= VMCS_INTR_T_SWEXCEPTION;
 		}
 
-		if (info & VMCS_INTR_DEL_ERRCODE)
+		if (info & VMCS_INTR_DEL_ERRCODE) {
 			vmcs_write(VMCS_ENTRY_EXCEPTION_ERROR, entryinfo >> 32);
+		}
 
 		vmcs_write(VMCS_ENTRY_INTR_INFO, info);
-	}
-
-	if (vm_nmi_pending(vmx->vm, vcpu)) {
-		int need_nmi_exiting = 1;
-
-		/*
-		 * If there are no conditions blocking NMI injection then
-		 * inject it directly here otherwise enable "NMI window
-		 * exiting" to inject it as soon as we can.
-		 *
-		 * We also check for STI_BLOCKING because some implementations
-		 * don't allow NMI injection in this case. If we are running
-		 * on a processor that doesn't have this restriction it will
-		 * immediately exit and the NMI will be injected in the
-		 * "NMI window exiting" handler.
-		 */
-		if ((gi & (HWINTR_BLOCKING | NMI_BLOCKING)) == 0) {
-			if ((info & VMCS_INTR_VALID) == 0) {
-				info = vmx_inject_nmi(vmx, vcpu);
-				need_nmi_exiting = 0;
-			} else {
-				VCPU_CTR1(vmx->vm, vcpu, "Cannot inject NMI "
-				    "due to VM-entry intr info %#x", info);
-			}
-		} else {
-			VCPU_CTR1(vmx->vm, vcpu, "Cannot inject NMI due to "
-			    "Guest Interruptibility-state %#x", gi);
-		}
-
-		if (need_nmi_exiting) {
-			vmx_set_nmi_window_exiting(vmx, vcpu);
-			return;
-		}
-	}
-
-	/* Check the AT-PIC and APIC for interrupts. */
-	if (vm_extint_pending(vmx->vm, vcpu)) {
-		/* Ask the legacy pic for a vector to inject */
-		vatpic_pending_intr(vmx->vm, &vector);
-		extint_pending = B_TRUE;
-
-		/*
-		 * From the Intel SDM, Volume 3, Section "Maskable
-		 * Hardware Interrupts":
-		 * - maskable interrupt vectors [0,255] can be delivered
-		 *   through the INTR pin.
-		 */
-		KASSERT(vector >= 0 && vector <= 255,
-		    ("invalid vector %d from INTR", vector));
-	} else if (!virtual_interrupt_delivery) {
-		/* Ask the local apic for a vector to inject */
-		if (!vlapic_pending_intr(vlapic, &vector))
-			return;
-
-		/*
-		 * From the Intel SDM, Volume 3, Section "Maskable
-		 * Hardware Interrupts":
-		 * - maskable interrupt vectors [16,255] can be delivered
-		 *   through the local APIC.
-		*/
-		KASSERT(vector >= 16 && vector <= 255,
-		    ("invalid vector %d from local APIC", vector));
-	} else {
-		/* No futher injection needed */
-		return;
-	}
-
-	/*
-	 * Verify that the guest is interruptable and the above logic has not
-	 * already queued an event for injection.
-	 */
-	if ((gi & HWINTR_BLOCKING) != 0) {
-		VCPU_CTR2(vmx->vm, vcpu, "Cannot inject vector %d due to "
-		    "Guest Interruptibility-state %#x", vector, gi);
-		goto cantinject;
-	}
-	if ((info & VMCS_INTR_VALID) != 0) {
-		VCPU_CTR2(vmx->vm, vcpu, "Cannot inject vector %d due to "
-		    "VM-entry intr info %#x", vector, info);
-		goto cantinject;
-	}
-	rflags = vmcs_read(VMCS_GUEST_RFLAGS);
-	if ((rflags & PSL_I) == 0) {
-		VCPU_CTR2(vmx->vm, vcpu, "Cannot inject vector %d due to "
-		    "rflags %#lx", vector, rflags);
-		goto cantinject;
-	}
-
-	/* Inject the interrupt */
-	info = VMCS_INTR_T_HWINTR | VMCS_INTR_VALID;
-	info |= vector;
-	vmcs_write(VMCS_ENTRY_INTR_INFO, info);
-
-	if (extint_pending) {
-		vm_extint_clear(vmx->vm, vcpu);
-		vatpic_intr_accepted(vmx->vm, vector);
-
-		/*
-		 * After we accepted the current ExtINT the PIC may
-		 * have posted another one.  If that is the case, set
-		 * the Interrupt Window Exiting execution control so
-		 * we can inject that one too.
-		 *
-		 * Also, interrupt window exiting allows us to inject any
-		 * pending APIC vector that was preempted by the ExtINT
-		 * as soon as possible. This applies both for the software
-		 * emulated vlapic and the hardware assisted virtual APIC.
-		 */
-		vmx_set_int_window_exiting(vmx, vcpu);
-	} else {
-		/* Update the Local APIC ISR */
-		vlapic_intr_accepted(vlapic, vector);
-	}
-
-	VCPU_CTR1(vmx->vm, vcpu, "Injecting hwintr at vector %d", vector);
-	return;
-
-cantinject:
-	/*
-	 * Set the Interrupt Window Exiting execution control so we can inject
-	 * the interrupt as soon as blocking condition goes away.
-	 */
-	vmx_set_int_window_exiting(vmx, vcpu);
-}
-#else
-static void
-vmx_inject_interrupts(struct vmx *vmx, int vcpu, struct vlapic *vlapic,
-    uint64_t guestrip)
-{
-	int vector, need_nmi_exiting, extint_pending;
-	uint64_t rflags, entryinfo;
-	uint32_t gi, info;
-
-	vlapic_tmr_update(vlapic);
-
-	if (vmx->state[vcpu].nextrip != guestrip) {
-		gi = vmcs_read(VMCS_GUEST_INTERRUPTIBILITY);
-		if (gi & HWINTR_BLOCKING) {
-			VCPU_CTR2(vmx->vm, vcpu, "Guest interrupt blocking "
-			    "cleared due to rip change: %#lx/%#lx",
-			    vmx->state[vcpu].nextrip, guestrip);
-			gi &= ~HWINTR_BLOCKING;
-			vmcs_write(VMCS_GUEST_INTERRUPTIBILITY, gi);
-		}
-	}
-
-	if (vm_entry_intinfo(vmx->vm, vcpu, &entryinfo)) {
-		KASSERT((entryinfo & VMCS_INTR_VALID) != 0, ("%s: entry "
-		    "intinfo is not valid: %#lx", __func__, entryinfo));
-
-		info = vmcs_read(VMCS_ENTRY_INTR_INFO);
-		KASSERT((info & VMCS_INTR_VALID) == 0, ("%s: cannot inject "
-		     "pending exception: %#lx/%#x", __func__, entryinfo, info));
-
-		info = entryinfo;
-		vector = info & 0xff;
-		if (vector == IDT_BP || vector == IDT_OF) {
-			/*
-			 * VT-x requires #BP and #OF to be injected as software
-			 * exceptions.
-			 */
-			info &= ~VMCS_INTR_T_MASK;
-			info |= VMCS_INTR_T_SWEXCEPTION;
-		}
-
-		if (info & VMCS_INTR_DEL_ERRCODE)
-			vmcs_write(VMCS_ENTRY_EXCEPTION_ERROR, entryinfo >> 32);
-
-		vmcs_write(VMCS_ENTRY_INTR_INFO, info);
+		state = EIS_EV_INJECTED;
 	}
 
 	if (vm_nmi_pending(vmx->vm, vcpu)) {
 		/*
-		 * If there are no conditions blocking NMI injection then
-		 * inject it directly here otherwise enable "NMI window
-		 * exiting" to inject it as soon as we can.
+		 * If there are no conditions blocking NMI injection then inject
+		 * it directly here otherwise enable "NMI window exiting" to
+		 * inject it as soon as we can.
 		 *
-		 * We also check for STI_BLOCKING because some implementations
-		 * don't allow NMI injection in this case. If we are running
-		 * on a processor that doesn't have this restriction it will
-		 * immediately exit and the NMI will be injected in the
-		 * "NMI window exiting" handler.
+		 * According to the Intel manual, some CPUs do not allow NMI
+		 * injection when STI_BLOCKING is active.  That check is
+		 * enforced here, regardless of CPU capability.  If running on a
+		 * CPU without such a restriction it will immediately exit and
+		 * the NMI will be injected in the "NMI window exiting" handler.
 		 */
-		need_nmi_exiting = 1;
-		gi = vmcs_read(VMCS_GUEST_INTERRUPTIBILITY);
 		if ((gi & (HWINTR_BLOCKING | NMI_BLOCKING)) == 0) {
-			info = vmcs_read(VMCS_ENTRY_INTR_INFO);
-			if ((info & VMCS_INTR_VALID) == 0) {
+			if (state == EIS_CAN_INJECT) {
 				vmx_inject_nmi(vmx, vcpu);
-				need_nmi_exiting = 0;
+				state = EIS_EV_INJECTED;
 			} else {
-				VCPU_CTR1(vmx->vm, vcpu, "Cannot inject NMI "
-				    "due to VM-entry intr info %#x", info);
+				return (state | EIS_REQ_EXIT);
 			}
 		} else {
-			VCPU_CTR1(vmx->vm, vcpu, "Cannot inject NMI due to "
-			    "Guest Interruptibility-state %#x", gi);
+			vmx_set_nmi_window_exiting(vmx, vcpu);
+		}
+	}
+
+	if (vm_extint_pending(vmx->vm, vcpu)) {
+		if (state != EIS_CAN_INJECT) {
+			return (state | EIS_REQ_EXIT);
+		}
+		if ((gi & HWINTR_BLOCKING) != 0 ||
+		    (vmcs_read(VMCS_GUEST_RFLAGS) & PSL_I) == 0) {
+			return (EIS_GI_BLOCK);
 		}
 
-		if (need_nmi_exiting)
-			vmx_set_nmi_window_exiting(vmx, vcpu);
-	}
-
-	extint_pending = vm_extint_pending(vmx->vm, vcpu);
-
-	if (!extint_pending && virtual_interrupt_delivery) {
-		vmx_inject_pir(vlapic);
-		return;
-	}
-
-	/*
-	 * If interrupt-window exiting is already in effect then don't bother
-	 * checking for pending interrupts. This is just an optimization and
-	 * not needed for correctness.
-	 */
-	if ((vmx->cap[vcpu].proc_ctls & PROCBASED_INT_WINDOW_EXITING) != 0) {
-		VCPU_CTR0(vmx->vm, vcpu, "Skip interrupt injection due to "
-		    "pending int_window_exiting");
-		return;
-	}
-
-	if (!extint_pending) {
-		/* Ask the local apic for a vector to inject */
-		if (!vlapic_pending_intr(vlapic, &vector))
-			return;
-
-		/*
-		 * From the Intel SDM, Volume 3, Section "Maskable
-		 * Hardware Interrupts":
-		 * - maskable interrupt vectors [16,255] can be delivered
-		 *   through the local APIC.
-		*/
-		KASSERT(vector >= 16 && vector <= 255,
-		    ("invalid vector %d from local APIC", vector));
-	} else {
 		/* Ask the legacy pic for a vector to inject */
 		vatpic_pending_intr(vmx->vm, &vector);
 
@@ -1835,75 +1224,132 @@ vmx_inject_interrupts(struct vmx *vmx, int vcpu, struct vlapic *vlapic,
 		 */
 		KASSERT(vector >= 0 && vector <= 255,
 		    ("invalid vector %d from INTR", vector));
+
+		/* Inject the interrupt */
+		vmcs_write(VMCS_ENTRY_INTR_INFO,
+		    VMCS_INTR_T_HWINTR | VMCS_INTR_VALID | vector);
+
+		vm_extint_clear(vmx->vm, vcpu);
+		vatpic_intr_accepted(vmx->vm, vector);
+		state = EIS_EV_INJECTED;
 	}
 
-	/* Check RFLAGS.IF and the interruptibility state of the guest */
-	rflags = vmcs_read(VMCS_GUEST_RFLAGS);
-	if ((rflags & PSL_I) == 0) {
-		VCPU_CTR2(vmx->vm, vcpu, "Cannot inject vector %d due to "
-		    "rflags %#lx", vector, rflags);
-		goto cantinject;
+	return (state);
+}
+
+/*
+ * Inject any interrupts pending on the vLAPIC.
+ *
+ * This is done with host CPU interrupts disabled so notification IPIs, either
+ * from the standard vCPU notification or APICv posted interrupts, will be
+ * queued on the host APIC and recognized when entering VMX context.
+ */
+static enum event_inject_state
+vmx_inject_vlapic(struct vmx *vmx, int vcpu, struct vlapic *vlapic)
+{
+	int vector;
+
+	if (!vlapic_pending_intr(vlapic, &vector)) {
+		return (EIS_CAN_INJECT);
 	}
 
-	gi = vmcs_read(VMCS_GUEST_INTERRUPTIBILITY);
-	if (gi & HWINTR_BLOCKING) {
-		VCPU_CTR2(vmx->vm, vcpu, "Cannot inject vector %d due to "
-		    "Guest Interruptibility-state %#x", vector, gi);
-		goto cantinject;
-	}
+	/*
+	 * From the Intel SDM, Volume 3, Section "Maskable
+	 * Hardware Interrupts":
+	 * - maskable interrupt vectors [16,255] can be delivered
+	 *   through the local APIC.
+	 */
+	KASSERT(vector >= 16 && vector <= 255,
+	    ("invalid vector %d from local APIC", vector));
 
-	info = vmcs_read(VMCS_ENTRY_INTR_INFO);
-	if (info & VMCS_INTR_VALID) {
+	if (vmx_cap_en(vmx, VMX_CAP_APICV)) {
+		uint16_t status_old = vmcs_read(VMCS_GUEST_INTR_STATUS);
+		uint16_t status_new = (status_old & 0xff00) | vector;
+
 		/*
-		 * This is expected and could happen for multiple reasons:
-		 * - A vectoring VM-entry was aborted due to astpending
-		 * - A VM-exit happened during event injection.
-		 * - An exception was injected above.
-		 * - An NMI was injected above or after "NMI window exiting"
+		 * The APICv state will have been synced into the vLAPIC
+		 * as part of vlapic_pending_intr().  Prepare the VMCS
+		 * for the to-be-injected pending interrupt.
 		 */
-		VCPU_CTR2(vmx->vm, vcpu, "Cannot inject vector %d due to "
-		    "VM-entry intr info %#x", vector, info);
-		goto cantinject;
+		if (status_new > status_old) {
+			vmcs_write(VMCS_GUEST_INTR_STATUS, status_new);
+			VCPU_CTR2(vlapic->vm, vlapic->vcpuid,
+			    "vmx_inject_interrupts: guest_intr_status "
+			    "changed from 0x%04x to 0x%04x",
+			    status_old, status_new);
+		}
+
+		/*
+		 * Ensure VMCS state regarding EOI traps is kept in sync
+		 * with the TMRs in the vlapic.
+		 */
+		vmx_apicv_sync_tmr(vlapic);
+
+		/*
+		 * The rest of the injection process for injecting the
+		 * interrupt(s) is handled by APICv. It does not preclude other
+		 * event injection from occurring.
+		 */
+		return (EIS_CAN_INJECT);
+	}
+
+	ASSERT0(vmcs_read(VMCS_ENTRY_INTR_INFO) & VMCS_INTR_VALID);
+
+	/* Does guest interruptability block injection? */
+	if ((vmcs_read(VMCS_GUEST_INTERRUPTIBILITY) & HWINTR_BLOCKING) != 0 ||
+	    (vmcs_read(VMCS_GUEST_RFLAGS) & PSL_I) == 0) {
+		return (EIS_GI_BLOCK);
 	}
 
 	/* Inject the interrupt */
-	info = VMCS_INTR_T_HWINTR | VMCS_INTR_VALID;
-	info |= vector;
-	vmcs_write(VMCS_ENTRY_INTR_INFO, info);
+	vmcs_write(VMCS_ENTRY_INTR_INFO,
+	    VMCS_INTR_T_HWINTR | VMCS_INTR_VALID | vector);
 
-	if (!extint_pending) {
-		/* Update the Local APIC ISR */
-		vlapic_intr_accepted(vlapic, vector);
-	} else {
-		vm_extint_clear(vmx->vm, vcpu);
-		vatpic_intr_accepted(vmx->vm, vector);
+	/* Update the Local APIC ISR */
+	vlapic_intr_accepted(vlapic, vector);
 
-		/*
-		 * After we accepted the current ExtINT the PIC may
-		 * have posted another one.  If that is the case, set
-		 * the Interrupt Window Exiting execution control so
-		 * we can inject that one too.
-		 *
-		 * Also, interrupt window exiting allows us to inject any
-		 * pending APIC vector that was preempted by the ExtINT
-		 * as soon as possible. This applies both for the software
-		 * emulated vlapic and the hardware assisted virtual APIC.
-		 */
-		vmx_set_int_window_exiting(vmx, vcpu);
-	}
-
-	VCPU_CTR1(vmx->vm, vcpu, "Injecting hwintr at vector %d", vector);
-
-	return;
-
-cantinject:
-	/*
-	 * Set the Interrupt Window Exiting execution control so we can inject
-	 * the interrupt as soon as blocking condition goes away.
-	 */
-	vmx_set_int_window_exiting(vmx, vcpu);
+	return (EIS_EV_INJECTED);
 }
-#endif /* __FreeBSD__ */
+
+/*
+ * Re-check for events to be injected.
+ *
+ * Once host CPU interrupts are disabled, check for the presence of any events
+ * which require injection processing.  If an exit is required upon injection,
+ * or once the guest becomes interruptable, that will be configured too.
+ */
+static bool
+vmx_inject_recheck(struct vmx *vmx, int vcpu, enum event_inject_state state)
+{
+	if (state == EIS_CAN_INJECT) {
+		if (vm_nmi_pending(vmx->vm, vcpu) &&
+		    !vmx_nmi_window_exiting(vmx, vcpu)) {
+			/* queued NMI not blocked by NMI-window-exiting */
+			return (true);
+		}
+		if (vm_extint_pending(vmx->vm, vcpu)) {
+			/* queued ExtINT not blocked by existing injection */
+			return (true);
+		}
+	} else {
+		if ((state & EIS_REQ_EXIT) != 0) {
+			/*
+			 * Use a self-IPI to force an immediate exit after
+			 * event injection has occurred.
+			 */
+			poke_cpu(CPU->cpu_id);
+		} else {
+			/*
+			 * If any event is being injected, an exit immediately
+			 * upon becoming interruptable again will allow pending
+			 * or newly queued events to be injected in a timely
+			 * manner.
+			 */
+			vmx_set_int_window_exiting(vmx, vcpu);
+		}
+	}
+	return (false);
+}
 
 /*
  * If the Virtual NMIs execution control is '1' then the logical processor
@@ -1943,7 +1389,7 @@ vmx_assert_nmi_blocking(struct vmx *vmx, int vcpuid)
 
 	gi = vmcs_read(VMCS_GUEST_INTERRUPTIBILITY);
 	KASSERT(gi & VMCS_INTERRUPTIBILITY_NMI_BLOCKING,
-	    ("NMI blocking is not in effect %#x", gi));
+	    ("NMI blocking is not in effect %x", gi));
 }
 
 static int
@@ -1969,7 +1415,8 @@ vmx_emulate_xsetbv(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 	}
 
 	/* We only handle xcr0 if both the host and guest have XSAVE enabled. */
-	if (!limits->xsave_enabled || !(vmcs_read(VMCS_GUEST_CR4) & CR4_XSAVE)) {
+	if (!limits->xsave_enabled ||
+	    !(vmcs_read(VMCS_GUEST_CR4) & CR4_XSAVE)) {
 		vm_inject_ud(vmx->vm, vcpu);
 		return (HANDLED);
 	}
@@ -2255,69 +1702,6 @@ vmx_paging_mode(void)
 		return (PAGING_MODE_PAE);
 }
 
-static uint64_t
-inout_str_index(struct vmx *vmx, int vcpuid, int in)
-{
-	uint64_t val;
-	int error;
-	enum vm_reg_name reg;
-
-	reg = in ? VM_REG_GUEST_RDI : VM_REG_GUEST_RSI;
-	error = vmx_getreg(vmx, vcpuid, reg, &val);
-	KASSERT(error == 0, ("%s: vmx_getreg error %d", __func__, error));
-	return (val);
-}
-
-static uint64_t
-inout_str_count(struct vmx *vmx, int vcpuid, int rep)
-{
-	uint64_t val;
-	int error;
-
-	if (rep) {
-		error = vmx_getreg(vmx, vcpuid, VM_REG_GUEST_RCX, &val);
-		KASSERT(!error, ("%s: vmx_getreg error %d", __func__, error));
-	} else {
-		val = 1;
-	}
-	return (val);
-}
-
-static int
-inout_str_addrsize(uint32_t inst_info)
-{
-	uint32_t size;
-
-	size = (inst_info >> 7) & 0x7;
-	switch (size) {
-	case 0:
-		return (2);	/* 16 bit */
-	case 1:
-		return (4);	/* 32 bit */
-	case 2:
-		return (8);	/* 64 bit */
-	default:
-		panic("%s: invalid size encoding %d", __func__, size);
-	}
-}
-
-static void
-inout_str_seginfo(struct vmx *vmx, int vcpuid, uint32_t inst_info, int in,
-    struct vm_inout_str *vis)
-{
-	int error, s;
-
-	if (in) {
-		vis->seg_name = VM_REG_GUEST_ES;
-	} else {
-		s = (inst_info >> 15) & 0x7;
-		vis->seg_name = vm_segment_name(s);
-	}
-
-	error = vmx_getdesc(vmx, vcpuid, vis->seg_name, &vis->seg_desc);
-	KASSERT(error == 0, ("%s: vmx_getdesc error %d", __func__, error));
-}
-
 static void
 vmx_paging_info(struct vm_guest_paging *paging)
 {
@@ -2328,35 +1712,90 @@ vmx_paging_info(struct vm_guest_paging *paging)
 }
 
 static void
-vmexit_inst_emul(struct vm_exit *vmexit, uint64_t gpa, uint64_t gla)
+vmexit_mmio_emul(struct vm_exit *vmexit, struct vie *vie, uint64_t gpa,
+    uint64_t gla)
 {
-	struct vm_guest_paging *paging;
+	struct vm_guest_paging paging;
 	uint32_t csar;
 
-	paging = &vmexit->u.inst_emul.paging;
-
-	vmexit->exitcode = VM_EXITCODE_INST_EMUL;
+	vmexit->exitcode = VM_EXITCODE_MMIO_EMUL;
 	vmexit->inst_length = 0;
-	vmexit->u.inst_emul.gpa = gpa;
-	vmexit->u.inst_emul.gla = gla;
-	vmx_paging_info(paging);
-	switch (paging->cpu_mode) {
+	vmexit->u.mmio_emul.gpa = gpa;
+	vmexit->u.mmio_emul.gla = gla;
+	vmx_paging_info(&paging);
+
+	switch (paging.cpu_mode) {
 	case CPU_MODE_REAL:
-		vmexit->u.inst_emul.cs_base = vmcs_read(VMCS_GUEST_CS_BASE);
-		vmexit->u.inst_emul.cs_d = 0;
+		vmexit->u.mmio_emul.cs_base = vmcs_read(VMCS_GUEST_CS_BASE);
+		vmexit->u.mmio_emul.cs_d = 0;
 		break;
 	case CPU_MODE_PROTECTED:
 	case CPU_MODE_COMPATIBILITY:
-		vmexit->u.inst_emul.cs_base = vmcs_read(VMCS_GUEST_CS_BASE);
+		vmexit->u.mmio_emul.cs_base = vmcs_read(VMCS_GUEST_CS_BASE);
 		csar = vmcs_read(VMCS_GUEST_CS_ACCESS_RIGHTS);
-		vmexit->u.inst_emul.cs_d = SEG_DESC_DEF32(csar);
+		vmexit->u.mmio_emul.cs_d = SEG_DESC_DEF32(csar);
 		break;
 	default:
-		vmexit->u.inst_emul.cs_base = 0;
-		vmexit->u.inst_emul.cs_d = 0;
+		vmexit->u.mmio_emul.cs_base = 0;
+		vmexit->u.mmio_emul.cs_d = 0;
 		break;
 	}
-	vie_init(&vmexit->u.inst_emul.vie, NULL, 0);
+
+	vie_init_mmio(vie, NULL, 0, &paging, gpa);
+}
+
+static void
+vmexit_inout(struct vm_exit *vmexit, struct vie *vie, uint64_t qual,
+    uint32_t eax)
+{
+	struct vm_guest_paging paging;
+	struct vm_inout *inout;
+
+	inout = &vmexit->u.inout;
+
+	inout->bytes = (qual & 0x7) + 1;
+	inout->flags = 0;
+	inout->flags |= (qual & 0x8) ? INOUT_IN : 0;
+	inout->flags |= (qual & 0x10) ? INOUT_STR : 0;
+	inout->flags |= (qual & 0x20) ? INOUT_REP : 0;
+	inout->port = (uint16_t)(qual >> 16);
+	inout->eax = eax;
+	if (inout->flags & INOUT_STR) {
+		uint64_t inst_info;
+
+		inst_info = vmcs_read(VMCS_EXIT_INSTRUCTION_INFO);
+
+		/*
+		 * According to the SDM, bits 9:7 encode the address size of the
+		 * ins/outs operation, but only values 0/1/2 are expected,
+		 * corresponding to 16/32/64 bit sizes.
+		 */
+		inout->addrsize = 2 << BITX(inst_info, 9, 7);
+		VERIFY(inout->addrsize == 2 || inout->addrsize == 4 ||
+		    inout->addrsize == 8);
+
+		if (inout->flags & INOUT_IN) {
+			/*
+			 * The bits describing the segment in INSTRUCTION_INFO
+			 * are not defined for ins, leaving it to system
+			 * software to assume %es (encoded as 0)
+			 */
+			inout->segment = 0;
+		} else {
+			/*
+			 * Bits 15-17 encode the segment for OUTS.
+			 * This value follows the standard x86 segment order.
+			 */
+			inout->segment = (inst_info >> 15) & 0x7;
+		}
+	}
+
+	vmexit->exitcode = VM_EXITCODE_INOUT;
+	vmx_paging_info(&paging);
+	vie_init_inout(vie, inout, vmexit->inst_length, &paging);
+
+	/* The in/out emulation will handle advancing %rip */
+	vmexit->inst_length = 0;
 }
 
 static int
@@ -2365,11 +1804,11 @@ ept_fault_type(uint64_t ept_qual)
 	int fault_type;
 
 	if (ept_qual & EPT_VIOLATION_DATA_WRITE)
-		fault_type = VM_PROT_WRITE;
+		fault_type = PROT_WRITE;
 	else if (ept_qual & EPT_VIOLATION_INST_FETCH)
-		fault_type = VM_PROT_EXECUTE;
+		fault_type = PROT_EXEC;
 	else
-		fault_type= VM_PROT_READ;
+		fault_type = PROT_READ;
 
 	return (fault_type);
 }
@@ -2424,9 +1863,8 @@ static int
 vmx_handle_apic_write(struct vmx *vmx, int vcpuid, struct vlapic *vlapic,
     uint64_t qual)
 {
-	int error, handled, offset;
+	int handled, offset;
 	uint32_t *apic_regs, vector;
-	bool retu;
 
 	handled = HANDLED;
 	offset = APIC_WRITE_OFFSET(qual);
@@ -2466,10 +1904,9 @@ vmx_handle_apic_write(struct vmx *vmx, int vcpuid, struct vlapic *vlapic,
 		vlapic_esr_write_handler(vlapic);
 		break;
 	case APIC_OFFSET_ICR_LOW:
-		retu = false;
-		error = vlapic_icrlo_write_handler(vlapic, &retu);
-		if (error != 0 || retu)
+		if (vlapic_icrlo_write_handler(vlapic) != 0) {
 			handled = UNHANDLED;
+		}
 		break;
 	case APIC_OFFSET_CMCI_LVT:
 	case APIC_OFFSET_TIMER_LVT ... APIC_OFFSET_ERROR_LVT:
@@ -2504,6 +1941,7 @@ vmx_handle_apic_access(struct vmx *vmx, int vcpuid, struct vm_exit *vmexit)
 {
 	uint64_t qual;
 	int access_type, offset, allowed;
+	struct vie *vie;
 
 	if (!apic_access_virtualization(vmx, vcpuid))
 		return (UNHANDLED);
@@ -2550,7 +1988,8 @@ vmx_handle_apic_access(struct vmx *vmx, int vcpuid, struct vm_exit *vmexit)
 	}
 
 	if (allowed) {
-		vmexit_inst_emul(vmexit, DEFAULT_APIC_BASE + offset,
+		vie = vm_vie_ctx(vmx->vm, vcpuid);
+		vmexit_mmio_emul(vmexit, vie, DEFAULT_APIC_BASE + offset,
 		    VIE_INVALID_GLA);
 	}
 
@@ -2586,61 +2025,48 @@ vmx_task_switch_reason(uint64_t qual)
 }
 
 static int
-emulate_wrmsr(struct vmx *vmx, int vcpuid, u_int num, uint64_t val, bool *retu)
+emulate_wrmsr(struct vmx *vmx, int vcpuid, uint_t num, uint64_t val)
 {
 	int error;
 
 	if (lapic_msr(num))
-		error = lapic_wrmsr(vmx->vm, vcpuid, num, val, retu);
+		error = lapic_wrmsr(vmx->vm, vcpuid, num, val);
 	else
-		error = vmx_wrmsr(vmx, vcpuid, num, val, retu);
+		error = vmx_wrmsr(vmx, vcpuid, num, val);
 
 	return (error);
 }
 
 static int
-emulate_rdmsr(struct vmx *vmx, int vcpuid, u_int num, bool *retu)
+emulate_rdmsr(struct vmx *vmx, int vcpuid, uint_t num)
 {
-	struct vmxctx *vmxctx;
 	uint64_t result;
-	uint32_t eax, edx;
 	int error;
 
 	if (lapic_msr(num))
-		error = lapic_rdmsr(vmx->vm, vcpuid, num, &result, retu);
+		error = lapic_rdmsr(vmx->vm, vcpuid, num, &result);
 	else
-		error = vmx_rdmsr(vmx, vcpuid, num, &result, retu);
+		error = vmx_rdmsr(vmx, vcpuid, num, &result);
 
 	if (error == 0) {
-		eax = result;
-		vmxctx = &vmx->ctx[vcpuid];
-		error = vmxctx_setreg(vmxctx, VM_REG_GUEST_RAX, eax);
-		KASSERT(error == 0, ("vmxctx_setreg(rax) error %d", error));
-
-		edx = result >> 32;
-		error = vmxctx_setreg(vmxctx, VM_REG_GUEST_RDX, edx);
-		KASSERT(error == 0, ("vmxctx_setreg(rdx) error %d", error));
+		vmx->ctx[vcpuid].guest_rax = (uint32_t)result;
+		vmx->ctx[vcpuid].guest_rdx = result >> 32;
 	}
 
 	return (error);
 }
 
-#ifndef __FreeBSD__
-#define	__predict_false(x)	(x)
-#endif
-
 static int
 vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 {
-	int error, errcode, errcode_valid, handled, in;
+	int error, errcode, errcode_valid, handled;
 	struct vmxctx *vmxctx;
+	struct vie *vie;
 	struct vlapic *vlapic;
-	struct vm_inout_str *vis;
 	struct vm_task_switch *ts;
-	uint32_t eax, ecx, edx, idtvec_info, idtvec_err, intr_info, inst_info;
+	uint32_t eax, ecx, edx, idtvec_info, idtvec_err, intr_info;
 	uint32_t intr_type, intr_vec, reason;
 	uint64_t exitintinfo, qual, gpa;
-	bool retu;
 
 	CTASSERT((PINBASED_CTLS_ONE_SETTING & PINBASED_VIRTUAL_NMI) != 0);
 	CTASSERT((PINBASED_CTLS_ONE_SETTING & PINBASED_NMI_EXITING) != 0);
@@ -2661,13 +2087,9 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 	 * These VM-exits are uncommon but must be handled specially
 	 * as most VM-exit fields are not populated as usual.
 	 */
-	if (__predict_false(reason == EXIT_REASON_MCE_DURING_ENTRY)) {
+	if (reason == EXIT_REASON_MCE_DURING_ENTRY) {
 		VCPU_CTR0(vmx->vm, vcpu, "Handling MCE during VM-entry");
-#ifdef __FreeBSD__
-		__asm __volatile("int $18");
-#else
 		vmm_call_trap(T_MCE);
-#endif
 		return (1);
 	}
 
@@ -2744,7 +2166,7 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		 */
 		if (ts->reason == TSR_IDT_GATE) {
 			KASSERT(idtvec_info & VMCS_IDT_VEC_VALID,
-			    ("invalid idtvec_info %#x for IDT task switch",
+			    ("invalid idtvec_info %x for IDT task switch",
 			    idtvec_info));
 			intr_type = idtvec_info & VMCS_INTR_T_MASK;
 			if (intr_type != VMCS_INTR_T_SWINTR &&
@@ -2783,16 +2205,15 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		break;
 	case EXIT_REASON_RDMSR:
 		vmm_stat_incr(vmx->vm, vcpu, VMEXIT_RDMSR, 1);
-		retu = false;
 		ecx = vmxctx->guest_rcx;
 		VCPU_CTR1(vmx->vm, vcpu, "rdmsr 0x%08x", ecx);
 		SDT_PROBE4(vmm, vmx, exit, rdmsr, vmx, vcpu, vmexit, ecx);
-		error = emulate_rdmsr(vmx, vcpu, ecx, &retu);
-		if (error) {
+		error = emulate_rdmsr(vmx, vcpu, ecx);
+		if (error == 0) {
+			handled = HANDLED;
+		} else if (error > 0) {
 			vmexit->exitcode = VM_EXITCODE_RDMSR;
 			vmexit->u.msr.code = ecx;
-		} else if (!retu) {
-			handled = HANDLED;
 		} else {
 			/* Return to userspace with a valid exitcode */
 			KASSERT(vmexit->exitcode != VM_EXITCODE_BOGUS,
@@ -2801,7 +2222,6 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		break;
 	case EXIT_REASON_WRMSR:
 		vmm_stat_incr(vmx->vm, vcpu, VMEXIT_WRMSR, 1);
-		retu = false;
 		eax = vmxctx->guest_rax;
 		ecx = vmxctx->guest_rcx;
 		edx = vmxctx->guest_rdx;
@@ -2810,13 +2230,13 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		SDT_PROBE5(vmm, vmx, exit, wrmsr, vmx, vmexit, vcpu, ecx,
 		    (uint64_t)edx << 32 | eax);
 		error = emulate_wrmsr(vmx, vcpu, ecx,
-		    (uint64_t)edx << 32 | eax, &retu);
-		if (error) {
+		    (uint64_t)edx << 32 | eax);
+		if (error == 0) {
+			handled = HANDLED;
+		} else if (error > 0) {
 			vmexit->exitcode = VM_EXITCODE_WRMSR;
 			vmexit->u.msr.code = ecx;
 			vmexit->u.msr.wval = (uint64_t)edx << 32 | eax;
-		} else if (!retu) {
-			handled = HANDLED;
 		} else {
 			/* Return to userspace with a valid exitcode */
 			KASSERT(vmexit->exitcode != VM_EXITCODE_BOGUS,
@@ -2828,11 +2248,6 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		SDT_PROBE3(vmm, vmx, exit, halt, vmx, vcpu, vmexit);
 		vmexit->exitcode = VM_EXITCODE_HLT;
 		vmexit->u.hlt.rflags = vmcs_read(VMCS_GUEST_RFLAGS);
-		if (virtual_interrupt_delivery)
-			vmexit->u.hlt.intr_status =
-			    vmcs_read(VMCS_GUEST_INTR_STATUS);
-		else
-			vmexit->u.hlt.intr_status = 0;
 		break;
 	case EXIT_REASON_MTF:
 		vmm_stat_incr(vmx->vm, vcpu, VMEXIT_MTRAP, 1);
@@ -2872,7 +2287,7 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 			return (1);
 		KASSERT((intr_info & VMCS_INTR_VALID) != 0 &&
 		    (intr_info & VMCS_INTR_T_MASK) == VMCS_INTR_T_HWINTR,
-		    ("VM exit interruption info invalid: %#x", intr_info));
+		    ("VM exit interruption info invalid: %x", intr_info));
 		vmx_trigger_hostintr(intr_info & 0xff);
 
 		/*
@@ -2891,25 +2306,8 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		return (1);
 	case EXIT_REASON_INOUT:
 		vmm_stat_incr(vmx->vm, vcpu, VMEXIT_INOUT, 1);
-		vmexit->exitcode = VM_EXITCODE_INOUT;
-		vmexit->u.inout.bytes = (qual & 0x7) + 1;
-		vmexit->u.inout.in = in = (qual & 0x8) ? 1 : 0;
-		vmexit->u.inout.string = (qual & 0x10) ? 1 : 0;
-		vmexit->u.inout.rep = (qual & 0x20) ? 1 : 0;
-		vmexit->u.inout.port = (uint16_t)(qual >> 16);
-		vmexit->u.inout.eax = (uint32_t)(vmxctx->guest_rax);
-		if (vmexit->u.inout.string) {
-			inst_info = vmcs_read(VMCS_EXIT_INSTRUCTION_INFO);
-			vmexit->exitcode = VM_EXITCODE_INOUT_STR;
-			vis = &vmexit->u.inout_str;
-			vmx_paging_info(&vis->paging);
-			vis->rflags = vmcs_read(VMCS_GUEST_RFLAGS);
-			vis->cr0 = vmcs_read(VMCS_GUEST_CR0);
-			vis->index = inout_str_index(vmx, vcpu, in);
-			vis->count = inout_str_count(vmx, vcpu, vis->inout.rep);
-			vis->addrsize = inout_str_addrsize(inst_info);
-			inout_str_seginfo(vmx, vcpu, inst_info, in, vis);
-		}
+		vie = vm_vie_ctx(vmx->vm, vcpu);
+		vmexit_inout(vmexit, vie, qual, (uint32_t)vmxctx->guest_rax);
 		SDT_PROBE3(vmm, vmx, exit, inout, vmx, vcpu, vmexit);
 		break;
 	case EXIT_REASON_CPUID:
@@ -2921,7 +2319,7 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		vmm_stat_incr(vmx->vm, vcpu, VMEXIT_EXCEPTION, 1);
 		intr_info = vmcs_read(VMCS_EXIT_INTR_INFO);
 		KASSERT((intr_info & VMCS_INTR_VALID) != 0,
-		    ("VM exit interruption info invalid: %#x", intr_info));
+		    ("VM exit interruption info invalid: %x", intr_info));
 
 		intr_vec = intr_info & 0xff;
 		intr_type = intr_info & VMCS_INTR_T_MASK;
@@ -2952,11 +2350,7 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		 */
 		if (intr_vec == IDT_MC) {
 			VCPU_CTR0(vmx->vm, vcpu, "Vectoring to MCE handler");
-#ifdef __FreeBSD__
-			__asm __volatile("int $18");
-#else
 			vmm_call_trap(T_MCE);
-#endif
 			return (1);
 		}
 
@@ -2964,7 +2358,8 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		 * If the hypervisor has requested user exits for
 		 * debug exceptions, bounce them out to userland.
 		 */
-		if (intr_type == VMCS_INTR_T_SWEXCEPTION && intr_vec == IDT_BP &&
+		if (intr_type == VMCS_INTR_T_SWEXCEPTION &&
+		    intr_vec == IDT_BP &&
 		    (vmx->cap[vcpu].set & (1 << VM_CAP_BPT_EXIT))) {
 			vmexit->exitcode = VM_EXITCODE_BPT;
 			vmexit->u.bpt.inst_length = vmexit->inst_length;
@@ -2973,9 +2368,7 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 		}
 
 		if (intr_vec == IDT_PF) {
-			error = vmxctx_setreg(vmxctx, VM_REG_GUEST_CR2, qual);
-			KASSERT(error == 0, ("%s: vmxctx_setreg(cr2) error %d",
-			    __func__, error));
+			vmxctx->guest_cr2 = qual;
 		}
 
 		/*
@@ -2993,7 +2386,7 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 			errcode_valid = 1;
 			errcode = vmcs_read(VMCS_EXIT_INTR_ERRCODE);
 		}
-		VCPU_CTR2(vmx->vm, vcpu, "Reflecting exception %d/%#x into "
+		VCPU_CTR2(vmx->vm, vcpu, "Reflecting exception %d/%x into "
 		    "the guest", intr_vec, errcode);
 		SDT_PROBE5(vmm, vmx, exit, exception,
 		    vmx, vcpu, vmexit, intr_vec, errcode);
@@ -3020,8 +2413,9 @@ vmx_exit_process(struct vmx *vmx, int vcpu, struct vm_exit *vmexit)
 			SDT_PROBE5(vmm, vmx, exit, nestedfault,
 			    vmx, vcpu, vmexit, gpa, qual);
 		} else if (ept_emulation_fault(qual)) {
-			vmexit_inst_emul(vmexit, gpa, vmcs_gla());
-			vmm_stat_incr(vmx->vm, vcpu, VMEXIT_INST_EMUL, 1);
+			vie = vm_vie_ctx(vmx->vm, vcpu);
+			vmexit_mmio_emul(vmexit, vie, gpa, vmcs_gla());
+			vmm_stat_incr(vmx->vm, vcpu, VMEXIT_MMIO_EMUL, 1);
 			SDT_PROBE4(vmm, vmx, exit, mmiofault,
 			    vmx, vcpu, vmexit, gpa);
 		}
@@ -3152,9 +2546,7 @@ vmx_exit_inst_error(struct vmxctx *vmxctx, int rc, struct vm_exit *vmexit)
 	case VMX_VMRESUME_ERROR:
 	case VMX_VMLAUNCH_ERROR:
 	case VMX_INVEPT_ERROR:
-#ifndef __FreeBSD__
 	case VMX_VMWRITE_ERROR:
-#endif
 		vmexit->u.vmx.inst_type = rc;
 		break;
 	default:
@@ -3182,24 +2574,20 @@ vmx_exit_handle_nmi(struct vmx *vmx, int vcpuid, struct vm_exit *vmexit)
 
 	intr_info = vmcs_read(VMCS_EXIT_INTR_INFO);
 	KASSERT((intr_info & VMCS_INTR_VALID) != 0,
-	    ("VM exit interruption info invalid: %#x", intr_info));
+	    ("VM exit interruption info invalid: %x", intr_info));
 
 	if ((intr_info & VMCS_INTR_T_MASK) == VMCS_INTR_T_NMI) {
 		KASSERT((intr_info & 0xff) == IDT_NMI, ("VM exit due "
-		    "to NMI has invalid vector: %#x", intr_info));
+		    "to NMI has invalid vector: %x", intr_info));
 		VCPU_CTR0(vmx->vm, vcpuid, "Vectoring to NMI handler");
-#ifdef __FreeBSD__
-		__asm __volatile("int $2");
-#else
 		vmm_call_trap(T_NMIFLT);
-#endif
 	}
 }
 
 static __inline void
 vmx_dr_enter_guest(struct vmxctx *vmxctx)
 {
-	register_t rflags;
+	uint64_t rflags;
 
 	/* Save host control debug registers. */
 	vmxctx->host_dr7 = rdr7();
@@ -3264,41 +2652,38 @@ vmx_dr_leave_guest(struct vmxctx *vmxctx)
 }
 
 static int
-vmx_run(void *arg, int vcpu, register_t rip, pmap_t pmap,
-    struct vm_eventinfo *evinfo)
+vmx_run(void *arg, int vcpu, uint64_t rip, pmap_t pmap)
 {
 	int rc, handled, launched;
 	struct vmx *vmx;
 	struct vm *vm;
 	struct vmxctx *vmxctx;
-	struct vmcs *vmcs;
+	uintptr_t vmcs_pa;
 	struct vm_exit *vmexit;
 	struct vlapic *vlapic;
 	uint32_t exit_reason;
-#ifdef __FreeBSD__
-	struct region_descriptor gdtr, idtr;
-	uint16_t ldt_sel;
-#endif
+	bool tpr_shadow_active;
 
 	vmx = arg;
 	vm = vmx->vm;
-	vmcs = &vmx->vmcs[vcpu];
+	vmcs_pa = vmx->vmcs_pa[vcpu];
 	vmxctx = &vmx->ctx[vcpu];
 	vlapic = vm_lapic(vm, vcpu);
 	vmexit = vm_exitinfo(vm, vcpu);
 	launched = 0;
+	tpr_shadow_active = vmx_cap_en(vmx, VMX_CAP_TPR_SHADOW) &&
+	    !vmx_cap_en(vmx, VMX_CAP_APICV) &&
+	    (vmx->cap[vcpu].proc_ctls & PROCBASED_USE_TPR_SHADOW) != 0;
 
 	KASSERT(vmxctx->pmap == pmap,
 	    ("pmap %p different than ctx pmap %p", pmap, vmxctx->pmap));
 
 	vmx_msr_guest_enter(vmx, vcpu);
 
-	VMPTRLD(vmcs);
+	vmcs_load(vmcs_pa);
 
-#ifndef __FreeBSD__
 	VERIFY(vmx->vmcs_state[vcpu] == VS_NONE && curthread->t_preempt != 0);
 	vmx->vmcs_state[vcpu] = VS_LOADED;
-#endif
 
 	/*
 	 * XXX
@@ -3313,10 +2698,19 @@ vmx_run(void *arg, int vcpu, register_t rip, pmap_t pmap,
 	vmcs_write(VMCS_GUEST_RIP, rip);
 	vmx_set_pcpu_defaults(vmx, vcpu, pmap);
 	do {
+		enum event_inject_state inject_state;
+
 		KASSERT(vmcs_guest_rip() == rip, ("%s: vmcs guest rip mismatch "
-		    "%#lx/%#lx", __func__, vmcs_guest_rip(), rip));
+		    "%lx/%lx", __func__, vmcs_guest_rip(), rip));
 
 		handled = UNHANDLED;
+
+		/*
+		 * Perform initial event/exception/interrupt injection before
+		 * host CPU interrupts are disabled.
+		 */
+		inject_state = vmx_inject_events(vmx, vcpu, rip);
+
 		/*
 		 * Interrupts are disabled from this point on until the
 		 * guest starts executing. This is done for the following
@@ -3327,68 +2721,50 @@ vmx_run(void *arg, int vcpu, register_t rip, pmap_t pmap,
 		 * will cause a VM exit due to external interrupt as soon as
 		 * the guest state is loaded.
 		 *
-		 * A posted interrupt after 'vmx_inject_interrupts()' will
-		 * not be "lost" because it will be held pending in the host
-		 * APIC because interrupts are disabled. The pending interrupt
-		 * will be recognized as soon as the guest state is loaded.
+		 * A posted interrupt after vmx_inject_vlapic() will not be
+		 * "lost" because it will be held pending in the host APIC
+		 * because interrupts are disabled. The pending interrupt will
+		 * be recognized as soon as the guest state is loaded.
 		 *
 		 * The same reasoning applies to the IPI generated by
 		 * pmap_invalidate_ept().
 		 */
-#ifdef __FreeBSD__
 		disable_intr();
-		vmx_inject_interrupts(vmx, vcpu, vlapic, rip);
-#else
-		/*
-		 * The bulk of guest interrupt injection is done without
-		 * interrupts disabled on the host CPU.  This is necessary
-		 * since contended mutexes might force the thread to sleep.
-		 */
-		vmx_inject_interrupts(vmx, vcpu, vlapic, rip);
-		disable_intr();
-		if (virtual_interrupt_delivery) {
-			vmx_inject_pir(vlapic);
-		}
-#endif /* __FreeBSD__ */
 
 		/*
-		 * Check for vcpu suspension after injecting events because
-		 * vmx_inject_interrupts() can suspend the vcpu due to a
-		 * triple fault.
+		 * If not precluded by existing events, inject any interrupt
+		 * pending on the vLAPIC.  As a lock-less operation, it is safe
+		 * (and prudent) to perform with host CPU interrupts disabled.
 		 */
-		if (vcpu_suspended(evinfo)) {
+		if (inject_state == EIS_CAN_INJECT) {
+			inject_state = vmx_inject_vlapic(vmx, vcpu, vlapic);
+		}
+
+		/*
+		 * Check for vCPU bail-out conditions.  This must be done after
+		 * vmx_inject_events() to detect a triple-fault condition.
+		 */
+		if (vcpu_entry_bailout_checks(vmx->vm, vcpu, rip)) {
 			enable_intr();
-			vm_exit_suspended(vmx->vm, vcpu, rip);
 			break;
 		}
 
-		if (vcpu_runblocked(evinfo)) {
+		if (vcpu_run_state_pending(vm, vcpu)) {
 			enable_intr();
-			vm_exit_runblock(vmx->vm, vcpu, rip);
+			vm_exit_run_state(vmx->vm, vcpu, rip);
 			break;
 		}
 
-		if (vcpu_reqidle(evinfo)) {
+		/*
+		 * If subsequent activity queued events which require injection
+		 * handling, take another lap to handle them.
+		 */
+		if (vmx_inject_recheck(vmx, vcpu, inject_state)) {
 			enable_intr();
-			vm_exit_reqidle(vmx->vm, vcpu, rip);
-			break;
-		}
-
-		if (vcpu_should_yield(vm, vcpu)) {
-			enable_intr();
-			vm_exit_astpending(vmx->vm, vcpu, rip);
-			vmx_astpending_trace(vmx, vcpu, rip);
 			handled = HANDLED;
-			break;
+			continue;
 		}
 
-		if (vcpu_debugged(vm, vcpu)) {
-			enable_intr();
-			vm_exit_debug(vmx->vm, vcpu, rip);
-			break;
-		}
-
-#ifndef __FreeBSD__
 		if ((rc = smt_acquire()) != 1) {
 			enable_intr();
 			vmexit->rip = rip;
@@ -3428,47 +2804,24 @@ vmx_run(void *arg, int vcpu, register_t rip, pmap_t pmap,
 			handled = UNHANDLED;
 			break;
 		}
-#else
-		/*
-		 * VM exits restore the base address but not the
-		 * limits of GDTR and IDTR.  The VMCS only stores the
-		 * base address, so VM exits set the limits to 0xffff.
-		 * Save and restore the full GDTR and IDTR to restore
-		 * the limits.
-		 *
-		 * The VMCS does not save the LDTR at all, and VM
-		 * exits clear LDTR as if a NULL selector were loaded.
-		 * The userspace hypervisor probably doesn't use a
-		 * LDT, but save and restore it to be safe.
-		 */
-		sgdt(&gdtr);
-		sidt(&idtr);
-		ldt_sel = sldt();
-#endif
 
-		/*
-		 * If TPR Shadowing is enabled, the TPR Threshold
-		 * must be updated right before entering the guest.
-		 */
-		if (tpr_shadowing && !virtual_interrupt_delivery) {
-			if ((vmx->cap[vcpu].proc_ctls & PROCBASED_USE_TPR_SHADOW) != 0) {
-				vmcs_write(VMCS_TPR_THRESHOLD, vlapic_get_cr8(vlapic));
-			}
+		if (tpr_shadow_active) {
+			vmx_tpr_shadow_enter(vlapic);
 		}
 
 		vmx_run_trace(vmx, vcpu);
+		vcpu_ustate_change(vm, vcpu, VU_RUN);
 		vmx_dr_enter_guest(vmxctx);
 		rc = vmx_enter_guest(vmxctx, vmx, launched);
 		vmx_dr_leave_guest(vmxctx);
+		vcpu_ustate_change(vm, vcpu, VU_EMU_KERN);
 
-#ifndef	__FreeBSD__
 		vmx->vmcs_state[vcpu] |= VS_LAUNCHED;
 		smt_release();
-#else
-		bare_lgdt(&gdtr);
-		lidt(&idtr);
-		lldt(ldt_sel);
-#endif
+
+		if (tpr_shadow_active) {
+			vmx_tpr_shadow_exit(vlapic);
+		}
 
 		/* Collect some information for VM exit processing */
 		vmexit->rip = rip = vmcs_guest_rip();
@@ -3487,36 +2840,25 @@ vmx_run(void *arg, int vcpu, register_t rip, pmap_t pmap,
 			enable_intr();
 			vmx_exit_inst_error(vmxctx, rc, vmexit);
 		}
-#ifdef	__FreeBSD__
-		launched = 1;
-#endif
-		vmx_exit_trace(vmx, vcpu, rip, exit_reason, handled);
+		DTRACE_PROBE3(vmm__vexit, int, vcpu, uint64_t, rip,
+		    uint32_t, exit_reason);
 		rip = vmexit->rip;
 	} while (handled);
 
-	/*
-	 * If a VM exit has been handled then the exitcode must be BOGUS
-	 * If a VM exit is not handled then the exitcode must not be BOGUS
-	 */
-	if ((handled && vmexit->exitcode != VM_EXITCODE_BOGUS) ||
-	    (!handled && vmexit->exitcode == VM_EXITCODE_BOGUS)) {
-		panic("Mismatch between handled (%d) and exitcode (%d)",
-		      handled, vmexit->exitcode);
+	/* If a VM exit has been handled then the exitcode must be BOGUS */
+	if (handled && vmexit->exitcode != VM_EXITCODE_BOGUS) {
+		panic("Non-BOGUS exitcode (%d) unexpected for handled VM exit",
+		    vmexit->exitcode);
 	}
-
-	if (!handled)
-		vmm_stat_incr(vm, vcpu, VMEXIT_USERSPACE, 1);
 
 	VCPU_CTR1(vm, vcpu, "returning from vmx_run: exitcode %d",
 	    vmexit->exitcode);
 
-	VMCLEAR(vmcs);
+	vmcs_clear(vmcs_pa);
 	vmx_msr_guest_exit(vmx, vcpu);
 
-#ifndef __FreeBSD__
 	VERIFY(vmx->vmcs_state != VS_NONE && curthread->t_preempt != 0);
 	vmx->vmcs_state[vcpu] = VS_NONE;
-#endif
 
 	return (0);
 }
@@ -3536,14 +2878,11 @@ vmx_vmcleanup(void *arg)
 		vpid_free(vmx->state[i].vpid);
 
 	free(vmx, M_VMX);
-
-	return;
 }
 
-static register_t *
+static uint64_t *
 vmxctx_regptr(struct vmxctx *vmxctx, int reg)
 {
-
 	switch (reg) {
 	case VM_REG_GUEST_RAX:
 		return (&vmxctx->guest_rax);
@@ -3594,157 +2933,129 @@ vmxctx_regptr(struct vmxctx *vmxctx, int reg)
 }
 
 static int
-vmxctx_getreg(struct vmxctx *vmxctx, int reg, uint64_t *retval)
-{
-	register_t *regp;
-
-	if ((regp = vmxctx_regptr(vmxctx, reg)) != NULL) {
-		*retval = *regp;
-		return (0);
-	} else
-		return (EINVAL);
-}
-
-static int
-vmxctx_setreg(struct vmxctx *vmxctx, int reg, uint64_t val)
-{
-	register_t *regp;
-
-	if ((regp = vmxctx_regptr(vmxctx, reg)) != NULL) {
-		*regp = val;
-		return (0);
-	} else
-		return (EINVAL);
-}
-
-static int
-vmx_get_intr_shadow(struct vmx *vmx, int vcpu, int running, uint64_t *retval)
-{
-	uint64_t gi;
-	int error;
-
-	error = vmcs_getreg(&vmx->vmcs[vcpu], running,
-	    VMCS_IDENT(VMCS_GUEST_INTERRUPTIBILITY), &gi);
-	*retval = (gi & HWINTR_BLOCKING) ? 1 : 0;
-	return (error);
-}
-
-static int
-vmx_modify_intr_shadow(struct vmx *vmx, int vcpu, int running, uint64_t val)
-{
-	struct vmcs *vmcs;
-	uint64_t gi;
-	int error, ident;
-
-	/*
-	 * Forcing the vcpu into an interrupt shadow is not supported.
-	 */
-	if (val) {
-		error = EINVAL;
-		goto done;
-	}
-
-	vmcs = &vmx->vmcs[vcpu];
-	ident = VMCS_IDENT(VMCS_GUEST_INTERRUPTIBILITY);
-	error = vmcs_getreg(vmcs, running, ident, &gi);
-	if (error == 0) {
-		gi &= ~HWINTR_BLOCKING;
-		error = vmcs_setreg(vmcs, running, ident, gi);
-	}
-done:
-	VCPU_CTR2(vmx->vm, vcpu, "Setting intr_shadow to %#lx %s", val,
-	    error ? "failed" : "succeeded");
-	return (error);
-}
-
-static int
-vmx_shadow_reg(int reg)
-{
-	int shreg;
-
-	shreg = -1;
-
-	switch (reg) {
-	case VM_REG_GUEST_CR0:
-		shreg = VMCS_CR0_SHADOW;
-		break;
-	case VM_REG_GUEST_CR4:
-		shreg = VMCS_CR4_SHADOW;
-		break;
-	default:
-		break;
-	}
-
-	return (shreg);
-}
-
-static int
 vmx_getreg(void *arg, int vcpu, int reg, uint64_t *retval)
 {
-	int running, hostcpu;
+	int running, hostcpu, err;
 	struct vmx *vmx = arg;
+	uint64_t *regp;
 
 	running = vcpu_is_running(vmx->vm, vcpu, &hostcpu);
 	if (running && hostcpu != curcpu)
 		panic("vmx_getreg: %s%d is running", vm_name(vmx->vm), vcpu);
 
-	if (reg == VM_REG_GUEST_INTR_SHADOW)
-		return (vmx_get_intr_shadow(vmx, vcpu, running, retval));
-
-	if (vmxctx_getreg(&vmx->ctx[vcpu], reg, retval) == 0)
+	/* VMCS access not required for ctx reads */
+	if ((regp = vmxctx_regptr(&vmx->ctx[vcpu], reg)) != NULL) {
+		*retval = *regp;
 		return (0);
+	}
 
-	return (vmcs_getreg(&vmx->vmcs[vcpu], running, reg, retval));
+	if (!running) {
+		vmcs_load(vmx->vmcs_pa[vcpu]);
+	}
+
+	err = EINVAL;
+	if (reg == VM_REG_GUEST_INTR_SHADOW) {
+		uint64_t gi = vmcs_read(VMCS_GUEST_INTERRUPTIBILITY);
+		*retval = (gi & HWINTR_BLOCKING) ? 1 : 0;
+		err = 0;
+	} else {
+		uint32_t encoding;
+
+		encoding = vmcs_field_encoding(reg);
+		if (encoding != VMCS_INVALID_ENCODING) {
+			*retval = vmcs_read(encoding);
+			err = 0;
+		}
+	}
+
+	if (!running) {
+		vmcs_clear(vmx->vmcs_pa[vcpu]);
+	}
+
+	return (err);
 }
 
 static int
 vmx_setreg(void *arg, int vcpu, int reg, uint64_t val)
 {
-	int error, hostcpu, running, shadow;
-	uint64_t ctls;
-	pmap_t pmap;
+	int running, hostcpu, error;
 	struct vmx *vmx = arg;
+	uint64_t *regp;
 
 	running = vcpu_is_running(vmx->vm, vcpu, &hostcpu);
 	if (running && hostcpu != curcpu)
 		panic("vmx_setreg: %s%d is running", vm_name(vmx->vm), vcpu);
 
-	if (reg == VM_REG_GUEST_INTR_SHADOW)
-		return (vmx_modify_intr_shadow(vmx, vcpu, running, val));
-
-	if (vmxctx_setreg(&vmx->ctx[vcpu], reg, val) == 0)
+	/* VMCS access not required for ctx writes */
+	if ((regp = vmxctx_regptr(&vmx->ctx[vcpu], reg)) != NULL) {
+		*regp = val;
 		return (0);
+	}
 
-	error = vmcs_setreg(&vmx->vmcs[vcpu], running, reg, val);
+	if (!running) {
+		vmcs_load(vmx->vmcs_pa[vcpu]);
+	}
 
-	if (error == 0) {
-		/*
-		 * If the "load EFER" VM-entry control is 1 then the
-		 * value of EFER.LMA must be identical to "IA-32e mode guest"
-		 * bit in the VM-entry control.
-		 */
-		if ((entry_ctls & VM_ENTRY_LOAD_EFER) != 0 &&
-		    (reg == VM_REG_GUEST_EFER)) {
-			vmcs_getreg(&vmx->vmcs[vcpu], running,
-				    VMCS_IDENT(VMCS_ENTRY_CTLS), &ctls);
-			if (val & EFER_LMA)
-				ctls |= VM_ENTRY_GUEST_LMA;
-			else
-				ctls &= ~VM_ENTRY_GUEST_LMA;
-			vmcs_setreg(&vmx->vmcs[vcpu], running,
-				    VMCS_IDENT(VMCS_ENTRY_CTLS), ctls);
-		}
-
-		shadow = vmx_shadow_reg(reg);
-		if (shadow > 0) {
+	if (reg == VM_REG_GUEST_INTR_SHADOW) {
+		if (val != 0) {
 			/*
-			 * Store the unmodified value in the shadow
+			 * Forcing the vcpu into an interrupt shadow is not
+			 * presently supported.
 			 */
-			error = vmcs_setreg(&vmx->vmcs[vcpu], running,
-				    VMCS_IDENT(shadow), val);
-		}
+			error = EINVAL;
+		} else {
+			uint64_t gi;
 
-		if (reg == VM_REG_GUEST_CR3) {
+			gi = vmcs_read(VMCS_GUEST_INTERRUPTIBILITY);
+			gi &= ~HWINTR_BLOCKING;
+			vmcs_write(VMCS_GUEST_INTERRUPTIBILITY, gi);
+			error = 0;
+		}
+	} else {
+		uint32_t encoding;
+
+		error = 0;
+		encoding = vmcs_field_encoding(reg);
+		switch (encoding) {
+		case VMCS_GUEST_IA32_EFER:
+			/*
+			 * If the "load EFER" VM-entry control is 1 then the
+			 * value of EFER.LMA must be identical to "IA-32e mode
+			 * guest" bit in the VM-entry control.
+			 */
+			if ((entry_ctls & VM_ENTRY_LOAD_EFER) != 0) {
+				uint64_t ctls;
+
+				ctls = vmcs_read(VMCS_ENTRY_CTLS);
+				if (val & EFER_LMA) {
+					ctls |= VM_ENTRY_GUEST_LMA;
+				} else {
+					ctls &= ~VM_ENTRY_GUEST_LMA;
+				}
+				vmcs_write(VMCS_ENTRY_CTLS, ctls);
+			}
+			vmcs_write(encoding, val);
+			break;
+		case VMCS_GUEST_CR0:
+			/*
+			 * The guest is not allowed to modify certain bits in
+			 * %cr0 and %cr4.  To maintain the illusion of full
+			 * control, they have shadow versions which contain the
+			 * guest-perceived (via reads from the register) values
+			 * as opposed to the guest-effective values.
+			 *
+			 * This is detailed in the SDM: Vol. 3 Ch. 24.6.6.
+			 */
+			vmcs_write(VMCS_CR0_SHADOW, val);
+			vmcs_write(encoding, vmx_fix_cr0(val));
+			break;
+		case VMCS_GUEST_CR4:
+			/* See above for detail on %cr4 shadowing */
+			vmcs_write(VMCS_CR4_SHADOW, val);
+			vmcs_write(encoding, vmx_fix_cr4(val));
+			break;
+		case VMCS_GUEST_CR3:
+			vmcs_write(encoding, val);
 			/*
 			 * Invalidate the guest vcpu's TLB mappings to emulate
 			 * the behavior of updating %cr3.
@@ -3752,38 +3063,80 @@ vmx_setreg(void *arg, int vcpu, int reg, uint64_t val)
 			 * XXX the processor retains global mappings when %cr3
 			 * is updated but vmx_invvpid() does not.
 			 */
-			pmap = vmx->ctx[vcpu].pmap;
-			vmx_invvpid(vmx, vcpu, pmap, running);
+			vmx_invvpid(vmx, vcpu, vmx->ctx[vcpu].pmap, running);
+			break;
+		case VMCS_INVALID_ENCODING:
+			error = EINVAL;
+			break;
+		default:
+			vmcs_write(encoding, val);
+			break;
 		}
+	}
+
+	if (!running) {
+		vmcs_clear(vmx->vmcs_pa[vcpu]);
 	}
 
 	return (error);
 }
 
 static int
-vmx_getdesc(void *arg, int vcpu, int reg, struct seg_desc *desc)
+vmx_getdesc(void *arg, int vcpu, int seg, struct seg_desc *desc)
 {
 	int hostcpu, running;
 	struct vmx *vmx = arg;
+	uint32_t base, limit, access;
 
 	running = vcpu_is_running(vmx->vm, vcpu, &hostcpu);
 	if (running && hostcpu != curcpu)
 		panic("vmx_getdesc: %s%d is running", vm_name(vmx->vm), vcpu);
 
-	return (vmcs_getdesc(&vmx->vmcs[vcpu], running, reg, desc));
+	if (!running) {
+		vmcs_load(vmx->vmcs_pa[vcpu]);
+	}
+
+	vmcs_seg_desc_encoding(seg, &base, &limit, &access);
+	desc->base = vmcs_read(base);
+	desc->limit = vmcs_read(limit);
+	if (access != VMCS_INVALID_ENCODING) {
+		desc->access = vmcs_read(access);
+	} else {
+		desc->access = 0;
+	}
+
+	if (!running) {
+		vmcs_clear(vmx->vmcs_pa[vcpu]);
+	}
+	return (0);
 }
 
 static int
-vmx_setdesc(void *arg, int vcpu, int reg, struct seg_desc *desc)
+vmx_setdesc(void *arg, int vcpu, int seg, const struct seg_desc *desc)
 {
 	int hostcpu, running;
 	struct vmx *vmx = arg;
+	uint32_t base, limit, access;
 
 	running = vcpu_is_running(vmx->vm, vcpu, &hostcpu);
 	if (running && hostcpu != curcpu)
 		panic("vmx_setdesc: %s%d is running", vm_name(vmx->vm), vcpu);
 
-	return (vmcs_setdesc(&vmx->vmcs[vcpu], running, reg, desc));
+	if (!running) {
+		vmcs_load(vmx->vmcs_pa[vcpu]);
+	}
+
+	vmcs_seg_desc_encoding(seg, &base, &limit, &access);
+	vmcs_write(base, desc->base);
+	vmcs_write(limit, desc->limit);
+	if (access != VMCS_INVALID_ENCODING) {
+		vmcs_write(access, desc->access);
+	}
+
+	if (!running) {
+		vmcs_clear(vmx->vmcs_pa[vcpu]);
+	}
+	return (0);
 }
 
 static int
@@ -3810,10 +3163,6 @@ vmx_getcap(void *arg, int vcpu, int type, int *retval)
 		if (cap_monitor_trap)
 			ret = 0;
 		break;
-	case VM_CAP_UNRESTRICTED_GUEST:
-		if (cap_unrestricted_guest)
-			ret = 0;
-		break;
 	case VM_CAP_ENABLE_INVPCID:
 		if (cap_invpcid)
 			ret = 0;
@@ -3835,21 +3184,17 @@ static int
 vmx_setcap(void *arg, int vcpu, int type, int val)
 {
 	struct vmx *vmx = arg;
-	struct vmcs *vmcs = &vmx->vmcs[vcpu];
-	uint32_t baseval;
+	uint32_t baseval, reg, flag;
 	uint32_t *pptr;
 	int error;
-	int flag;
-	int reg;
-	int retval;
 
-	retval = ENOENT;
+	error = ENOENT;
 	pptr = NULL;
 
 	switch (type) {
 	case VM_CAP_HALT_EXIT:
 		if (cap_halt_exit) {
-			retval = 0;
+			error = 0;
 			pptr = &vmx->cap[vcpu].proc_ctls;
 			baseval = *pptr;
 			flag = PROCBASED_HLT_EXITING;
@@ -3858,7 +3203,7 @@ vmx_setcap(void *arg, int vcpu, int type, int val)
 		break;
 	case VM_CAP_MTRAP_EXIT:
 		if (cap_monitor_trap) {
-			retval = 0;
+			error = 0;
 			pptr = &vmx->cap[vcpu].proc_ctls;
 			baseval = *pptr;
 			flag = PROCBASED_MTF;
@@ -3867,25 +3212,16 @@ vmx_setcap(void *arg, int vcpu, int type, int val)
 		break;
 	case VM_CAP_PAUSE_EXIT:
 		if (cap_pause_exit) {
-			retval = 0;
+			error = 0;
 			pptr = &vmx->cap[vcpu].proc_ctls;
 			baseval = *pptr;
 			flag = PROCBASED_PAUSE_EXITING;
 			reg = VMCS_PRI_PROC_BASED_CTLS;
 		}
 		break;
-	case VM_CAP_UNRESTRICTED_GUEST:
-		if (cap_unrestricted_guest) {
-			retval = 0;
-			pptr = &vmx->cap[vcpu].proc_ctls2;
-			baseval = *pptr;
-			flag = PROCBASED2_UNRESTRICTED_GUEST;
-			reg = VMCS_SEC_PROC_BASED_CTLS;
-		}
-		break;
 	case VM_CAP_ENABLE_INVPCID:
 		if (cap_invpcid) {
-			retval = 0;
+			error = 0;
 			pptr = &vmx->cap[vcpu].proc_ctls2;
 			baseval = *pptr;
 			flag = PROCBASED2_ENABLE_INVPCID;
@@ -3893,7 +3229,7 @@ vmx_setcap(void *arg, int vcpu, int type, int val)
 		}
 		break;
 	case VM_CAP_BPT_EXIT:
-		retval = 0;
+		error = 0;
 
 		/* Don't change the bitmap if we are tracing all exceptions. */
 		if (vmx->cap[vcpu].exc_bitmap != 0xffffffff) {
@@ -3907,8 +3243,9 @@ vmx_setcap(void *arg, int vcpu, int type, int val)
 		break;
 	}
 
-	if (retval)
-		return (retval);
+	if (error != 0) {
+		return (error);
+	}
 
 	if (pptr != NULL) {
 		if (val) {
@@ -3916,12 +3253,9 @@ vmx_setcap(void *arg, int vcpu, int type, int val)
 		} else {
 			baseval &= ~flag;
 		}
-		VMPTRLD(vmcs);
-		error = vmwrite(reg, baseval);
-		VMCLEAR(vmcs);
-
-		if (error)
-			return (error);
+		vmcs_load(vmx->vmcs_pa[vcpu]);
+		vmcs_write(reg, baseval);
+		vmcs_clear(vmx->vmcs_pa[vcpu]);
 
 		/*
 		 * Update optional stored flags, and record
@@ -3941,47 +3275,73 @@ vmx_setcap(void *arg, int vcpu, int type, int val)
 
 struct vlapic_vtx {
 	struct vlapic	vlapic;
+
+	/* Align to the nearest cacheline */
+	uint8_t		_pad[64 - (sizeof (struct vlapic) % 64)];
+
+	/* TMR handling state for posted interrupts */
+	uint32_t	tmr_active[8];
+	uint32_t	pending_level[8];
+	uint32_t	pending_edge[8];
+
 	struct pir_desc	*pir_desc;
 	struct vmx	*vmx;
-	u_int	pending_prio;
+	uint_t	pending_prio;
+	boolean_t	tmr_sync;
 };
 
-#define VPR_PRIO_BIT(vpr)	(1 << ((vpr) >> 4))
+CTASSERT((offsetof(struct vlapic_vtx, tmr_active) & 63) == 0);
 
-#define	VMX_CTR_PIR(vm, vcpuid, pir_desc, notify, vector, level, msg)	\
-do {									\
-	VCPU_CTR2(vm, vcpuid, msg " assert %s-triggered vector %d",	\
-	    level ? "level" : "edge", vector);				\
-	VCPU_CTR1(vm, vcpuid, msg " pir0 0x%016lx", pir_desc->pir[0]);	\
-	VCPU_CTR1(vm, vcpuid, msg " pir1 0x%016lx", pir_desc->pir[1]);	\
-	VCPU_CTR1(vm, vcpuid, msg " pir2 0x%016lx", pir_desc->pir[2]);	\
-	VCPU_CTR1(vm, vcpuid, msg " pir3 0x%016lx", pir_desc->pir[3]);	\
-	VCPU_CTR1(vm, vcpuid, msg " notify: %s", notify ? "yes" : "no");\
-} while (0)
+#define	VPR_PRIO_BIT(vpr)	(1 << ((vpr) >> 4))
 
-/*
- * vlapic->ops handlers that utilize the APICv hardware assist described in
- * Chapter 29 of the Intel SDM.
- */
-static int
-vmx_set_intr_ready(struct vlapic *vlapic, int vector, bool level)
+static vcpu_notify_t
+vmx_apicv_set_ready(struct vlapic *vlapic, int vector, bool level)
 {
 	struct vlapic_vtx *vlapic_vtx;
 	struct pir_desc *pir_desc;
-	uint64_t mask;
-	int idx, notify = 0;
+	uint32_t mask, tmrval;
+	int idx;
+	vcpu_notify_t notify = VCPU_NOTIFY_NONE;
 
 	vlapic_vtx = (struct vlapic_vtx *)vlapic;
 	pir_desc = vlapic_vtx->pir_desc;
+	idx = vector / 32;
+	mask = 1UL << (vector % 32);
 
 	/*
-	 * Keep track of interrupt requests in the PIR descriptor. This is
-	 * because the virtual APIC page pointed to by the VMCS cannot be
-	 * modified if the vcpu is running.
+	 * If the currently asserted TMRs do not match the state requested by
+	 * the incoming interrupt, an exit will be required to reconcile those
+	 * bits in the APIC page.  This will keep the vLAPIC behavior in line
+	 * with the architecturally defined expectations.
+	 *
+	 * If actors of mixed types (edge and level) are racing against the same
+	 * vector (toggling its TMR bit back and forth), the results could
+	 * inconsistent.  Such circumstances are considered a rare edge case and
+	 * are never expected to be found in the wild.
 	 */
-	idx = vector / 64;
-	mask = 1UL << (vector % 64);
-	atomic_set_long(&pir_desc->pir[idx], mask);
+	tmrval = atomic_load_acq_int(&vlapic_vtx->tmr_active[idx]);
+	if (!level) {
+		if ((tmrval & mask) != 0) {
+			/* Edge-triggered interrupt needs TMR de-asserted */
+			atomic_set_int(&vlapic_vtx->pending_edge[idx], mask);
+			atomic_store_rel_long(&pir_desc->pending, 1);
+			return (VCPU_NOTIFY_EXIT);
+		}
+	} else {
+		if ((tmrval & mask) == 0) {
+			/* Level-triggered interrupt needs TMR asserted */
+			atomic_set_int(&vlapic_vtx->pending_level[idx], mask);
+			atomic_store_rel_long(&pir_desc->pending, 1);
+			return (VCPU_NOTIFY_EXIT);
+		}
+	}
+
+	/*
+	 * If the interrupt request does not require manipulation of the TMRs
+	 * for delivery, set it in PIR descriptor.  It cannot be inserted into
+	 * the APIC page while the vCPU might be running.
+	 */
+	atomic_set_int(&pir_desc->pir[idx], mask);
 
 	/*
 	 * A notification is required whenever the 'pending' bit makes a
@@ -4002,134 +3362,63 @@ vmx_set_intr_ready(struct vlapic *vlapic, int vector, bool level)
 	 * cleared whenever the 'pending' bit makes another 0->1 transition.
 	 */
 	if (atomic_cmpset_long(&pir_desc->pending, 0, 1) != 0) {
-		notify = 1;
+		notify = VCPU_NOTIFY_APIC;
 		vlapic_vtx->pending_prio = 0;
 	} else {
-		const u_int old_prio = vlapic_vtx->pending_prio;
-		const u_int prio_bit = VPR_PRIO_BIT(vector & APIC_TPR_INT);
+		const uint_t old_prio = vlapic_vtx->pending_prio;
+		const uint_t prio_bit = VPR_PRIO_BIT(vector & APIC_TPR_INT);
 
 		if ((old_prio & prio_bit) == 0 && prio_bit > old_prio) {
 			atomic_set_int(&vlapic_vtx->pending_prio, prio_bit);
-			notify = 1;
+			notify = VCPU_NOTIFY_APIC;
 		}
 	}
 
-	VMX_CTR_PIR(vlapic->vm, vlapic->vcpuid, pir_desc, notify, vector,
-	    level, "vmx_set_intr_ready");
 	return (notify);
 }
 
-static int
-vmx_pending_intr(struct vlapic *vlapic, int *vecptr)
-{
-	struct vlapic_vtx *vlapic_vtx;
-	struct pir_desc *pir_desc;
-	struct LAPIC *lapic;
-	uint64_t pending, pirval;
-	uint32_t ppr, vpr;
-	int i;
-
-	/*
-	 * This function is only expected to be called from the 'HLT' exit
-	 * handler which does not care about the vector that is pending.
-	 */
-	KASSERT(vecptr == NULL, ("vmx_pending_intr: vecptr must be NULL"));
-
-	vlapic_vtx = (struct vlapic_vtx *)vlapic;
-	pir_desc = vlapic_vtx->pir_desc;
-
-	pending = atomic_load_acq_long(&pir_desc->pending);
-	if (!pending) {
-		/*
-		 * While a virtual interrupt may have already been
-		 * processed the actual delivery maybe pending the
-		 * interruptibility of the guest.  Recognize a pending
-		 * interrupt by reevaluating virtual interrupts
-		 * following Section 29.2.1 in the Intel SDM Volume 3.
-		 */
-		struct vm_exit *vmexit;
-		uint8_t rvi, ppr;
-
-		vmexit = vm_exitinfo(vlapic->vm, vlapic->vcpuid);
-		rvi = vmexit->u.hlt.intr_status & APIC_TPR_INT;
-		lapic = vlapic->apic_page;
-		ppr = lapic->ppr & APIC_TPR_INT;
-		if (rvi > ppr) {
-			return (1);
-		}
-
-		return (0);
-	}
-
-	/*
-	 * If there is an interrupt pending then it will be recognized only
-	 * if its priority is greater than the processor priority.
-	 *
-	 * Special case: if the processor priority is zero then any pending
-	 * interrupt will be recognized.
-	 */
-	lapic = vlapic->apic_page;
-	ppr = lapic->ppr & APIC_TPR_INT;
-	if (ppr == 0)
-		return (1);
-
-	VCPU_CTR1(vlapic->vm, vlapic->vcpuid, "HLT with non-zero PPR %d",
-	    lapic->ppr);
-
-	vpr = 0;
-	for (i = 3; i >= 0; i--) {
-		pirval = pir_desc->pir[i];
-		if (pirval != 0) {
-			vpr = (i * 64 + flsl(pirval) - 1) & APIC_TPR_INT;
-			break;
-		}
-	}
-
-	/*
-	 * If the highest-priority pending interrupt falls short of the
-	 * processor priority of this vCPU, ensure that 'pending_prio' does not
-	 * have any stale bits which would preclude a higher-priority interrupt
-	 * from incurring a notification later.
-	 */
-	if (vpr <= ppr) {
-		const u_int prio_bit = VPR_PRIO_BIT(vpr);
-		const u_int old = vlapic_vtx->pending_prio;
-
-		if (old > prio_bit && (old & prio_bit) == 0) {
-			vlapic_vtx->pending_prio = prio_bit;
-		}
-		return (0);
-	}
-	return (1);
-}
-
 static void
-vmx_intr_accepted(struct vlapic *vlapic, int vector)
+vmx_apicv_accepted(struct vlapic *vlapic, int vector)
 {
-
+	/*
+	 * When APICv is enabled for an instance, the traditional interrupt
+	 * injection method (populating ENTRY_INTR_INFO in the VMCS) is not
+	 * used and the CPU does the heavy lifting of virtual interrupt
+	 * delivery.  For that reason vmx_intr_accepted() should never be called
+	 * when APICv is enabled.
+	 */
 	panic("vmx_intr_accepted: not expected to be called");
 }
 
 static void
-vmx_set_tmr(struct vlapic *vlapic, const uint32_t *masks)
+vmx_apicv_sync_tmr(struct vlapic *vlapic)
 {
-	vmcs_write(VMCS_EOI_EXIT0, ((uint64_t)masks[1] << 32) | masks[0]);
-	vmcs_write(VMCS_EOI_EXIT1, ((uint64_t)masks[3] << 32) | masks[2]);
-	vmcs_write(VMCS_EOI_EXIT2, ((uint64_t)masks[5] << 32) | masks[4]);
-	vmcs_write(VMCS_EOI_EXIT3, ((uint64_t)masks[7] << 32) | masks[6]);
+	struct vlapic_vtx *vlapic_vtx;
+	const uint32_t *tmrs;
+
+	vlapic_vtx = (struct vlapic_vtx *)vlapic;
+	tmrs = &vlapic_vtx->tmr_active[0];
+
+	if (!vlapic_vtx->tmr_sync) {
+		return;
+	}
+
+	vmcs_write(VMCS_EOI_EXIT0, ((uint64_t)tmrs[1] << 32) | tmrs[0]);
+	vmcs_write(VMCS_EOI_EXIT1, ((uint64_t)tmrs[3] << 32) | tmrs[2]);
+	vmcs_write(VMCS_EOI_EXIT2, ((uint64_t)tmrs[5] << 32) | tmrs[4]);
+	vmcs_write(VMCS_EOI_EXIT3, ((uint64_t)tmrs[7] << 32) | tmrs[6]);
+	vlapic_vtx->tmr_sync = B_FALSE;
 }
 
 static void
 vmx_enable_x2apic_mode_ts(struct vlapic *vlapic)
 {
 	struct vmx *vmx;
-	struct vmcs *vmcs;
 	uint32_t proc_ctls;
 	int vcpuid;
 
 	vcpuid = vlapic->vcpuid;
 	vmx = ((struct vlapic_vtx *)vlapic)->vmx;
-	vmcs = &vmx->vmcs[vcpuid];
 
 	proc_ctls = vmx->cap[vcpuid].proc_ctls;
 	proc_ctls &= ~PROCBASED_USE_TPR_SHADOW;
@@ -4137,34 +3426,32 @@ vmx_enable_x2apic_mode_ts(struct vlapic *vlapic)
 	proc_ctls |= PROCBASED_CR8_STORE_EXITING;
 	vmx->cap[vcpuid].proc_ctls = proc_ctls;
 
-	VMPTRLD(vmcs);
+	vmcs_load(vmx->vmcs_pa[vcpuid]);
 	vmcs_write(VMCS_PRI_PROC_BASED_CTLS, proc_ctls);
-	VMCLEAR(vmcs);
+	vmcs_clear(vmx->vmcs_pa[vcpuid]);
 }
 
 static void
 vmx_enable_x2apic_mode_vid(struct vlapic *vlapic)
 {
 	struct vmx *vmx;
-	struct vmcs *vmcs;
 	uint32_t proc_ctls2;
 	int vcpuid, error;
 
 	vcpuid = vlapic->vcpuid;
 	vmx = ((struct vlapic_vtx *)vlapic)->vmx;
-	vmcs = &vmx->vmcs[vcpuid];
 
 	proc_ctls2 = vmx->cap[vcpuid].proc_ctls2;
 	KASSERT((proc_ctls2 & PROCBASED2_VIRTUALIZE_APIC_ACCESSES) != 0,
-	    ("%s: invalid proc_ctls2 %#x", __func__, proc_ctls2));
+	    ("%s: invalid proc_ctls2 %x", __func__, proc_ctls2));
 
 	proc_ctls2 &= ~PROCBASED2_VIRTUALIZE_APIC_ACCESSES;
 	proc_ctls2 |= PROCBASED2_VIRTUALIZE_X2APIC_MODE;
 	vmx->cap[vcpuid].proc_ctls2 = proc_ctls2;
 
-	VMPTRLD(vmcs);
+	vmcs_load(vmx->vmcs_pa[vcpuid]);
 	vmcs_write(VMCS_SEC_PROC_BASED_CTLS, proc_ctls2);
-	VMCLEAR(vmcs);
+	vmcs_clear(vmx->vmcs_pa[vcpuid]);
 
 	if (vlapic->vcpuid == 0) {
 		/*
@@ -4186,107 +3473,99 @@ vmx_enable_x2apic_mode_vid(struct vlapic *vlapic)
 }
 
 static void
-vmx_post_intr(struct vlapic *vlapic, int hostcpu)
+vmx_apicv_notify(struct vlapic *vlapic, int hostcpu)
 {
-#ifdef __FreeBSD__
-	ipi_cpu(hostcpu, pirvec);
-#else
 	psm_send_pir_ipi(hostcpu);
-#endif
 }
 
-/*
- * Transfer the pending interrupts in the PIR descriptor to the IRR
- * in the virtual APIC page.
- */
 static void
-vmx_inject_pir(struct vlapic *vlapic)
+vmx_apicv_sync(struct vlapic *vlapic)
 {
 	struct vlapic_vtx *vlapic_vtx;
 	struct pir_desc *pir_desc;
 	struct LAPIC *lapic;
-	uint64_t val, pirval;
-	int rvi, pirbase = -1;
-	uint16_t intr_status_old, intr_status_new;
+	uint_t i;
 
 	vlapic_vtx = (struct vlapic_vtx *)vlapic;
 	pir_desc = vlapic_vtx->pir_desc;
+	lapic = vlapic->apic_page;
+
 	if (atomic_cmpset_long(&pir_desc->pending, 1, 0) == 0) {
-		VCPU_CTR0(vlapic->vm, vlapic->vcpuid, "vmx_inject_pir: "
-		    "no posted interrupt pending");
 		return;
 	}
 
-	pirval = 0;
-	pirbase = -1;
-	lapic = vlapic->apic_page;
+	vlapic_vtx->pending_prio = 0;
 
-	val = atomic_readandclear_long(&pir_desc->pir[0]);
-	if (val != 0) {
-		lapic->irr0 |= val;
-		lapic->irr1 |= val >> 32;
-		pirbase = 0;
-		pirval = val;
-	}
+	/* Make sure the invalid (0-15) vectors are not set */
+	ASSERT0(vlapic_vtx->pending_level[0] & 0xffff);
+	ASSERT0(vlapic_vtx->pending_edge[0] & 0xffff);
+	ASSERT0(pir_desc->pir[0] & 0xffff);
 
-	val = atomic_readandclear_long(&pir_desc->pir[1]);
-	if (val != 0) {
-		lapic->irr2 |= val;
-		lapic->irr3 |= val >> 32;
-		pirbase = 64;
-		pirval = val;
-	}
+	for (i = 0; i <= 7; i++) {
+		uint32_t *tmrp = &lapic->tmr0 + (i * 4);
+		uint32_t *irrp = &lapic->irr0 + (i * 4);
 
-	val = atomic_readandclear_long(&pir_desc->pir[2]);
-	if (val != 0) {
-		lapic->irr4 |= val;
-		lapic->irr5 |= val >> 32;
-		pirbase = 128;
-		pirval = val;
-	}
+		const uint32_t pending_level =
+		    atomic_readandclear_int(&vlapic_vtx->pending_level[i]);
+		const uint32_t pending_edge =
+		    atomic_readandclear_int(&vlapic_vtx->pending_edge[i]);
+		const uint32_t pending_inject =
+		    atomic_readandclear_int(&pir_desc->pir[i]);
 
-	val = atomic_readandclear_long(&pir_desc->pir[3]);
-	if (val != 0) {
-		lapic->irr6 |= val;
-		lapic->irr7 |= val >> 32;
-		pirbase = 192;
-		pirval = val;
-	}
+		if (pending_level != 0) {
+			/*
+			 * Level-triggered interrupts assert their corresponding
+			 * bit in the TMR when queued in IRR.
+			 */
+			*tmrp |= pending_level;
+			*irrp |= pending_level;
+		}
+		if (pending_edge != 0) {
+			/*
+			 * When queuing an edge-triggered interrupt in IRR, the
+			 * corresponding bit in the TMR is cleared.
+			 */
+			*tmrp &= ~pending_edge;
+			*irrp |= pending_edge;
+		}
+		if (pending_inject != 0) {
+			/*
+			 * Interrupts which do not require a change to the TMR
+			 * (because it already matches the necessary state) can
+			 * simply be queued in IRR.
+			 */
+			*irrp |= pending_inject;
+		}
 
-	VLAPIC_CTR_IRR(vlapic, "vmx_inject_pir");
-
-	/*
-	 * Update RVI so the processor can evaluate pending virtual
-	 * interrupts on VM-entry.
-	 *
-	 * It is possible for pirval to be 0 here, even though the
-	 * pending bit has been set. The scenario is:
-	 * CPU-Y is sending a posted interrupt to CPU-X, which
-	 * is running a guest and processing posted interrupts in h/w.
-	 * CPU-X will eventually exit and the state seen in s/w is
-	 * the pending bit set, but no PIR bits set.
-	 *
-	 *      CPU-X                      CPU-Y
-	 *   (vm running)                (host running)
-	 *   rx posted interrupt
-	 *   CLEAR pending bit
-	 *				 SET PIR bit
-	 *   READ/CLEAR PIR bits
-	 *				 SET pending bit
-	 *   (vm exit)
-	 *   pending bit set, PIR 0
-	 */
-	if (pirval != 0) {
-		rvi = pirbase + flsl(pirval) - 1;
-		intr_status_old = vmcs_read(VMCS_GUEST_INTR_STATUS);
-		intr_status_new = (intr_status_old & 0xFF00) | rvi;
-		if (intr_status_new > intr_status_old) {
-			vmcs_write(VMCS_GUEST_INTR_STATUS, intr_status_new);
-			VCPU_CTR2(vlapic->vm, vlapic->vcpuid, "vmx_inject_pir: "
-			    "guest_intr_status changed from 0x%04x to 0x%04x",
-			    intr_status_old, intr_status_new);
+		if (*tmrp != vlapic_vtx->tmr_active[i]) {
+			/* Check if VMX EOI triggers require updating. */
+			vlapic_vtx->tmr_active[i] = *tmrp;
+			vlapic_vtx->tmr_sync = B_TRUE;
 		}
 	}
+}
+
+static void
+vmx_tpr_shadow_enter(struct vlapic *vlapic)
+{
+	/*
+	 * When TPR shadowing is enabled, VMX will initiate a guest exit if its
+	 * TPR falls below a threshold priority.  That threshold is set to the
+	 * current TPR priority, since guest interrupt status should be
+	 * re-evaluated if its TPR is set lower.
+	 */
+	vmcs_write(VMCS_TPR_THRESHOLD, vlapic_get_cr8(vlapic));
+}
+
+static void
+vmx_tpr_shadow_exit(struct vlapic *vlapic)
+{
+	/*
+	 * Unlike full APICv, where changes to the TPR are reflected in the PPR,
+	 * with TPR shadowing, that duty is relegated to the VMM.  Upon exit,
+	 * the PPR is updated to reflect any change in the TPR here.
+	 */
+	vlapic_sync_tpr(vlapic);
 }
 
 static struct vlapic *
@@ -4298,7 +3577,8 @@ vmx_vlapic_init(void *arg, int vcpuid)
 
 	vmx = arg;
 
-	vlapic = malloc(sizeof(struct vlapic_vtx), M_VLAPIC, M_WAITOK | M_ZERO);
+	vlapic = malloc(sizeof (struct vlapic_vtx), M_VLAPIC,
+	    M_WAITOK | M_ZERO);
 	vlapic->vm = vmx->vm;
 	vlapic->vcpuid = vcpuid;
 	vlapic->apic_page = (struct LAPIC *)&vmx->apic_page[vcpuid];
@@ -4307,20 +3587,19 @@ vmx_vlapic_init(void *arg, int vcpuid)
 	vlapic_vtx->pir_desc = &vmx->pir_desc[vcpuid];
 	vlapic_vtx->vmx = vmx;
 
-	if (tpr_shadowing) {
+	if (vmx_cap_en(vmx, VMX_CAP_TPR_SHADOW)) {
 		vlapic->ops.enable_x2apic_mode = vmx_enable_x2apic_mode_ts;
 	}
-
-	if (virtual_interrupt_delivery) {
-		vlapic->ops.set_intr_ready = vmx_set_intr_ready;
-		vlapic->ops.pending_intr = vmx_pending_intr;
-		vlapic->ops.intr_accepted = vmx_intr_accepted;
-		vlapic->ops.set_tmr = vmx_set_tmr;
+	if (vmx_cap_en(vmx, VMX_CAP_APICV)) {
+		vlapic->ops.set_intr_ready = vmx_apicv_set_ready;
+		vlapic->ops.sync_state = vmx_apicv_sync;
+		vlapic->ops.intr_accepted = vmx_apicv_accepted;
 		vlapic->ops.enable_x2apic_mode = vmx_enable_x2apic_mode_vid;
-	}
 
-	if (posted_interrupts)
-		vlapic->ops.post_intr = vmx_post_intr;
+		if (vmx_cap_en(vmx, VMX_CAP_APICV_PIR)) {
+			vlapic->ops.post_intr = vmx_apicv_notify;
+		}
+	}
 
 	vlapic_init(vlapic);
 
@@ -4335,15 +3614,13 @@ vmx_vlapic_cleanup(void *arg, struct vlapic *vlapic)
 	free(vlapic, M_VLAPIC);
 }
 
-#ifndef __FreeBSD__
 static void
 vmx_savectx(void *arg, int vcpu)
 {
 	struct vmx *vmx = arg;
-	struct vmcs *vmcs = &vmx->vmcs[vcpu];
 
 	if ((vmx->vmcs_state[vcpu] & VS_LOADED) != 0) {
-		VERIFY3U(vmclear(vmcs), ==, 0);
+		vmcs_clear(vmx->vmcs_pa[vcpu]);
 		vmx_msr_guest_exit(vmx, vcpu);
 		/*
 		 * Having VMCLEARed the VMCS, it can no longer be re-entered
@@ -4359,16 +3636,14 @@ static void
 vmx_restorectx(void *arg, int vcpu)
 {
 	struct vmx *vmx = arg;
-	struct vmcs *vmcs = &vmx->vmcs[vcpu];
 
 	ASSERT0(vmx->vmcs_state[vcpu] & VS_LAUNCHED);
 
 	if ((vmx->vmcs_state[vcpu] & VS_LOADED) != 0) {
 		vmx_msr_guest_enter(vmx, vcpu);
-		VERIFY3U(vmptrld(vmcs), ==, 0);
+		vmcs_load(vmx->vmcs_pa[vcpu]);
 	}
 }
-#endif /* __FreeBSD__ */
 
 struct vmm_ops vmm_ops_intel = {
 	.init		= vmx_init,
@@ -4388,13 +3663,10 @@ struct vmm_ops vmm_ops_intel = {
 	.vlapic_init	= vmx_vlapic_init,
 	.vlapic_cleanup	= vmx_vlapic_cleanup,
 
-#ifndef __FreeBSD__
 	.vmsavectx	= vmx_savectx,
 	.vmrestorectx	= vmx_restorectx,
-#endif
 };
 
-#ifndef __FreeBSD__
 /* Side-effect free HW validation derived from checks in vmx_init. */
 int
 vmx_x86_supported(const char **msg)
@@ -4460,4 +3732,3 @@ vmx_x86_supported(const char **msg)
 
 	return (0);
 }
-#endif

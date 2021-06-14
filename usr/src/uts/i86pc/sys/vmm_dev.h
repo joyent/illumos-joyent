@@ -38,7 +38,7 @@
  * http://www.illumos.org/license/CDDL.
  *
  * Copyright 2015 Pluribus Networks Inc.
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #ifndef	_VMM_DEV_H_
@@ -56,6 +56,11 @@ struct vm_memmap {
 };
 #define	VM_MEMMAP_F_WIRED	0x01
 #define	VM_MEMMAP_F_IOMMU	0x02
+
+struct vm_munmap {
+	vm_paddr_t	gpa;
+	size_t		len;
+};
 
 #define	VM_MEMSEG_NAME(m)	((m)->name[0] != '\0' ? (m)->name : NULL)
 struct vm_memseg {
@@ -81,11 +86,6 @@ struct vm_register_set {
 	unsigned int	count;
 	const int	*regnums;	/* enum vm_reg_name */
 	uint64_t	*regvals;
-};
-
-struct vm_run {
-	int		cpuid;
-	struct vm_exit	vm_exit;
 };
 
 struct vm_exception {
@@ -165,11 +165,7 @@ struct vm_nmi {
 	int		cpuid;
 };
 
-#ifdef __FreeBSD__
-#define	MAX_VM_STATS	64
-#else
 #define	MAX_VM_STATS	(64 + VM_MAXCPU)
-#endif
 
 struct vm_stats {
 	int		cpuid;				/* in */
@@ -204,7 +200,7 @@ struct vm_suspend {
 
 struct vm_gla2gpa {
 	int		vcpuid;		/* inputs */
-	int 		prot;		/* PROT_READ or PROT_WRITE */
+	int		prot;		/* PROT_READ or PROT_WRITE */
 	uint64_t	gla;
 	struct vm_guest_paging paging;
 	int		fault;		/* outputs */
@@ -264,6 +260,28 @@ struct vm_readwrite_kernemu_device {
 };
 _Static_assert(sizeof(struct vm_readwrite_kernemu_device) == 24, "ABI");
 
+enum vcpu_reset_kind {
+	VRK_RESET = 0,
+	/*
+	 * The reset performed by an INIT IPI clears much of the CPU state, but
+	 * some portions are left untouched, unlike VRK_RESET, which represents
+	 * a "full" reset as if the system was freshly powered on.
+	 */
+	VRK_INIT = 1,
+};
+
+struct vm_vcpu_reset {
+	int		vcpuid;
+	uint32_t	kind;	/* contains: enum vcpu_reset_kind */
+};
+
+struct vm_run_state {
+	int		vcpuid;
+	uint32_t	state;	/* of enum cpu_init_status type */
+	uint8_t		sipi_vector;	/* vector of SIPI, if any */
+	uint8_t		_pad[3];
+};
+
 #define	VMMCTL_IOC_BASE		(('V' << 16) | ('M' << 8))
 #define	VMM_IOC_BASE		(('v' << 16) | ('m' << 8))
 #define	VMM_LOCK_IOC_BASE	(('v' << 16) | ('l' << 8))
@@ -296,6 +314,9 @@ _Static_assert(sizeof(struct vm_readwrite_kernemu_device) == 24, "ABI");
 #define	VM_RESTART_INSTRUCTION		(VMM_CPU_IOC_BASE | 0x13)
 #define	VM_SET_KERNEMU_DEV		(VMM_CPU_IOC_BASE | 0x14)
 #define	VM_GET_KERNEMU_DEV		(VMM_CPU_IOC_BASE | 0x15)
+#define	VM_RESET_CPU			(VMM_CPU_IOC_BASE | 0x16)
+#define	VM_GET_RUN_STATE		(VMM_CPU_IOC_BASE | 0x17)
+#define	VM_SET_RUN_STATE		(VMM_CPU_IOC_BASE | 0x18)
 
 /* Operations requiring write-locking the VM */
 #define	VM_REINIT		(VMM_LOCK_IOC_BASE | 0x01)
@@ -304,6 +325,9 @@ _Static_assert(sizeof(struct vm_readwrite_kernemu_device) == 24, "ABI");
 #define	VM_MAP_PPTDEV_MMIO	(VMM_LOCK_IOC_BASE | 0x04)
 #define	VM_ALLOC_MEMSEG		(VMM_LOCK_IOC_BASE | 0x05)
 #define	VM_MMAP_MEMSEG		(VMM_LOCK_IOC_BASE | 0x06)
+#define	VM_PMTMR_LOCATE		(VMM_LOCK_IOC_BASE | 0x07)
+#define	VM_MUNMAP_MEMSEG	(VMM_LOCK_IOC_BASE | 0x08)
+#define	VM_UNMAP_PPTDEV_MMIO	(VMM_LOCK_IOC_BASE | 0x09)
 
 #define	VM_WRLOCK_CYCLE		(VMM_LOCK_IOC_BASE | 0xff)
 
@@ -312,8 +336,8 @@ _Static_assert(sizeof(struct vm_readwrite_kernemu_device) == 24, "ABI");
 #define	VM_GET_MEMSEG			(VMM_IOC_BASE | 0x02)
 #define	VM_MMAP_GETNEXT			(VMM_IOC_BASE | 0x03)
 
-#define	VM_LAPIC_IRQ 			(VMM_IOC_BASE | 0x04)
-#define	VM_LAPIC_LOCAL_IRQ 		(VMM_IOC_BASE | 0x05)
+#define	VM_LAPIC_IRQ			(VMM_IOC_BASE | 0x04)
+#define	VM_LAPIC_LOCAL_IRQ		(VMM_IOC_BASE | 0x05)
 #define	VM_LAPIC_MSI			(VMM_IOC_BASE | 0x06)
 
 #define	VM_IOAPIC_ASSERT_IRQ		(VMM_IOC_BASE | 0x07)
@@ -347,6 +371,8 @@ _Static_assert(sizeof(struct vm_readwrite_kernemu_device) == 24, "ABI");
 #define	VM_SUSPEND_CPU			(VMM_IOC_BASE | 0x1d)
 #define	VM_RESUME_CPU			(VMM_IOC_BASE | 0x1e)
 
+#define	VM_PPTDEV_DISABLE_MSIX		(VMM_IOC_BASE | 0x1f)
+#define	VM_ARC_RESV			(VMM_IOC_BASE | 0xfe)
 
 #define	VM_DEVMEM_GETOFFSET		(VMM_IOC_BASE | 0xff)
 

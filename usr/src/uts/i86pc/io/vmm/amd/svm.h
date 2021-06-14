@@ -28,47 +28,43 @@
  * $FreeBSD$
  */
 
-#ifndef _SVM_H_
-#define _SVM_H_
+#ifndef	_SVM_H_
+#define	_SVM_H_
 
 /*
  * Guest register state that is saved outside the VMCB.
  */
 struct svm_regctx {
-	register_t	sctx_rbp;
-	register_t	sctx_rbx;
-	register_t	sctx_rcx;
-	register_t	sctx_rdx;
-	register_t	sctx_rdi;
-	register_t	sctx_rsi;
-	register_t	sctx_r8;
-	register_t	sctx_r9;
-	register_t	sctx_r10;
-	register_t	sctx_r11;
-	register_t	sctx_r12;
-	register_t	sctx_r13;
-	register_t	sctx_r14;
-	register_t	sctx_r15;
-	register_t	sctx_dr0;
-	register_t	sctx_dr1;
-	register_t	sctx_dr2;
-	register_t	sctx_dr3;
+	uint64_t	sctx_rbp;
+	uint64_t	sctx_rbx;
+	uint64_t	sctx_rcx;
+	uint64_t	sctx_rdx;
+	uint64_t	sctx_rdi;
+	uint64_t	sctx_rsi;
+	uint64_t	sctx_r8;
+	uint64_t	sctx_r9;
+	uint64_t	sctx_r10;
+	uint64_t	sctx_r11;
+	uint64_t	sctx_r12;
+	uint64_t	sctx_r13;
+	uint64_t	sctx_r14;
+	uint64_t	sctx_r15;
+	uint64_t	sctx_dr0;
+	uint64_t	sctx_dr1;
+	uint64_t	sctx_dr2;
+	uint64_t	sctx_dr3;
+	uint64_t	sctx_cr0_shadow;
 
-	register_t	host_dr0;
-	register_t	host_dr1;
-	register_t	host_dr2;
-	register_t	host_dr3;
-	register_t	host_dr6;
-	register_t	host_dr7;
+	uint64_t	host_dr0;
+	uint64_t	host_dr1;
+	uint64_t	host_dr2;
+	uint64_t	host_dr3;
+	uint64_t	host_dr6;
+	uint64_t	host_dr7;
 	uint64_t	host_debugctl;
 };
 
-#ifdef __FreeBSD__
-struct pcpu;
-void svm_launch(uint64_t pa, struct svm_regctx *gctx, struct pcpu *pcpu);
-#else
 struct cpu;
 void svm_launch(uint64_t pa, struct svm_regctx *gctx, struct cpu *pcpu);
-#endif
 
 #endif /* _SVM_H_ */

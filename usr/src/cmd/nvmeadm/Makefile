@@ -12,12 +12,13 @@
 #
 # Copyright 2015 Nexenta Systems, Inc.
 # Copyright (c) 2018, Joyent, Inc.
+# Copyright 2021 Oxide Computer Company
 #
 
 
 PROG= nvmeadm
 
-OBJS= nvmeadm.o nvmeadm_dev.o nvmeadm_print.o
+OBJS= nvmeadm.o nvmeadm_dev.o nvmeadm_ofmt.o nvmeadm_print.o
 SRCS= $(OBJS:%.o=%.c)
 
 include ../Makefile.cmd
@@ -25,12 +26,15 @@ include ../Makefile.ctf
 
 .KEEP_STATE:
 
-CFLAGS +=	$(CCVERBOSE)
-LDLIBS +=	-ldevinfo
+CFLAGS +=	$(CCVERBOSE) -I$(SRC)/uts/common/io/nvme
+LDLIBS +=	-ldevinfo -lofmt
 CSTD=	$(CSTD_GNU99)
 
-# error: cannot size expression
-SMATCH=off
+#
+# nvme_print_uint128() uses VLAs which understandably confuses smatch.
+# It should probably be rewritten so we can smatch the file.
+#
+nvmeadm_print.o := SMATCH=off
 
 all: $(PROG)
 

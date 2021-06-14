@@ -56,6 +56,8 @@ __FBSDID("$FreeBSD$");
 #include <md5.h>
 
 #include "bhyverun.h"
+#include "config.h"
+#include "debug.h"
 #include "pci_emul.h"
 #include "ahci.h"
 #include "block_if.h"
@@ -136,9 +138,9 @@ struct ahci_ioreq {
 struct ahci_port {
 	struct blockif_ctxt *bctx;
 	struct pci_ahci_softc *pr_sc;
+	struct ata_params ata_ident;
 	uint8_t *cmd_lst;
 	uint8_t *rfis;
-	char ident[AHCI_PORT_IDENT];
 	int port;
 	int atapi;
 	int reset;
@@ -983,7 +985,50 @@ handle_identify(struct ahci_port *p, int slot, uint8_t *cfis)
 		ahci_write_fis_d2h(p, slot, cfis,
 		    (ATA_E_ABORT << 8) | ATA_S_READY | ATA_S_ERROR);
 	} else {
-		uint16_t buf[256];
+		ahci_write_fis_piosetup(p);
+		write_prdt(p, slot, cfis, (void*)&p->ata_ident, sizeof(struct ata_params));
+		ahci_write_fis_d2h(p, slot, cfis, ATA_S_DSC | ATA_S_READY);
+	}
+}
+
+static void
+ata_identify_init(struct ahci_port* p, int atapi)
+{
+	struct ata_params* ata_ident = &p->ata_ident;
+
+	if (atapi) {
+		ata_ident->config = ATA_PROTO_ATAPI | ATA_ATAPI_TYPE_CDROM |
+		    ATA_ATAPI_REMOVABLE | ATA_DRQ_FAST;
+		ata_ident->capabilities1 = ATA_SUPPORT_LBA |
+			ATA_SUPPORT_DMA;
+		ata_ident->capabilities2 = (1 << 14 | 1);
+		ata_ident->atavalid = ATA_FLAG_64_70 | ATA_FLAG_88;
+		ata_ident->obsolete62 = 0x3f;
+		ata_ident->mwdmamodes = 7;
+		if (p->xfermode & ATA_WDMA0)
+			ata_ident->mwdmamodes |= (1 << ((p->xfermode & 7) + 8));
+		ata_ident->apiomodes = 3;
+		ata_ident->mwdmamin = 0x0078;
+		ata_ident->mwdmarec = 0x0078;
+		ata_ident->pioblind = 0x0078;
+		ata_ident->pioiordy = 0x0078;
+		ata_ident->satacapabilities = (ATA_SATA_GEN1 | ATA_SATA_GEN2 | ATA_SATA_GEN3);
+		ata_ident->satacapabilities2 = ((p->ssts & ATA_SS_SPD_MASK) >> 3);
+		ata_ident->satasupport = ATA_SUPPORT_NCQ_STREAM;
+		ata_ident->version_major = 0x3f0;
+		ata_ident->support.command1 = (ATA_SUPPORT_POWERMGT | ATA_SUPPORT_PACKET |
+			ATA_SUPPORT_RESET | ATA_SUPPORT_NOP);
+		ata_ident->support.command2 = (1 << 14);
+		ata_ident->support.extension = (1 << 14);
+		ata_ident->enabled.command1 = (ATA_SUPPORT_POWERMGT | ATA_SUPPORT_PACKET |
+			ATA_SUPPORT_RESET | ATA_SUPPORT_NOP);
+		ata_ident->enabled.extension = (1 << 14);
+		ata_ident->udmamodes = 0x7f;
+		if (p->xfermode & ATA_UDMA0)
+			ata_ident->udmamodes |= (1 << ((p->xfermode & 7) + 8));
+		ata_ident->transport_major = 0x1020;
+		ata_ident->integrity = 0x00a5;
+	} else {
 		uint64_t sectors;
 		int sectsz, psectsz, psectoff, candelete, ro;
 		uint16_t cyl;
@@ -995,87 +1040,84 @@ handle_identify(struct ahci_port *p, int slot, uint8_t *cfis)
 		sectors = blockif_size(p->bctx) / sectsz;
 		blockif_chs(p->bctx, &cyl, &heads, &sech);
 		blockif_psectsz(p->bctx, &psectsz, &psectoff);
-		memset(buf, 0, sizeof(buf));
-		buf[0] = 0x0040;
-		buf[1] = cyl;
-		buf[3] = heads;
-		buf[6] = sech;
-		ata_string((uint8_t *)(buf+10), p->ident, 20);
-		ata_string((uint8_t *)(buf+23), "001", 8);
-		ata_string((uint8_t *)(buf+27), "BHYVE SATA DISK", 40);
-		buf[47] = (0x8000 | 128);
-		buf[48] = 0;
-		buf[49] = (1 << 8 | 1 << 9 | 1 << 11);
-		buf[50] = (1 << 14);
-		buf[53] = (1 << 1 | 1 << 2);
+		ata_ident->config = ATA_DRQ_FAST;
+		ata_ident->cylinders = cyl;
+		ata_ident->heads = heads;
+		ata_ident->sectors = sech;
+
+		ata_ident->sectors_intr = (0x8000 | 128);
+		ata_ident->tcg = 0;
+
+		ata_ident->capabilities1 = ATA_SUPPORT_DMA |
+			ATA_SUPPORT_LBA | ATA_SUPPORT_IORDY;
+		ata_ident->capabilities2 = (1 << 14);
+		ata_ident->atavalid = ATA_FLAG_64_70 | ATA_FLAG_88;
 		if (p->mult_sectors)
-			buf[59] = (0x100 | p->mult_sectors);
+			ata_ident->multi = (ATA_MULTI_VALID | p->mult_sectors);
 		if (sectors <= 0x0fffffff) {
-			buf[60] = sectors;
-			buf[61] = (sectors >> 16);
+			ata_ident->lba_size_1 = sectors;
+			ata_ident->lba_size_2 = (sectors >> 16);
 		} else {
-			buf[60] = 0xffff;
-			buf[61] = 0x0fff;
+			ata_ident->lba_size_1 = 0xffff;
+			ata_ident->lba_size_2 = 0x0fff;
 		}
-		buf[63] = 0x7;
+		ata_ident->mwdmamodes = 0x7;
 		if (p->xfermode & ATA_WDMA0)
-			buf[63] |= (1 << ((p->xfermode & 7) + 8));
-		buf[64] = 0x3;
-		buf[65] = 120;
-		buf[66] = 120;
-		buf[67] = 120;
-		buf[68] = 120;
-		buf[69] = 0;
-		buf[75] = 31;
-		buf[76] = (ATA_SATA_GEN1 | ATA_SATA_GEN2 | ATA_SATA_GEN3 |
-			   ATA_SUPPORT_NCQ);
-		buf[77] = (ATA_SUPPORT_RCVSND_FPDMA_QUEUED |
-			   (p->ssts & ATA_SS_SPD_MASK) >> 3);
-		buf[80] = 0x3f0;
-		buf[81] = 0x28;
-		buf[82] = (ATA_SUPPORT_POWERMGT | ATA_SUPPORT_WRITECACHE|
-			   ATA_SUPPORT_LOOKAHEAD | ATA_SUPPORT_NOP);
-		buf[83] = (ATA_SUPPORT_ADDRESS48 | ATA_SUPPORT_FLUSHCACHE |
-			   ATA_SUPPORT_FLUSHCACHE48 | 1 << 14);
-		buf[84] = (1 << 14);
-		buf[85] = (ATA_SUPPORT_POWERMGT | ATA_SUPPORT_WRITECACHE|
-			   ATA_SUPPORT_LOOKAHEAD | ATA_SUPPORT_NOP);
-		buf[86] = (ATA_SUPPORT_ADDRESS48 | ATA_SUPPORT_FLUSHCACHE |
-			   ATA_SUPPORT_FLUSHCACHE48 | 1 << 15);
-		buf[87] = (1 << 14);
-		buf[88] = 0x7f;
+			ata_ident->mwdmamodes |= (1 << ((p->xfermode & 7) + 8));
+		ata_ident->apiomodes = 0x3;
+		ata_ident->mwdmamin = 0x0078;
+		ata_ident->mwdmarec = 0x0078;
+		ata_ident->pioblind = 0x0078;
+		ata_ident->pioiordy = 0x0078;
+		ata_ident->support3 = 0;
+		ata_ident->queue = 31;
+		ata_ident->satacapabilities = (ATA_SATA_GEN1 | ATA_SATA_GEN2 | ATA_SATA_GEN3 |
+			ATA_SUPPORT_NCQ);
+		ata_ident->satacapabilities2 = (ATA_SUPPORT_RCVSND_FPDMA_QUEUED |
+			(p->ssts & ATA_SS_SPD_MASK) >> 3);
+		ata_ident->version_major = 0x3f0;
+		ata_ident->version_minor = 0x28;
+		ata_ident->support.command1 = (ATA_SUPPORT_POWERMGT | ATA_SUPPORT_WRITECACHE |
+			ATA_SUPPORT_LOOKAHEAD | ATA_SUPPORT_NOP);
+		ata_ident->support.command2 = (ATA_SUPPORT_ADDRESS48 | ATA_SUPPORT_FLUSHCACHE |
+			ATA_SUPPORT_FLUSHCACHE48 | 1 << 14);
+		ata_ident->support.extension = (1 << 14);
+		ata_ident->enabled.command1 = (ATA_SUPPORT_POWERMGT | ATA_SUPPORT_WRITECACHE |
+			ATA_SUPPORT_LOOKAHEAD | ATA_SUPPORT_NOP);
+		ata_ident->enabled.command2 = (ATA_SUPPORT_ADDRESS48 | ATA_SUPPORT_FLUSHCACHE |
+			ATA_SUPPORT_FLUSHCACHE48 | 1 << 15);
+		ata_ident->enabled.extension = (1 << 14);
+		ata_ident->udmamodes = 0x7f;
 		if (p->xfermode & ATA_UDMA0)
-			buf[88] |= (1 << ((p->xfermode & 7) + 8));
-		buf[100] = sectors;
-		buf[101] = (sectors >> 16);
-		buf[102] = (sectors >> 32);
-		buf[103] = (sectors >> 48);
+			ata_ident->udmamodes |= (1 << ((p->xfermode & 7) + 8));
+		ata_ident->lba_size48_1 = sectors;
+		ata_ident->lba_size48_2 = (sectors >> 16);
+		ata_ident->lba_size48_3 = (sectors >> 32);
+		ata_ident->lba_size48_4 = (sectors >> 48);
+
 		if (candelete && !ro) {
-			buf[69] |= ATA_SUPPORT_RZAT | ATA_SUPPORT_DRAT;
-			buf[105] = 1;
-			buf[169] = ATA_SUPPORT_DSM_TRIM;
+			ata_ident->support3 |= ATA_SUPPORT_RZAT | ATA_SUPPORT_DRAT;
+			ata_ident->max_dsm_blocks = 1;
+			ata_ident->support_dsm = ATA_SUPPORT_DSM_TRIM;
 		}
-		buf[106] = 0x4000;
-		buf[209] = 0x4000;
+		ata_ident->pss = ATA_PSS_VALID_VALUE;
+		ata_ident->lsalign = 0x4000;
 		if (psectsz > sectsz) {
-			buf[106] |= 0x2000;
-			buf[106] |= ffsl(psectsz / sectsz) - 1;
-			buf[209] |= (psectoff / sectsz);
+			ata_ident->pss |= ATA_PSS_MULTLS;
+			ata_ident->pss |= ffsl(psectsz / sectsz) - 1;
+			ata_ident->lsalign |= (psectoff / sectsz);
 		}
 		if (sectsz > 512) {
-			buf[106] |= 0x1000;
-			buf[117] = sectsz / 2;
-			buf[118] = ((sectsz / 2) >> 16);
+			ata_ident->pss |= ATA_PSS_LSSABOVE512;
+			ata_ident->lss_1 = sectsz / 2;
+			ata_ident->lss_2 = ((sectsz / 2) >> 16);
 		}
-		buf[119] = (ATA_SUPPORT_RWLOGDMAEXT | 1 << 14);
-		buf[120] = (ATA_SUPPORT_RWLOGDMAEXT | 1 << 14);
-		buf[222] = 0x1020;
-		buf[255] = 0x00a5;
-		ahci_checksum((uint8_t *)buf, sizeof(buf));
-		ahci_write_fis_piosetup(p);
-		write_prdt(p, slot, cfis, (void *)buf, sizeof(buf));
-		ahci_write_fis_d2h(p, slot, cfis, ATA_S_DSC | ATA_S_READY);
+		ata_ident->support2 = (ATA_SUPPORT_RWLOGDMAEXT | 1 << 14);
+		ata_ident->enabled2 = (ATA_SUPPORT_RWLOGDMAEXT | 1 << 14);
+		ata_ident->transport_major = 0x1020;
+		ata_ident->integrity = 0x00a5;
 	}
+	ahci_checksum((uint8_t*)ata_ident, sizeof(struct ata_params));
 }
 
 static void
@@ -1085,44 +1127,8 @@ handle_atapi_identify(struct ahci_port *p, int slot, uint8_t *cfis)
 		ahci_write_fis_d2h(p, slot, cfis,
 		    (ATA_E_ABORT << 8) | ATA_S_READY | ATA_S_ERROR);
 	} else {
-		uint16_t buf[256];
-
-		memset(buf, 0, sizeof(buf));
-		buf[0] = (2 << 14 | 5 << 8 | 1 << 7 | 2 << 5);
-		ata_string((uint8_t *)(buf+10), p->ident, 20);
-		ata_string((uint8_t *)(buf+23), "001", 8);
-		ata_string((uint8_t *)(buf+27), "BHYVE SATA DVD ROM", 40);
-		buf[49] = (1 << 9 | 1 << 8);
-		buf[50] = (1 << 14 | 1);
-		buf[53] = (1 << 2 | 1 << 1);
-		buf[62] = 0x3f;
-		buf[63] = 7;
-		if (p->xfermode & ATA_WDMA0)
-			buf[63] |= (1 << ((p->xfermode & 7) + 8));
-		buf[64] = 3;
-		buf[65] = 120;
-		buf[66] = 120;
-		buf[67] = 120;
-		buf[68] = 120;
-		buf[76] = (ATA_SATA_GEN1 | ATA_SATA_GEN2 | ATA_SATA_GEN3);
-		buf[77] = ((p->ssts & ATA_SS_SPD_MASK) >> 3);
-		buf[78] = (1 << 5);
-		buf[80] = 0x3f0;
-		buf[82] = (ATA_SUPPORT_POWERMGT | ATA_SUPPORT_PACKET |
-			   ATA_SUPPORT_RESET | ATA_SUPPORT_NOP);
-		buf[83] = (1 << 14);
-		buf[84] = (1 << 14);
-		buf[85] = (ATA_SUPPORT_POWERMGT | ATA_SUPPORT_PACKET |
-			   ATA_SUPPORT_RESET | ATA_SUPPORT_NOP);
-		buf[87] = (1 << 14);
-		buf[88] = 0x7f;
-		if (p->xfermode & ATA_UDMA0)
-			buf[88] |= (1 << ((p->xfermode & 7) + 8));
-		buf[222] = 0x1020;
-		buf[255] = 0x00a5;
-		ahci_checksum((uint8_t *)buf, sizeof(buf));
 		ahci_write_fis_piosetup(p);
-		write_prdt(p, slot, cfis, (void *)buf, sizeof(buf));
+		write_prdt(p, slot, cfis, (void *)&p->ata_ident, sizeof(struct ata_params));
 		ahci_write_fis_d2h(p, slot, cfis, ATA_S_DSC | ATA_S_READY);
 	}
 }
@@ -2304,16 +2310,115 @@ pci_ahci_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi, int baridx,
 	return (value);
 }
 
+/*
+ * Each AHCI controller has a "port" node which contains nodes for
+ * each port named after the decimal number of the port (no leading
+ * zeroes).  Port nodes contain a "type" ("hd" or "cd"), as well as
+ * options for blockif.  For example:
+ *
+ * pci.0.1.0
+ *          .device="ahci"
+ *          .port
+ *               .0
+ *                 .type="hd"
+ *                 .path="/path/to/image"
+ */
 static int
-pci_ahci_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts, int atapi)
+pci_ahci_legacy_config_port(nvlist_t *nvl, int port, const char *type,
+    const char *opts)
+{
+	char node_name[sizeof("XX")];
+	nvlist_t *port_nvl;
+
+	snprintf(node_name, sizeof(node_name), "%d", port);
+	port_nvl = create_relative_config_node(nvl, node_name);
+	set_config_value_node(port_nvl, "type", type);
+	return (blockif_legacy_config(port_nvl, opts));
+}
+
+static int
+pci_ahci_legacy_config(nvlist_t *nvl, const char *opts)
+{
+	nvlist_t *ports_nvl;
+	const char *type;
+	char *next, *next2, *str, *tofree;
+	int p, ret;
+
+	if (opts == NULL)
+		return (0);
+
+	ports_nvl = create_relative_config_node(nvl, "port");
+	ret = 1;
+	tofree = str = strdup(opts);
+	for (p = 0; p < MAX_PORTS && str != NULL; p++, str = next) {
+		/* Identify and cut off type of present port. */
+		if (strncmp(str, "hd:", 3) == 0) {
+			type = "hd";
+			str += 3;
+		} else if (strncmp(str, "cd:", 3) == 0) {
+			type = "cd";
+			str += 3;
+		} else
+			type = NULL;
+
+		/* Find and cut off the next port options. */
+		next = strstr(str, ",hd:");
+		next2 = strstr(str, ",cd:");
+		if (next == NULL || (next2 != NULL && next2 < next))
+			next = next2;
+		if (next != NULL) {
+			next[0] = 0;
+			next++;
+		}
+
+		if (str[0] == 0)
+			continue;
+
+		if (type == NULL) {
+			EPRINTLN("Missing or invalid type for port %d: \"%s\"",
+			    p, str);
+			goto out;
+		}
+
+		if (pci_ahci_legacy_config_port(ports_nvl, p, type, str) != 0)
+			goto out;
+	}
+	ret = 0;
+out:
+	free(tofree);
+	return (ret);
+}
+
+static int
+pci_ahci_cd_legacy_config(nvlist_t *nvl, const char *opts)
+{
+	nvlist_t *ports_nvl;
+
+	ports_nvl = create_relative_config_node(nvl, "port");
+	return (pci_ahci_legacy_config_port(ports_nvl, 0, "cd", opts));
+}
+
+static int
+pci_ahci_hd_legacy_config(nvlist_t *nvl, const char *opts)
+{
+	nvlist_t *ports_nvl;
+
+	ports_nvl = create_relative_config_node(nvl, "port");
+	return (pci_ahci_legacy_config_port(ports_nvl, 0, "hd", opts));
+}
+
+static int
+pci_ahci_init(struct vmctx *ctx, struct pci_devinst *pi, nvlist_t *nvl)
 {
 	char bident[sizeof("XX:XX:XX")];
+	char node_name[sizeof("XX")];
 	struct blockif_ctxt *bctxt;
 	struct pci_ahci_softc *sc;
-	int ret, slots, p;
+	int atapi, ret, slots, p;
 	MD5_CTX mdctx;
 	u_char digest[16];
-	char *next, *next2;
+	const char *path, *type, *value;
+	nvlist_t *ports_nvl, *port_nvl;
 
 	ret = 0;
 
@@ -2329,28 +2434,24 @@ pci_ahci_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts, int atapi)
 	sc->pi = 0;
 	slots = 32;
 
-	for (p = 0; p < MAX_PORTS && opts != NULL; p++, opts = next) {
-		/* Identify and cut off type of present port. */
-		if (strncmp(opts, "hd:", 3) == 0) {
-			atapi = 0;
-			opts += 3;
-		} else if (strncmp(opts, "cd:", 3) == 0) {
-			atapi = 1;
-			opts += 3;
-		}
+	ports_nvl = find_relative_config_node(nvl, "port");
+	for (p = 0; p < MAX_PORTS; p++) {
+		struct ata_params *ata_ident = &sc->port[p].ata_ident;
+		char ident[AHCI_PORT_IDENT];
 
-		/* Find and cut off the next port options. */
-		next = strstr(opts, ",hd:");
-		next2 = strstr(opts, ",cd:");
-		if (next == NULL || (next2 != NULL && next2 < next))
-			next = next2;
-		if (next != NULL) {
-			next[0] = 0;
-			next++;
-		}
-
-		if (opts[0] == 0)
+		snprintf(node_name, sizeof(node_name), "%d", p);
+		port_nvl = find_relative_config_node(ports_nvl, node_name);
+		if (port_nvl == NULL)
 			continue;
+
+		type = get_config_value_node(port_nvl, "type");
+		if (type == NULL)
+			continue;
+
+		if (strcmp(type, "hd") == 0)
+			atapi = 0;
+		else
+			atapi = 1;
 
 		/*
 		 * Attempt to open the backing image. Use the PCI slot/func
@@ -2358,7 +2459,8 @@ pci_ahci_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts, int atapi)
 		 */
 		snprintf(bident, sizeof(bident), "%d:%d:%d", pi->pi_slot,
 		    pi->pi_func, p);
-		bctxt = blockif_open(opts, bident);
+
+		bctxt = blockif_open(port_nvl, bident);
 		if (bctxt == NULL) {
 			sc->ports = p;
 			ret = 1;
@@ -2368,6 +2470,40 @@ pci_ahci_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts, int atapi)
 		sc->port[p].pr_sc = sc;
 		sc->port[p].port = p;
 		sc->port[p].atapi = atapi;
+
+		/*
+		 * Create an identifier for the backing file.
+		 * Use parts of the md5 sum of the filename
+		 */
+		path = get_config_value_node(port_nvl, "path");
+		MD5Init(&mdctx);
+		MD5Update(&mdctx, path, strlen(path));
+		MD5Final(digest, &mdctx);
+		snprintf(ident, AHCI_PORT_IDENT,
+			"BHYVE-%02X%02X-%02X%02X-%02X%02X",
+			digest[0], digest[1], digest[2], digest[3], digest[4],
+			digest[5]);
+
+		memset(ata_ident, 0, sizeof(struct ata_params));
+		ata_string((uint8_t*)&ata_ident->serial, ident, 20);
+		ata_string((uint8_t*)&ata_ident->revision, "001", 8);
+		if (atapi)
+			ata_string((uint8_t*)&ata_ident->model, "BHYVE SATA DVD ROM", 40);
+		else
+			ata_string((uint8_t*)&ata_ident->model, "BHYVE SATA DISK", 40);
+		value = get_config_value_node(port_nvl, "nmrr");
+		if (value != NULL)
+			ata_ident->media_rotation_rate = atoi(value);
+		value = get_config_value_node(port_nvl, "ser");
+		if (value != NULL)
+			ata_string((uint8_t*)(&ata_ident->serial), value, 20);
+		value = get_config_value_node(port_nvl, "rev");
+		if (value != NULL)
+			ata_string((uint8_t*)(&ata_ident->revision), value, 8);
+		value = get_config_value_node(port_nvl, "model");
+		if (value != NULL)
+			ata_string((uint8_t*)(&ata_ident->model), value, 40);
+		ata_identify_init(&sc->port[p], atapi);
 
 #ifndef __FreeBSD__
 		/*
@@ -2379,18 +2515,6 @@ pci_ahci_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts, int atapi)
 		 */
 		(void) blockif_set_wce(bctxt, 1);
 #endif
-
-		/*
-		 * Create an identifier for the backing file.
-		 * Use parts of the md5 sum of the filename
-		 */
-		MD5Init(&mdctx);
-		MD5Update(&mdctx, opts, strlen(opts));
-		MD5Final(digest, &mdctx);
-		snprintf(sc->port[p].ident, AHCI_PORT_IDENT,
-		    "BHYVE-%02X%02X-%02X%02X-%02X%02X",
-		    digest[0], digest[1], digest[2], digest[3], digest[4],
-		    digest[5]);
 
 		/*
 		 * Allocate blockif request structures and add them
@@ -2443,43 +2567,28 @@ open_fail:
 	return (ret);
 }
 
-static int
-pci_ahci_hd_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
-{
-
-	return (pci_ahci_init(ctx, pi, opts, 0));
-}
-
-static int
-pci_ahci_atapi_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
-{
-
-	return (pci_ahci_init(ctx, pi, opts, 1));
-}
-
 /*
  * Use separate emulation names to distinguish drive and atapi devices
  */
 struct pci_devemu pci_de_ahci = {
 	.pe_emu =	"ahci",
-	.pe_init =	pci_ahci_hd_init,
+	.pe_init =	pci_ahci_init,
+	.pe_legacy_config = pci_ahci_legacy_config,
 	.pe_barwrite =	pci_ahci_write,
-	.pe_barread =	pci_ahci_read
+	.pe_barread =	pci_ahci_read,
 };
 PCI_EMUL_SET(pci_de_ahci);
 
 struct pci_devemu pci_de_ahci_hd = {
 	.pe_emu =	"ahci-hd",
-	.pe_init =	pci_ahci_hd_init,
-	.pe_barwrite =	pci_ahci_write,
-	.pe_barread =	pci_ahci_read
+	.pe_legacy_config = pci_ahci_hd_legacy_config,
+	.pe_alias =	"ahci",
 };
 PCI_EMUL_SET(pci_de_ahci_hd);
 
 struct pci_devemu pci_de_ahci_cd = {
 	.pe_emu =	"ahci-cd",
-	.pe_init =	pci_ahci_atapi_init,
-	.pe_barwrite =	pci_ahci_write,
-	.pe_barread =	pci_ahci_read
+	.pe_legacy_config = pci_ahci_cd_legacy_config,
+	.pe_alias =	"ahci",
 };
 PCI_EMUL_SET(pci_de_ahci_cd);

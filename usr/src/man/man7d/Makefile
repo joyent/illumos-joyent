@@ -78,6 +78,7 @@ _MANFILES=	aac.7d		\
 		ixgbe.7d	\
 		kmdb.7d		\
 		kstat.7d	\
+		ksensor.7d	\
 		ksyms.7d	\
 		llc1.7d		\
 		lockstat.7d	\
@@ -181,8 +182,8 @@ sparc_MANFILES=	audiocs.7d	\
 
 i386_MANFILES=	ahci.7d		\
 		amd8111s.7d	\
-		amdf17nbdf.7d	\
 		amdnbtemp.7d	\
+		amdzen.7d	\
 		amr.7d		\
 		arcmsr.7d	\
 		arn.7d		\
@@ -236,11 +237,17 @@ i386_MANFILES=	ahci.7d		\
 		si3124.7d	\
 		skd.7d		\
 		smbios.7d	\
+		smntemp.7d	\
 		uath.7d		\
 		ural.7d		\
 		urtw.7d		\
+		usmn.7d		\
+		vioblk.7d	\
+		vioif.7d	\
+		virtio.7d	\
 		wpi.7d		\
 		xhci.7d		\
+		zen_udf.7d	\
 		zyd.7d
 
 _MANLINKS=	1394.7d		\
@@ -256,8 +263,12 @@ _MANLINKS=	1394.7d		\
 
 sparc_MANLINKS=	drmach.7d
 
+i386_MANLINKS=	amdzen_stub.7d
+
 MANFILES =	$(_MANFILES) $($(MACH)_MANFILES)
 MANLINKS =	$(_MANLINKS) $($(MACH)_MANLINKS)
+
+amdzen_stub.7d	:= LINKSRC = amdzen.7d
 
 drmach.7d	:= LINKSRC = dr.7d
 

@@ -98,7 +98,7 @@ CPPFLAGS += -I$(PNGLITE)
 SRCS +=	$(COMMON)/gfx_fb.c $(PNGLITE)/pnglite.c
 OBJS +=	gfx_fb.o pnglite.o
 
-gfx_fb.o := CPPFLAGS += $(DEFAULT_CONSOLE_COLOR)
+gfx_fb.o := CPPFLAGS += $(DEFAULT_CONSOLE_COLOR) -I$(LZ4)
 pnglite.o := CPPFLAGS += -I$(ZLIB)
 
 SRCS +=	$(ZFSSRC)/devicename_stubs.c
@@ -130,6 +130,11 @@ CFLAGS +=	-I$(SRC)/common/ficl -I../../libficl \
 		-I../../.. -I.
 # the location of libstand
 CFLAGS +=	-I../../../../lib/libstand/
+
+multiboot.o := CPPFLAGS += -I../../../cddl/boot/zfs
+multiboot2.o := CPPFLAGS += -I../../../cddl/boot/zfs
+devicename.o := CPPFLAGS += -I../../../cddl/boot/zfs
+devicename_stubs.o := CPPFLAGS += -I../../../cddl/boot/zfs
 
 # Handle FreeBSD specific %b and %D printf format specifiers
 #FORMAT_EXTENSIONS=-D__printf__=__freebsd_kprintf__

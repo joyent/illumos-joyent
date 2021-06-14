@@ -22,6 +22,7 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -247,6 +248,7 @@ static void lxpr_read_sys_kernel_osrel(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_pid_max(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_rand_entavl(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_kernel_rand_uuid(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_sem(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_shmall(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_shmmax(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -470,7 +472,7 @@ typedef struct lxpr_rlimtab {
 	char	*rlim_rctl;	/* rctl source */
 } lxpr_rlimtab_t;
 
-#define RLIM_MAXFD	"Max open files"
+#define	RLIM_MAXFD	"Max open files"
 
 static lxpr_rlimtab_t lxpr_rlimtab[] = {
 	{ "Max cpu time",	"seconds",	"process.max-cpu-time" },
@@ -589,6 +591,7 @@ static lxpr_dirent_t sys_kerneldir[] = {
 static lxpr_dirent_t sys_randdir[] = {
 	{ LXPR_SYS_KERNEL_RAND_BOOTID,	"boot_id" },
 	{ LXPR_SYS_KERNEL_RAND_ENTAVL,	"entropy_avail" },
+	{ LXPR_SYS_KERNEL_RAND_UUID,	"uuid" },
 };
 
 #define	SYS_RANDDIRFILES (sizeof (sys_randdir) / sizeof (sys_randdir[0]))
@@ -931,6 +934,7 @@ static void (*lxpr_read_function[])() = {
 	lxpr_read_invalid,		/* /proc/sys/kernel/random */
 	lxpr_read_sys_kernel_rand_bootid, /* /proc/sys/kernel/random/boot_id */
 	lxpr_read_sys_kernel_rand_entavl, /* .../kernel/random/entropy_avail */
+	lxpr_read_sys_kernel_rand_uuid, /* .../kernel/random/uuid */
 	lxpr_read_sys_kernel_sem,	/* /proc/sys/kernel/sem */
 	lxpr_read_sys_kernel_shmall,	/* /proc/sys/kernel/shmall */
 	lxpr_read_sys_kernel_shmmax,	/* /proc/sys/kernel/shmmax */
@@ -1100,6 +1104,7 @@ static vnode_t *(*lxpr_lookup_function[])() = {
 	lxpr_lookup_sys_kdir_randdir,	/* /proc/sys/kernel/random */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/random/boot_id */
 	lxpr_lookup_not_a_dir,		/* .../kernel/random/entropy_avail */
+	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/random/uuid */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/sem */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/shmall */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/shmmax */
@@ -1269,6 +1274,7 @@ static int (*lxpr_readdir_function[])() = {
 	lxpr_readdir_sys_kdir_randdir,	/* /proc/sys/kernel/random */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/random/boot_id */
 	lxpr_readdir_not_a_dir,		/* .../kernel/random/entropy_avail */
+	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/random/uuid */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/sem */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/shmall */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/shmmax */
@@ -1737,8 +1743,9 @@ lxpr_read_pid_limits(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		 * match the max value so that we do not output "unlimited".
 		 */
 		if (strcmp(lxpr_rlimtab[i].rlim_name, RLIM_MAXFD) == 0 &&
-		    cur[i] == RLIM_INFINITY)
-		    cur[i] = max[i];
+		    cur[i] == RLIM_INFINITY) {
+			cur[i] = max[i];
+		}
 
 	}
 	lxpr_unlock(p);
@@ -4001,10 +4008,10 @@ lxpr_read_meminfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	 * model, so just inform the caller that no swap is being used.
 	 *
 	 * MemAvailable
-	 * MemAvailable entry is available since Linux Kernel +3.14, is an 
-	 * estimate of how much memory is available for starting new applications, 
-	 * without swapping. In lxbrand we will always return the available free 
-	 * memory as an estimate of this value.
+	 * MemAvailable entry is available since Linux Kernel +3.14, is an
+	 * estimate of how much memory is available for starting new
+	 * applications, without swapping. In lxbrand we will always return the
+	 * available free memory as an estimate of this value.
 	 */
 	lxpr_uiobuf_printf(uiobuf,
 	    "MemTotal:       %8lu kB\n"
@@ -4921,7 +4928,25 @@ lxpr_read_sys_kernel_pid_max(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%d\n", maxpid);
 }
 
-/* ARGSUSED */
+static void
+lxpr_gen_uuid(char *uuid, size_t size)
+{
+	uint8_t r[16];
+	if (random_get_bytes(r, sizeof (r)) != 0) {
+		(void) random_get_pseudo_bytes(r, sizeof (r));
+	}
+	/* Set UUID version to 4 (random) */
+	r[6] = 0x40 | (r[6] & 0x0f);
+	/* Set UUID variant to 1 */
+	r[8] = 0x80 | (r[8] & 0x3f);
+
+	(void) snprintf(uuid, size,
+	    "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x"
+	    "-%02x%02x%02x%02x%02x%02x",
+	    r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8],
+	    r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
+}
+
 static void
 lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4935,13 +4960,11 @@ lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	 *    safe choice if you need to identify a specific boot on a specific
 	 *    booted kernel.
 	 *
-	 * We'll just generate a random ID if necessary. On Linux the format
-	 * appears to resemble a uuid but since it is not documented to be a
-	 * uuid, we don't worry about that.
+	 * On Linux the format appears to resemble a uuid so stick with that.
 	 */
 	zone_t *zone = LXPTOZ(lxpnp);
 	lx_zone_data_t *lxzd = ztolxzd(zone);
-	char bootid[LX_BOOTID_LEN];
+	char bootid[UUID_PRINTABLE_STRING_LENGTH];
 
 	ASSERT(lxpnp->lxpr_type == LXPR_SYS_KERNEL_RAND_BOOTID);
 	ASSERT(zone->zone_brand == &lx_brand);
@@ -4949,30 +4972,7 @@ lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 	mutex_enter(&lxzd->lxzd_lock);
 	if (lxzd->lxzd_bootid[0] == '\0') {
-		int i;
-
-		for (i = 0; i < 5; i++) {
-			u_longlong_t n;
-			char s[32];
-
-			(void) random_get_bytes((uint8_t *)&n, sizeof (n));
-			switch (i) {
-			case 0:	(void) snprintf(s, sizeof (s), "%08llx", n);
-				s[8] = '\0';
-				break;
-			case 4:	(void) snprintf(s, sizeof (s), "%012llx", n);
-				s[12] = '\0';
-				break;
-			default: (void) snprintf(s, sizeof (s), "%04llx", n);
-				s[4] = '\0';
-				break;
-			}
-			if (i > 0)
-				(void) strlcat(lxzd->lxzd_bootid, "-",
-				    sizeof (lxzd->lxzd_bootid));
-			(void) strlcat(lxzd->lxzd_bootid, s,
-			    sizeof (lxzd->lxzd_bootid));
-		}
+		lxpr_gen_uuid(lxzd->lxzd_bootid, sizeof (lxzd->lxzd_bootid));
 	}
 	(void) strlcpy(bootid, lxzd->lxzd_bootid, sizeof (bootid));
 	mutex_exit(&lxzd->lxzd_lock);
@@ -4991,6 +4991,24 @@ lxpr_read_sys_kernel_rand_entavl(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	ASSERT(LXPTOZ(lxpnp)->zone_brand == &lx_brand);
 
 	lxpr_uiobuf_printf(uiobuf, "%d\n", swrand_stats.ss_entEst);
+}
+
+static void
+lxpr_read_sys_kernel_rand_uuid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	/*
+	 * Each read from this read-only file should return a new
+	 * random 128-bit UUID string in the standard UUID format.
+	 */
+	zone_t *zone = LXPTOZ(lxpnp);
+	char uuid[UUID_PRINTABLE_STRING_LENGTH];
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_KERNEL_RAND_UUID);
+	ASSERT(zone->zone_brand == &lx_brand);
+
+	lxpr_gen_uuid(uuid, sizeof (uuid));
+
+	lxpr_uiobuf_printf(uiobuf, "%s\n", uuid);
 }
 
 /* ARGSUSED */
@@ -8094,6 +8112,58 @@ lxpr_write_pid_loginuid(lxpr_node_t *lxpnp, struct uio *uio, struct cred *cr,
 	return (0);
 }
 
+static int
+lxpr_readlink_exe(lxpr_node_t *lxpnp, char *buf, size_t size, cred_t *cr)
+{
+	size_t dlen = DIRENT64_RECLEN(MAXPATHLEN);
+	dirent64_t *dp;
+	vnode_t *dirvp;
+	int error = ENOENT;
+	char *dbuf;
+	proc_t *p;
+	size_t len;
+
+	p = lxpr_lock(lxpnp, NO_ZOMB);
+
+	if (p == NULL)
+		return (error);
+
+	dirvp = p->p_execdir;
+	if (dirvp == NULL) {
+		lxpr_unlock(p);
+		return (error);
+	}
+
+	VN_HOLD(dirvp);
+	lxpr_unlock(p);
+
+	/* Look up the parent directory path */
+	if ((error = vnodetopath(NULL, dirvp, buf, size, cr)) != 0) {
+		VN_RELE(dirvp);
+		return (error);
+	}
+
+	len = strlen(buf);
+
+	dbuf = kmem_alloc(dlen, KM_SLEEP);
+
+	/*
+	 * Walk the parent directory to find the vnode for p->p_exec, in order
+	 * to derive its path.
+	 */
+	if ((error = dirfindvp(NULL, dirvp, lxpnp->lxpr_realvp,
+	    cr, dbuf, dlen, &dp)) == 0 &&
+	    strlen(dp->d_name) + len + 1 < size) {
+		buf[len] = '/';
+		(void) strcpy(buf + len + 1, dp->d_name);
+	} else {
+		error = ENOENT;
+	}
+	VN_RELE(dirvp);
+	kmem_free(dbuf, dlen);
+	return (error);
+}
+
 /*
  * lxpr_readlink(): Vnode operation for VOP_READLINK()
  */
@@ -8135,7 +8205,16 @@ lxpr_readlink(vnode_t *vp, uio_t *uiop, cred_t *cr, caller_context_t *ct)
 		if (error != 0)
 			return (error);
 
-		if ((error = vnodetopath(NULL, rvp, bp, buflen, cr)) != 0) {
+		error = vnodetopath(NULL, rvp, bp, buflen, cr);
+
+		/*
+		 * Special handling for /proc/<pid>/exe where the vnode path is
+		 * not cached.
+		 */
+		if (error != 0 && lxpnp->lxpr_type == LXPR_PID_EXE)
+			error = lxpr_readlink_exe(lxpnp, bp, buflen, cr);
+
+		if (error != 0) {
 			/*
 			 * Special handling possible for /proc/<pid>/fd/<num>
 			 * Generate <type>:[<inode>] links, if allowed.

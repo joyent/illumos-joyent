@@ -37,6 +37,7 @@
 #include <sys/mkdev.h>
 #include <sys/queue.h>
 #include <sys/containerof.h>
+#include <sys/sensors.h>
 
 #include "version.h"
 #include "common/common.h"
@@ -179,6 +180,29 @@ static SLIST_HEAD(, adapter) t4_adapter_list;
 static kmutex_t t4_uld_list_lock;
 static SLIST_HEAD(, uld_info) t4_uld_list;
 #endif
+
+static int t4_temperature_read(void *, sensor_ioctl_scalar_t *);
+static int t4_voltage_read(void *, sensor_ioctl_scalar_t *);
+static const ksensor_ops_t t4_temp_ops = {
+	.kso_kind = ksensor_kind_temperature,
+	.kso_scalar = t4_temperature_read
+};
+
+static const ksensor_ops_t t4_volt_ops = {
+	.kso_kind = ksensor_kind_voltage,
+	.kso_scalar = t4_voltage_read
+};
+
+static int t4_ufm_getcaps(ddi_ufm_handle_t *, void *, ddi_ufm_cap_t *);
+static int t4_ufm_fill_image(ddi_ufm_handle_t *, void *, uint_t,
+    ddi_ufm_image_t *);
+static int t4_ufm_fill_slot(ddi_ufm_handle_t *, void *, uint_t, uint_t,
+    ddi_ufm_slot_t *);
+static ddi_ufm_ops_t t4_ufm_ops = {
+	.ddi_ufm_op_fill_image = t4_ufm_fill_image,
+	.ddi_ufm_op_fill_slot = t4_ufm_fill_slot,
+	.ddi_ufm_op_getcaps = t4_ufm_getcaps
+};
 
 int
 _init(void)
@@ -758,7 +782,30 @@ ofld_queues:
 	}
 	sc->flags |= INTR_ALLOCATED;
 
-	ASSERT(rc == DDI_SUCCESS);
+	if ((rc = ksensor_create_scalar_pcidev(dip, SENSOR_KIND_TEMPERATURE,
+	    &t4_temp_ops, sc, "temp", &sc->temp_sensor)) != 0) {
+		cxgb_printf(dip, CE_WARN, "failed to create temperature "
+		    "sensor: %d", rc);
+		rc = DDI_FAILURE;
+		goto done;
+	}
+
+	if ((rc = ksensor_create_scalar_pcidev(dip, SENSOR_KIND_VOLTAGE,
+	    &t4_volt_ops, sc, "vdd", &sc->volt_sensor)) != 0) {
+		cxgb_printf(dip, CE_WARN, "failed to create voltage "
+		    "sensor: %d", rc);
+		rc = DDI_FAILURE;
+		goto done;
+	}
+
+
+	if ((rc = ddi_ufm_init(dip, DDI_UFM_CURRENT_VERSION, &t4_ufm_ops,
+	    &sc->ufm_hdl, sc)) != 0) {
+		cxgb_printf(dip, CE_WARN, "failed to enable UFM ops: %d", rc);
+		rc = DDI_FAILURE;
+		goto done;
+	}
+	ddi_ufm_update(sc->ufm_hdl);
 	ddi_report_dev(dip);
 
 	/*
@@ -849,6 +896,11 @@ t4_devo_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	}
 
 	/* Safe to call no matter what */
+	if (sc->ufm_hdl != NULL) {
+		ddi_ufm_fini(sc->ufm_hdl);
+		sc->ufm_hdl = NULL;
+	}
+	(void) ksensor_remove(dip, KSENSOR_ALL_IDS);
 	ddi_prop_remove_all(dip);
 	ddi_remove_minor_node(dip, NULL);
 
@@ -2919,3 +2971,180 @@ t4_iterate(void (*func)(int, void *), void *arg)
 }
 
 #endif
+
+static int
+t4_sensor_read(struct adapter *sc, uint32_t diag, uint32_t *valp)
+{
+	int rc;
+	struct port_info *pi = sc->port[0];
+	uint32_t param, val;
+
+	rc = begin_synchronized_op(pi, 1, 1);
+	if (rc != 0) {
+		return (rc);
+	}
+	param = V_FW_PARAMS_MNEM(FW_PARAMS_MNEM_DEV) |
+	    V_FW_PARAMS_PARAM_X(FW_PARAMS_PARAM_DEV_DIAG) |
+	    V_FW_PARAMS_PARAM_Y(diag);
+	rc = -t4_query_params(sc, sc->mbox, sc->pf, 0, 1, &param, &val);
+	end_synchronized_op(pi, 1);
+
+	if (rc != 0) {
+		return (rc);
+	}
+
+	if (val == 0) {
+		return (EIO);
+	}
+
+	*valp = val;
+	return (0);
+}
+
+static int
+t4_temperature_read(void *arg, sensor_ioctl_scalar_t *scalar)
+{
+	int ret;
+	struct adapter *sc = arg;
+	uint32_t val;
+
+	ret = t4_sensor_read(sc, FW_PARAM_DEV_DIAG_TMP, &val);
+	if (ret != 0) {
+		return (ret);
+	}
+
+	/*
+	 * The device measures temperature in units of 1 degree Celsius. We
+	 * don't know its precision.
+	 */
+	scalar->sis_unit = SENSOR_UNIT_CELSIUS;
+	scalar->sis_gran = 1;
+	scalar->sis_prec = 0;
+	scalar->sis_value = val;
+
+	return (0);
+}
+
+static int
+t4_voltage_read(void *arg, sensor_ioctl_scalar_t *scalar)
+{
+	int ret;
+	struct adapter *sc = arg;
+	uint32_t val;
+
+	ret = t4_sensor_read(sc, FW_PARAM_DEV_DIAG_VDD, &val);
+	if (ret != 0) {
+		return (ret);
+	}
+
+	scalar->sis_unit = SENSOR_UNIT_VOLTS;
+	scalar->sis_gran = 1000;
+	scalar->sis_prec = 0;
+	scalar->sis_value = val;
+
+	return (0);
+}
+
+/*
+ * While the hardware supports the ability to read and write the flash image,
+ * this is not currently wired up.
+ */
+static int
+t4_ufm_getcaps(ddi_ufm_handle_t *ufmh, void *arg, ddi_ufm_cap_t *caps)
+{
+	*caps = DDI_UFM_CAP_REPORT;
+	return (0);
+}
+
+static int
+t4_ufm_fill_image(ddi_ufm_handle_t *ufmh, void *arg, uint_t imgno,
+    ddi_ufm_image_t *imgp)
+{
+	if (imgno != 0) {
+		return (EINVAL);
+	}
+
+	ddi_ufm_image_set_desc(imgp, "Firmware");
+	ddi_ufm_image_set_nslots(imgp, 1);
+
+	return (0);
+}
+
+static int
+t4_ufm_fill_slot_version(nvlist_t *nvl, const char *key, uint32_t vers)
+{
+	char buf[128];
+
+	if (vers == 0) {
+		return (0);
+	}
+
+	if (snprintf(buf, sizeof (buf), "%u.%u.%u.%u",
+	    G_FW_HDR_FW_VER_MAJOR(vers), G_FW_HDR_FW_VER_MINOR(vers),
+	    G_FW_HDR_FW_VER_MICRO(vers), G_FW_HDR_FW_VER_BUILD(vers)) >=
+	    sizeof (buf)) {
+		return (EOVERFLOW);
+	}
+
+	return (nvlist_add_string(nvl, key, buf));
+}
+
+static int
+t4_ufm_fill_slot(ddi_ufm_handle_t *ufmh, void *arg, uint_t imgno, uint_t slotno,
+    ddi_ufm_slot_t *slotp)
+{
+	int ret;
+	struct adapter *sc = arg;
+	nvlist_t *misc = NULL;
+	char buf[128];
+
+	if (imgno != 0 || slotno != 0) {
+		return (EINVAL);
+	}
+
+	if (snprintf(buf, sizeof (buf), "%u.%u.%u.%u",
+	    G_FW_HDR_FW_VER_MAJOR(sc->params.fw_vers),
+	    G_FW_HDR_FW_VER_MINOR(sc->params.fw_vers),
+	    G_FW_HDR_FW_VER_MICRO(sc->params.fw_vers),
+	    G_FW_HDR_FW_VER_BUILD(sc->params.fw_vers)) >= sizeof (buf)) {
+		return (EOVERFLOW);
+	}
+
+	ddi_ufm_slot_set_version(slotp, buf);
+
+	(void) nvlist_alloc(&misc, NV_UNIQUE_NAME, KM_SLEEP);
+	if ((ret = t4_ufm_fill_slot_version(misc, "TP Microcode",
+	    sc->params.tp_vers)) != 0) {
+		goto err;
+	}
+
+	if ((ret = t4_ufm_fill_slot_version(misc, "Bootstrap",
+	    sc->params.bs_vers)) != 0) {
+		goto err;
+	}
+
+	if ((ret = t4_ufm_fill_slot_version(misc, "Expansion ROM",
+	    sc->params.er_vers)) != 0) {
+		goto err;
+	}
+
+	if ((ret = nvlist_add_uint32(misc, "Serial Configuration",
+	    sc->params.scfg_vers)) != 0) {
+		goto err;
+	}
+
+	if ((ret = nvlist_add_uint32(misc, "VPD Version",
+	    sc->params.vpd_vers)) != 0) {
+		goto err;
+	}
+
+	ddi_ufm_slot_set_misc(slotp, misc);
+	ddi_ufm_slot_set_attrs(slotp, DDI_UFM_ATTR_ACTIVE |
+	    DDI_UFM_ATTR_WRITEABLE | DDI_UFM_ATTR_READABLE);
+	return (0);
+
+err:
+	nvlist_free(misc);
+	return (ret);
+
+}

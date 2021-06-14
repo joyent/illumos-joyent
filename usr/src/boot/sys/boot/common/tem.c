@@ -68,7 +68,6 @@
 #include <sys/consplat.h>
 #include <sys/kd.h>
 #include <stdbool.h>
-#include <lz4.h>
 
 /* Terminal emulator internal helper functions */
 static void	tems_setup_terminal(struct vis_devinit *, size_t, size_t);
@@ -144,14 +143,6 @@ static void	tem_pix_cls_range(struct tem_vt_state *, screen_pos_t, int,
 static void	tem_pix_cls(struct tem_vt_state *, int,
 		    screen_pos_t, screen_pos_t);
 
-static void	bit_to_pix4(struct tem_vt_state *tem, tem_char_t c,
-		    text_color_t fg_color, text_color_t bg_color);
-static void	bit_to_pix8(struct tem_vt_state *tem, tem_char_t c,
-		    text_color_t fg_color, text_color_t bg_color);
-static void	bit_to_pix16(struct tem_vt_state *tem, tem_char_t c,
-		    text_color_t fg_color, text_color_t bg_color);
-static void	bit_to_pix24(struct tem_vt_state *tem, tem_char_t c,
-		    text_color_t fg_color, text_color_t bg_color);
 static void	bit_to_pix32(struct tem_vt_state *tem, tem_char_t c,
 		    text_color_t fg_color, text_color_t bg_color);
 
@@ -221,6 +212,11 @@ tem_internal_init(struct tem_vt_state *ptem,
 	size = width * sizeof (tem_char_t);
 	ptem->tvs_outbuf = malloc(size);
 	if (ptem->tvs_outbuf == NULL)
+		panic("out of memory in tem_internal_init()\n");
+
+	ptem->tvs_maxtab = width / 8;
+	ptem->tvs_tabs = calloc(ptem->tvs_maxtab, sizeof (*ptem->tvs_tabs));
+	if (ptem->tvs_tabs == NULL)
 		panic("out of memory in tem_internal_init()\n");
 
 	tem_reset_display(ptem, clear_screen, init_color);
@@ -303,6 +299,9 @@ tem_free_buf(struct tem_vt_state *tem)
 
 	free(tem->tvs_screen_buf);
 	tem->tvs_screen_buf = NULL;
+
+	free(tem->tvs_tabs);
+	tem->tvs_tabs = NULL;
 }
 
 static int
@@ -434,10 +433,9 @@ static void
 tems_setup_font(screen_size_t height, screen_size_t width)
 {
 	bitmap_data_t *font_data;
-	int i;
 
 	/*
-	 * set_font() will select a appropriate sized font for
+	 * set_font() will select an appropriate sized font for
 	 * the number of rows and columns selected.  If we don't
 	 * have a font that will fit, then it will use the
 	 * default builtin font and adjust the rows and columns
@@ -446,44 +444,24 @@ tems_setup_font(screen_size_t height, screen_size_t width)
 	font_data = set_font(&tems.ts_c_dimension.height,
 	    &tems.ts_c_dimension.width, height, width);
 
-	/*
-	 * The built in font is compressed, to use it, we
-	 * uncompress it into the allocated buffer.
-	 * To use loaded font, we assign the loaded buffer.
-	 * In case of next load, the previously loaded data
-	 * is freed by the process of loading the new font.
-	 */
-	if (tems.ts_font.vf_bytes == NULL) {
-		for (i = 0; i < VFNT_MAPS; i++) {
-			tems.ts_font.vf_map[i] =
-			    font_data->font->vf_map[i];
-		}
+	if (font_data == NULL)
+		panic("out of memory");
 
-		if (font_data->compressed_size != 0) {
-			/*
-			 * We only expect this allocation to
-			 * happen at startup, and therefore not to fail.
-			 */
-			tems.ts_font.vf_bytes =
-			    malloc(font_data->uncompressed_size);
-			if (tems.ts_font.vf_bytes == NULL)
-				panic("out of memory");
-			(void) lz4_decompress(
-			    font_data->compressed_data,
-			    tems.ts_font.vf_bytes,
-			    font_data->compressed_size,
-			    font_data->uncompressed_size, 0);
-		} else {
-			tems.ts_font.vf_bytes =
-			    font_data->font->vf_bytes;
-		}
-		tems.ts_font.vf_width = font_data->font->vf_width;
-		tems.ts_font.vf_height = font_data->font->vf_height;
-		for (i = 0; i < VFNT_MAPS; i++) {
-			tems.ts_font.vf_map_count[i] =
-			    font_data->font->vf_map_count[i];
-		}
+	/*
+	 * To use loaded font, we assign the loaded font data to tems.ts_font.
+	 * In case of next load, the previously loaded data is freed
+	 * when loading the new font.
+	 */
+	for (int i = 0; i < VFNT_MAPS; i++) {
+		tems.ts_font.vf_map[i] =
+		    font_data->font->vf_map[i];
+		tems.ts_font.vf_map_count[i] =
+		    font_data->font->vf_map_count[i];
 	}
+
+	tems.ts_font.vf_bytes = font_data->font->vf_bytes;
+	tems.ts_font.vf_width = font_data->font->vf_width;
+	tems.ts_font.vf_height = font_data->font->vf_height;
 }
 
 static void
@@ -900,24 +878,23 @@ tems_get_initial_color(tem_color_t *pcolor)
 	if (inverse_screen)
 		flags |= TEM_ATTR_SCREEN_REVERSE;
 
-	/*
-	 * In case of black on white we want bright white for BG.
-	 * In case if white on black, to improve readability,
-	 * we want bold white.
-	 */
 	if (flags != 0) {
 		/*
-		 * If either reverse flag is set, the screen is in
-		 * white-on-black mode.  We set the bold flag to
-		 * improve readability.
+		 * The reverse attribute is set.
+		 * In case of black on white we want bright white for BG.
 		 */
-		flags |= TEM_ATTR_BOLD;
+		if (pcolor->fg_color == ANSI_COLOR_WHITE)
+			flags |= TEM_ATTR_BRIGHT_BG;
+
+		/*
+		 * For white on black, unset the bright attribute we
+		 * had set to have bright white background.
+		 */
+		if (pcolor->fg_color == ANSI_COLOR_BLACK)
+			flags &= ~TEM_ATTR_BRIGHT_BG;
 	} else {
 		/*
-		 * Otherwise, the screen is in black-on-white mode.
-		 * The SPARC PROM console, which starts in this mode,
-		 * uses the bright white background colour so we
-		 * match it here.
+		 * In case of black on white we want bright white for BG.
 		 */
 		if (pcolor->bg_color == ANSI_COLOR_WHITE)
 			flags |= TEM_ATTR_BRIGHT_BG;
@@ -1182,32 +1159,41 @@ tem_setparam(struct tem_vt_state *tem, int count, int newparam)
 	}
 }
 
+/*
+ * For colors 0-15 the tem is using color code translation
+ * from sun colors to vga (dim_xlate and brt_xlate tables, see tem_get_color).
+ * Colors 16-255 are used without translation.
+ */
 static void
 tem_select_color(struct tem_vt_state *tem, text_color_t color, bool fg)
 {
-	if (tems.ts_pdepth >= 24 ||
-	    (color < 8 && tems.ts_pdepth < 24)) {
-		if (fg == true) {
-			tem->tvs_fg_color = color;
+	if (fg == true)
+		tem->tvs_fg_color = color;
+	else
+		tem->tvs_bg_color = color;
+
+	/*
+	 * For colors 0-7, make sure the BRIGHT attribute is not set.
+	 */
+	if (color < 8) {
+		if (fg == true)
 			tem->tvs_flags &= ~TEM_ATTR_BRIGHT_FG;
-		} else {
-			tem->tvs_bg_color = color;
+		else
 			tem->tvs_flags &= ~TEM_ATTR_BRIGHT_BG;
-		}
 		return;
 	}
 
-	if (color > 15)
-		return;
-
-	/* Bright color and depth < 24 */
-	color -= 8;
-	if (fg == true) {
-		tem->tvs_fg_color = color;
-		tem->tvs_flags |= TEM_ATTR_BRIGHT_FG;
-	} else {
-		tem->tvs_bg_color = color;
-		tem->tvs_flags |= TEM_ATTR_BRIGHT_BG;
+	/*
+	 * For colors 8-15, we use color codes 0-7 and set BRIGHT attribute.
+	 */
+	if (color < 16) {
+		if (fg == true) {
+			tem->tvs_fg_color -= 8;
+			tem->tvs_flags |= TEM_ATTR_BRIGHT_FG;
+		} else {
+			tem->tvs_bg_color -= 8;
+			tem->tvs_flags |= TEM_ATTR_BRIGHT_BG;
+		}
 	}
 }
 
@@ -2305,35 +2291,12 @@ static void
 tem_pix_bit2pix(struct tem_vt_state *tem, term_char_t c)
 {
 	text_color_t fg, bg;
-	void (*fp)(struct tem_vt_state *, tem_char_t,
-	    unsigned char, unsigned char);
 
 	fg = DEFAULT_ANSI_FOREGROUND;
 	bg = DEFAULT_ANSI_BACKGROUND;
 
 	tem_get_color(&fg, &bg, c);
-	switch (tems.ts_pdepth) {
-	case 4:
-		fp = bit_to_pix4;
-		break;
-	case 8:
-		fp = bit_to_pix8;
-		break;
-	case 15:
-	case 16:
-		fp = bit_to_pix16;
-		break;
-	case 24:
-		fp = bit_to_pix24;
-		break;
-	case 32:
-		fp = bit_to_pix32;
-		break;
-	default:
-		return;
-	}
-
-	fp(tem, c.tc_char, fg, bg);
+	bit_to_pix32(tem, c.tc_char, fg, bg);
 }
 
 
@@ -2444,7 +2407,7 @@ tem_back_tab(struct tem_vt_state *tem)
 static void
 tem_tab(struct tem_vt_state *tem)
 {
-	int	i;
+	size_t	i;
 	screen_pos_t	tabstop;
 
 	tabstop = tems.ts_c_dimension.width - 1;
@@ -2462,10 +2425,9 @@ tem_tab(struct tem_vt_state *tem)
 static void
 tem_set_tab(struct tem_vt_state *tem)
 {
-	int	i;
-	int	j;
+	size_t	i, j;
 
-	if (tem->tvs_ntabs == TEM_MAXTAB)
+	if (tem->tvs_ntabs == tem->tvs_maxtab)
 		return;
 	if (tem->tvs_ntabs == 0 ||
 	    tem->tvs_tabs[tem->tvs_ntabs] < tem->tvs_c_cursor.col) {
@@ -2488,8 +2450,7 @@ tem_set_tab(struct tem_vt_state *tem)
 static void
 tem_clear_tabs(struct tem_vt_state *tem, int action)
 {
-	int	i;
-	int	j;
+	size_t	i, j;
 
 	switch (action) {
 	case 3: /* clear all tabs */
@@ -2671,36 +2632,14 @@ tem_pix_cursor(struct tem_vt_state *tem, short action)
 	bg = DEFAULT_ANSI_BACKGROUND;
 	tem_get_color(&fg, &bg, c);
 
-	switch (tems.ts_pdepth) {
-	case 4:
-		ca.fg_color.mono = fg;
-		ca.bg_color.mono = bg;
-		break;
-	case 8:
-		ca.fg_color.mono = tems.ts_color_map(fg);
-		ca.bg_color.mono = tems.ts_color_map(bg);
-		break;
-	case 15:
-	case 16:
-		color = tems.ts_color_map(fg);
-		ca.fg_color.sixteen[0] = (color >> 8) & 0xFF;
-		ca.fg_color.sixteen[1] = color & 0xFF;
-		color = tems.ts_color_map(bg);
-		ca.bg_color.sixteen[0] = (color >> 8) & 0xFF;
-		ca.bg_color.sixteen[1] = color & 0xFF;
-		break;
-	case 24:
-	case 32:
-		color = tems.ts_color_map(fg);
-		ca.fg_color.twentyfour[0] = (color >> 16) & 0xFF;
-		ca.fg_color.twentyfour[1] = (color >> 8) & 0xFF;
-		ca.fg_color.twentyfour[2] = color & 0xFF;
-		color = tems.ts_color_map(bg);
-		ca.bg_color.twentyfour[0] = (color >> 16) & 0xFF;
-		ca.bg_color.twentyfour[1] = (color >> 8) & 0xFF;
-		ca.bg_color.twentyfour[2] = color & 0xFF;
-		break;
-	}
+	color = tems.ts_color_map(fg);
+	ca.fg_color.twentyfour[0] = (color >> 16) & 0xFF;
+	ca.fg_color.twentyfour[1] = (color >> 8) & 0xFF;
+	ca.fg_color.twentyfour[2] = color & 0xFF;
+	color = tems.ts_color_map(bg);
+	ca.bg_color.twentyfour[0] = (color >> 16) & 0xFF;
+	ca.bg_color.twentyfour[1] = (color >> 8) & 0xFF;
+	ca.bg_color.twentyfour[2] = color & 0xFF;
 
 	ca.action = action;
 
@@ -2719,61 +2658,6 @@ tem_pix_cursor(struct tem_vt_state *tem, short action)
 			    tems.ts_font.vf_width;
 		}
 	}
-}
-
-static void
-bit_to_pix4(struct tem_vt_state *tem,
-    tem_char_t c,
-    text_color_t fg_color,
-    text_color_t bg_color)
-{
-	uint8_t *dest = (uint8_t *)tem->tvs_pix_data;
-	font_bit_to_pix4(&tems.ts_font, dest, c, fg_color, bg_color);
-}
-
-static void
-bit_to_pix8(struct tem_vt_state *tem,
-    tem_char_t c,
-    text_color_t fg_color,
-    text_color_t bg_color)
-{
-	uint8_t *dest = (uint8_t *)tem->tvs_pix_data;
-
-	fg_color = (text_color_t)tems.ts_color_map(fg_color);
-	bg_color = (text_color_t)tems.ts_color_map(bg_color);
-	font_bit_to_pix8(&tems.ts_font, dest, c, fg_color, bg_color);
-}
-
-static void
-bit_to_pix16(struct tem_vt_state *tem,
-    tem_char_t c,
-    text_color_t fg_color4,
-    text_color_t bg_color4)
-{
-	uint16_t fg_color16, bg_color16;
-	uint16_t *dest;
-
-	fg_color16 = (uint16_t)tems.ts_color_map(fg_color4);
-	bg_color16 = (uint16_t)tems.ts_color_map(bg_color4);
-
-	dest = (uint16_t *)tem->tvs_pix_data;
-	font_bit_to_pix16(&tems.ts_font, dest, c, fg_color16, bg_color16);
-}
-
-static void
-bit_to_pix24(struct tem_vt_state *tem,
-    tem_char_t c,
-    text_color_t fg_color4,
-    text_color_t bg_color4)
-{
-	uint32_t fg_color32, bg_color32;
-	uint8_t *dest;
-
-	fg_color32 = tems.ts_color_map(fg_color4);
-	bg_color32 = tems.ts_color_map(bg_color4);
-
-	dest = (uint8_t *)tem->tvs_pix_data;
-	font_bit_to_pix24(&tems.ts_font, dest, c, fg_color32, bg_color32);
 }
 
 static void
@@ -2815,19 +2699,29 @@ tem_get_attr(struct tem_vt_state *tem, text_color_t *fg,
 static void
 tem_get_color(text_color_t *fg, text_color_t *bg, term_char_t c)
 {
+	bool bold_font;
+
 	*fg = c.tc_fg_color;
 	*bg = c.tc_bg_color;
 
+	bold_font = tems.ts_font.vf_map_count[VFNT_MAP_BOLD] != 0;
+
+	/*
+	 * If we have both normal and bold font components,
+	 * we use bold font for TEM_ATTR_BOLD.
+	 * The bright color is traditionally used with TEM_ATTR_BOLD,
+	 * in case there is no bold font.
+	 */
 	if (c.tc_fg_color < XLATE_NCOLORS) {
-		if (TEM_CHAR_ATTR(c.tc_char) &
-		    (TEM_ATTR_BRIGHT_FG | TEM_ATTR_BOLD))
+		if (TEM_ATTR_ISSET(c.tc_char, TEM_ATTR_BRIGHT_FG) ||
+		    (TEM_ATTR_ISSET(c.tc_char, TEM_ATTR_BOLD) && !bold_font))
 			*fg = brt_xlate[c.tc_fg_color];
 		else
 			*fg = dim_xlate[c.tc_fg_color];
 	}
 
 	if (c.tc_bg_color < XLATE_NCOLORS) {
-		if (TEM_CHAR_ATTR(c.tc_char) & TEM_ATTR_BRIGHT_BG)
+		if (TEM_ATTR_ISSET(c.tc_char, TEM_ATTR_BRIGHT_BG))
 			*bg = brt_xlate[c.tc_bg_color];
 		else
 			*bg = dim_xlate[c.tc_bg_color];

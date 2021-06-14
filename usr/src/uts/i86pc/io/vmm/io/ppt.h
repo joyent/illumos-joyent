@@ -34,10 +34,12 @@
 int ppt_unassign_all(struct vm *vm);
 int ppt_map_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len,
     vm_paddr_t hpa);
+int ppt_unmap_mmio(struct vm *vm, int pptfd, vm_paddr_t gpa, size_t len);
 int ppt_setup_msi(struct vm *vm, int vcpu, int pptfd, uint64_t addr,
     uint64_t msg, int numvec);
 int ppt_setup_msix(struct vm *vm, int vcpu, int pptfd, int idx, uint64_t addr,
     uint64_t msg, uint32_t vector_control);
+int ppt_disable_msix(struct vm *vm, int pptfd);
 int ppt_assigned_devices(struct vm *vm);
 boolean_t ppt_is_mmio(struct vm *vm, vm_paddr_t gpa);
 int ppt_get_limits(struct vm *vm, int pptfd, int *msilimit, int *msixlimit);

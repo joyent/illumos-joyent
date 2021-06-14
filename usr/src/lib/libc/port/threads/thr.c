@@ -717,7 +717,7 @@ _thrp_create(void *stk, size_t stksize, void *(*func)(void *), void *arg,
 
 	exit_critical(self);
 
-	if (name != NULL)
+	if (name != NULL && name[0] != '\0')
 		(void) pthread_setname_np(tid, name);
 
 	if (!(flags & THR_SUSPENDED))
@@ -1308,6 +1308,11 @@ libc_init(void)
 	 */
 	if (oldself != NULL && (oldself->ul_primarymap || !primary_link_map)) {
 		__tdb_bootstrap = oldself->ul_uberdata->tdb_bootstrap;
+		/*
+		 * Each link map has its own copy of the stack protector guard
+		 * and must always be initialized.
+		 */
+		ssp_init();
 		mutex_setup();
 		atfork_init();	/* every link map needs atfork() processing */
 		init_progname();
@@ -1448,6 +1453,7 @@ libc_init(void)
 		/* tls_size was zero when oldself was allocated */
 		lfree(oldself, sizeof (ulwp_t));
 	}
+	ssp_init();
 	mutex_setup();
 	atfork_init();
 	signal_init();

@@ -23,7 +23,7 @@
  * Copyright 2020 Oxide Computer Company
  * Copyright (c) 2013 Gary Mills
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2020 Joyent, Inc.
+ * Copyright 2021 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -217,7 +217,7 @@ log_init(void)
 	log_intrq = log_makeq(0, LOG_HIWAT, (void *)ipltospl(SPL8));
 
 	/*
-	 * Create a queue to hold the most recent 8K of console messages.
+	 * Create a queue to hold the most recent 64K of console messages.
 	 * Useful for debugging.  Required by the "$<msgbuf" adb macro.
 	 */
 	log_recentq = log_makeq(0, LOG_RECENTSIZE, NULL);
@@ -261,7 +261,7 @@ log_init(void)
 #ifdef	LEGACY_BANNER
 	printf("\rSunOS Release %s Version %s %u-bit\n",
 	    utsname.release, utsname.version, NBBY * (uint_t)sizeof (void *));
-	printf("Copyright 2010-2020 Joyent, Inc.\n");
+	printf("Copyright 2010-2021 Joyent, Inc.\n");
 #else
 	bootbanner_print(log_bootbanner_print, KM_SLEEP);
 #endif

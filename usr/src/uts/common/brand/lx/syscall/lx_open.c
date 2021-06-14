@@ -23,6 +23,7 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2018 Joyent, Inc.
+ * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/systm.h>
@@ -53,17 +54,17 @@ ltos_open_flags(int input)
 {
 	int flags;
 
-	if (input & LX_O_PATH) {
+	if (input & LX_O_PATH)
 		input &= (LX_O_DIRECTORY | LX_O_NOFOLLOW | LX_O_CLOEXEC);
-	}
 
-	/* This depends on the Linux ACCMODE flags being the same as SunOS. */
+	/*
+	 * The illumos O_ACCMODE also includes O_SEARCH|O_EXEC
+	 * so this has the effect of stripping those here.
+	 */
 	flags = (input & LX_O_ACCMODE);
 
-	if (input & LX_O_CREAT) {
+	if (input & LX_O_CREAT)
 		flags |= O_CREAT;
-	}
-
 	if (input & LX_O_EXCL)
 		flags |= O_EXCL;
 	if (input & LX_O_NOCTTY)
@@ -82,12 +83,14 @@ ltos_open_flags(int input)
 		flags |= O_NOFOLLOW;
 	if (input & LX_O_CLOEXEC)
 		flags |= O_CLOEXEC;
+	if (input & LX_O_DIRECTORY)
+		flags |= O_DIRECTORY;
 
 	/*
 	 * Linux uses the LX_O_DIRECT flag to do raw, synchronous I/O to the
-	 * device backing the fd in question.  Illumos doesn't have similar
-	 * functionality, but we can attempt to simulate it using the flags
-	 * (O_RSYNC|O_SYNC) and directio(3C).
+	 * device backing the fd in question.  illumos has O_DIRECT but
+	 * we additionally need O_RSYNC|O_SYNC to simulate the Linux
+	 * semantics as far as possible.
 	 *
 	 * The LX_O_DIRECT flag also requires that the transfer size and
 	 * alignment of I/O buffers be a multiple of the logical block size for
@@ -102,18 +105,18 @@ ltos_open_flags(int input)
 	 * system block size will be test suites.
 	 */
 	if (input & LX_O_DIRECT)
-		flags |= (O_RSYNC|O_SYNC);
+		flags |= (O_RSYNC|O_SYNC|O_DIRECT);
 
 	return (flags);
 }
 
-#define	LX_POSTPROCESS_OPTS	(LX_O_DIRECT | LX_O_ASYNC | LX_O_PATH)
+#define	LX_POSTPROCESS_OPTS	(LX_O_ASYNC | LX_O_PATH)
 
 static int
 lx_open_postprocess(int fd, int fmode)
 {
 	file_t *fp;
-	int rv, error = 0;
+	int error = 0;
 
 	if ((fmode & LX_POSTPROCESS_OPTS) == 0) {
 		/* Skip out early, if possible */
@@ -126,11 +129,6 @@ lx_open_postprocess(int fd, int fmode)
 		 * arrived here if some one is hammering away with close().
 		 */
 		return (EIO);
-	}
-
-	if (fmode & LX_O_DIRECT && error == 0) {
-		(void) VOP_IOCTL(fp->f_vnode, _FIODIRECTIO, DIRECTIO_ON,
-		    fp->f_flag, fp->f_cred, &rv, NULL);
 	}
 
 	if (fmode & LX_O_ASYNC && error == 0) {
@@ -173,14 +171,9 @@ lx_openat(int atfd, char *path, int fmode, int cmode)
 
 	flags = ltos_open_flags(fmode);
 
-	/*
-	 * We use the FSEARCH flag to make sure this is a directory. We have to
-	 * explicitly add 1 to emulate the FREAD/FWRITE mapping of the OPENMODE
-	 * macro since it won't get set via OPENMODE when FSEARCH is used.
-	 */
-	if (fmode & LX_O_DIRECTORY) {
-		flags |= FSEARCH;
-		flags++;
+	if ((fmode & (LX_O_NOFOLLOW|LX_O_PATH|__FLXPATH)) ==
+	    (LX_O_NOFOLLOW|LX_O_PATH|__FLXPATH)) {
+		flags |= __FLXPATH;
 	}
 
 	if (flags & O_CREAT)
@@ -189,62 +182,8 @@ lx_openat(int atfd, char *path, int fmode, int cmode)
 	ttolwp(curthread)->lwp_errno = 0;
 	fd = openat(atfd, path, flags, mode);
 	if (ttolwp(curthread)->lwp_errno != 0) {
-		if ((fmode & LX_O_DIRECTORY) &&
-		    ttolwp(curthread)->lwp_errno != ENOTDIR) {
-			/*
-			 * We got an error trying to open a file as a directory.
-			 * We need to determine if we should return the original
-			 * error or ENOTDIR.
-			 */
-			vnode_t *startvp;
-			vnode_t *vp;
-			int oerror, error = 0;
-
-			oerror = ttolwp(curthread)->lwp_errno;
-
-			if (atfd == AT_FDCWD) {
-				/* regular open */
-				startvp = NULL;
-			} else {
-				char startchar;
-
-				if (copyin(path, &startchar, sizeof (char)))
-					return (set_errno(oerror));
-
-				/* if startchar is / then startfd is ignored */
-				if (startchar == '/') {
-					startvp = NULL;
-				} else {
-					file_t *startfp;
-
-					if ((startfp = getf(atfd)) == NULL)
-						return (set_errno(oerror));
-					startvp = startfp->f_vnode;
-					VN_HOLD(startvp);
-					releasef(atfd);
-				}
-			}
-
-			if (lookupnameat(path, UIO_USERSPACE,
-			    (fmode & LX_O_NOFOLLOW) ?  NO_FOLLOW : FOLLOW,
-			    NULLVPP, &vp, startvp) != 0) {
-				if (startvp != NULL)
-					VN_RELE(startvp);
-				return (set_errno(oerror));
-			}
-
-			if (startvp != NULL)
-				VN_RELE(startvp);
-
-			if (vp->v_type != VDIR)
-				error = ENOTDIR;
-
-			VN_RELE(vp);
-			if (error != 0)
-				return (set_errno(ENOTDIR));
-
-			(void) set_errno(oerror);
-		} else if ((fmode & LX_O_NOFOLLOW) && (fmode & LX_O_PATH) &&
+		if ((fmode & (LX_O_NOFOLLOW|LX_O_PATH|__FLXPATH)) ==
+		    (LX_O_NOFOLLOW|LX_O_PATH) &&
 		    ttolwp(curthread)->lwp_errno == ELOOP) {
 			/*
 			 * On Linux, if O_NOFOLLOW and O_PATH are set together
@@ -256,17 +195,14 @@ lx_openat(int atfd, char *path, int fmode, int cmode)
 			 * fstatat(2), linkat(2), and readlinkat(2) alongside
 			 * an empty pathname.
 			 *
-			 * We do not have a way to return such a file
-			 * descriptor in illumos so open it without NO_FOLLOW
-			 * and allow the postprocess to emulate O_PATH by
-			 * removing the read and write flags.
-			 * This is enough to keep recent systemd happy
-			 * although any attempt to use the fd for the above
-			 * listed calls without a pathname will fail or modify
-			 * the symlink target.
+			 * illumos has a private interface flag that causes
+			 * openat() to return a file descriptor attached to
+			 * the symlink's vnode. This, in conjunction with the
+			 * other adjustments made in lx_open_postprocess()
+			 * for O_PATH, is enough to satisfy systemd and
+			 * other parts of Linux.
 			 */
-			return (lx_openat(atfd, path, fmode & ~LX_O_NOFOLLOW,
-			    cmode));
+			return (lx_openat(atfd, path, fmode|__FLXPATH, cmode));
 		}
 
 		if (ttolwp(curthread)->lwp_errno == EINTR)

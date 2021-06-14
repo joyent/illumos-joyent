@@ -25,6 +25,18 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+/*
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * Copyright 2020 Oxide Computer Company
+ */
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
@@ -33,172 +45,253 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 
 #include <machine/vmm.h>
-#include <machine/vmm_instruction_emul.h>
 
 #include "vatpic.h"
 #include "vatpit.h"
-#include "vpmtmr.h"
 #include "vrtc.h"
 #include "vmm_ioport.h"
-#include "vmm_ktr.h"
 
-#define	MAX_IOPORTS		1280
+/* Arbitrary limit on entries per VM */
+static uint_t ioport_entry_limit = 64;
 
-ioport_handler_func_t ioport_handler[MAX_IOPORTS] = {
-	[TIMER_MODE] = vatpit_handler,
-	[TIMER_CNTR0] = vatpit_handler,
-	[TIMER_CNTR1] = vatpit_handler,
-	[TIMER_CNTR2] = vatpit_handler,
-	[NMISC_PORT] = vatpit_nmisc_handler,
-	[IO_ICU1] = vatpic_master_handler,
-	[IO_ICU1 + ICU_IMR_OFFSET] = vatpic_master_handler,
-	[IO_ICU2] = vatpic_slave_handler,
-	[IO_ICU2 + ICU_IMR_OFFSET] = vatpic_slave_handler,
-	[IO_ELCR1] = vatpic_elc_handler,
-	[IO_ELCR2] = vatpic_elc_handler,
-	[IO_PMTMR] = vpmtmr_handler,
-	[IO_RTC] = vrtc_addr_handler,
-	[IO_RTC + 1] = vrtc_data_handler,
-};
-
-#ifdef KTR
-static const char *
-inout_instruction(struct vm_exit *vmexit)
+static void
+vm_inout_def(ioport_entry_t *entries, uint_t i, uint16_t port,
+    ioport_handler_t func, void *arg, uint16_t flags)
 {
-	int index;
+	ioport_entry_t *ent = &entries[i];
 
-	static const char *iodesc[] = {
-		"outb", "outw", "outl",
-		"inb", "inw", "inl",
-		"outsb", "outsw", "outsd",
-		"insb", "insw", "insd",
-	};
-
-	switch (vmexit->u.inout.bytes) {
-	case 1:
-		index = 0;
-		break;
-	case 2:
-		index = 1;
-		break;
-	default:
-		index = 2;
-		break;
+	if (i != 0) {
+		const ioport_entry_t *prev = &entries[i - 1];
+		/* ensure that entries are inserted in sorted order */
+		VERIFY(prev->iope_port < port);
 	}
-
-	if (vmexit->u.inout.in)
-		index += 3;
-
-	if (vmexit->u.inout.string)
-		index += 6;
-
-	KASSERT(index < nitems(iodesc), ("%s: invalid index %d",
-	    __func__, index));
-
-	return (iodesc[index]);
-}
-#endif	/* KTR */
-
-static int
-emulate_inout_port(struct vm *vm, int vcpuid, struct vm_exit *vmexit,
-    bool *retu)
-{
-	ioport_handler_func_t handler;
-	uint32_t mask, val;
-	int error;
-
-#ifdef __FreeBSD__
-	/*
-	 * If there is no handler for the I/O port then punt to userspace.
-	 */
-	if (vmexit->u.inout.port >= MAX_IOPORTS ||
-	    (handler = ioport_handler[vmexit->u.inout.port]) == NULL) {
-		*retu = true;
-		return (0);
-	}
-#else /* __FreeBSD__ */
-	handler = NULL;
-	if (vmexit->u.inout.port < MAX_IOPORTS) {
-		handler = ioport_handler[vmexit->u.inout.port];
-	}
-	/* Look for hooks, if a standard handler is not present */
-	if (handler == NULL) {
-		mask = vie_size2mask(vmexit->u.inout.bytes);
-		if (!vmexit->u.inout.in) {
-			val = vmexit->u.inout.eax & mask;
-		}
-		error = vm_ioport_handle_hook(vm, vcpuid, vmexit->u.inout.in,
-		    vmexit->u.inout.port, vmexit->u.inout.bytes, &val);
-		if (error == 0) {
-			goto finish;
-		}
-
-		*retu = true;
-		return (0);
-	}
-
-#endif /* __FreeBSD__ */
-
-	mask = vie_size2mask(vmexit->u.inout.bytes);
-
-	if (!vmexit->u.inout.in) {
-		val = vmexit->u.inout.eax & mask;
-	}
-
-	error = (*handler)(vm, vcpuid, vmexit->u.inout.in,
-	    vmexit->u.inout.port, vmexit->u.inout.bytes, &val);
-	if (error) {
-		/*
-		 * The value returned by this function is also the return value
-		 * of vm_run(). This needs to be a positive number otherwise it
-		 * can be interpreted as a "pseudo-error" like ERESTART.
-		 *
-		 * Enforce this by mapping all errors to EIO.
-		 */
-		return (EIO);
-	}
-
-#ifndef __FreeBSD__
-finish:
-#endif /* __FreeBSD__ */
-	if (vmexit->u.inout.in) {
-		vmexit->u.inout.eax &= ~mask;
-		vmexit->u.inout.eax |= val & mask;
-		error = vm_set_register(vm, vcpuid, VM_REG_GUEST_RAX,
-		    vmexit->u.inout.eax);
-		KASSERT(error == 0, ("emulate_ioport: error %d setting guest "
-		    "rax register", error));
-	}
-	*retu = false;
-	return (0);
+	ent->iope_func = func;
+	ent->iope_arg = arg;
+	ent->iope_port = port;
+	ent->iope_flags = flags;
 }
 
-static int
-emulate_inout_str(struct vm *vm, int vcpuid, struct vm_exit *vmexit, bool *retu)
+void
+vm_inout_init(struct vm *vm, struct ioport_config *cfg)
 {
-	*retu = true;
-	return (0);	/* Return to userspace to finish emulation */
+	struct vatpit *pit = vm_atpit(vm);
+	struct vatpic *pic = vm_atpic(vm);
+	struct vrtc *rtc = vm_rtc(vm);
+	const uint_t ndefault = 13;
+	const uint16_t flag = IOPF_FIXED;
+	ioport_entry_t *ents;
+	uint_t i = 0;
+
+	VERIFY0(cfg->iop_entries);
+	VERIFY0(cfg->iop_count);
+
+	ents = kmem_zalloc(ndefault * sizeof (ioport_entry_t), KM_SLEEP);
+
+	/* PIC (master): 0x20-0x21 */
+	vm_inout_def(ents, i++, IO_ICU1, vatpic_master_handler, pic, flag);
+	vm_inout_def(ents, i++, IO_ICU1 + ICU_IMR_OFFSET, vatpic_master_handler,
+	    pic, flag);
+
+	/* PIT: 0x40-0x43 and 0x61 (ps2 tie-in) */
+	vm_inout_def(ents, i++, TIMER_CNTR0, vatpit_handler, pit, flag);
+	vm_inout_def(ents, i++, TIMER_CNTR1, vatpit_handler, pit, flag);
+	vm_inout_def(ents, i++, TIMER_CNTR2, vatpit_handler, pit, flag);
+	vm_inout_def(ents, i++, TIMER_MODE, vatpit_handler, pit, flag);
+	vm_inout_def(ents, i++, NMISC_PORT, vatpit_nmisc_handler, pit, flag);
+
+	/* RTC: 0x70-0x71 */
+	vm_inout_def(ents, i++, IO_RTC, vrtc_addr_handler, rtc, flag);
+	vm_inout_def(ents, i++, IO_RTC + 1, vrtc_data_handler, rtc, flag);
+
+	/* PIC (slave): 0xa0-0xa1 */
+	vm_inout_def(ents, i++, IO_ICU2, vatpic_slave_handler, pic, flag);
+	vm_inout_def(ents, i++, IO_ICU2 + ICU_IMR_OFFSET, vatpic_slave_handler,
+	    pic, flag);
+
+	/* PIC (ELCR): 0x4d0-0x4d1 */
+	vm_inout_def(ents, i++, IO_ELCR1, vatpic_elc_handler, pic, flag);
+	vm_inout_def(ents, i++, IO_ELCR2, vatpic_elc_handler, pic, flag);
+
+	VERIFY3U(i, ==, ndefault);
+	cfg->iop_entries = ents;
+	cfg->iop_count = ndefault;
+}
+
+void
+vm_inout_cleanup(struct vm *vm, struct ioport_config *cfg)
+{
+	VERIFY(cfg->iop_entries);
+	VERIFY(cfg->iop_count);
+
+	kmem_free(cfg->iop_entries,
+	    sizeof (ioport_entry_t) * cfg->iop_count);
+	cfg->iop_entries = NULL;
+	cfg->iop_count = 0;
+}
+
+static void
+vm_inout_remove_at(uint_t idx, uint_t old_count, ioport_entry_t *old_ents,
+    ioport_entry_t *new_ents)
+{
+	uint_t new_count = old_count - 1;
+
+	VERIFY(old_count != 0);
+	VERIFY(idx < old_count);
+
+	/* copy entries preceeding to-be-removed index */
+	if (idx > 0) {
+		bcopy(old_ents, new_ents, sizeof (ioport_entry_t) * idx);
+	}
+	/* copy entries following to-be-removed index */
+	if (idx < new_count) {
+		bcopy(&old_ents[idx + 1], &new_ents[idx],
+		    sizeof (ioport_entry_t) * (new_count - idx));
+	}
+}
+
+static void
+vm_inout_insert_space_at(uint_t idx, uint_t old_count, ioport_entry_t *old_ents,
+    ioport_entry_t *new_ents)
+{
+	uint_t new_count = old_count + 1;
+
+	VERIFY(idx < new_count);
+
+	/* copy entries preceeding index where space is to be added */
+	if (idx > 0) {
+		bcopy(old_ents, new_ents, sizeof (ioport_entry_t) * idx);
+	}
+	/* copy entries to follow added space */
+	if (idx < new_count) {
+		bcopy(&old_ents[idx], &new_ents[idx + 1],
+		    sizeof (ioport_entry_t) * (old_count - idx));
+	}
 }
 
 int
-vm_handle_inout(struct vm *vm, int vcpuid, struct vm_exit *vmexit, bool *retu)
+vm_inout_attach(struct ioport_config *cfg, uint16_t port, uint16_t flags,
+    ioport_handler_t func, void *arg)
 {
-	int bytes, error;
+	uint_t i, old_count, insert_idx;
+	ioport_entry_t *old_ents;
 
-	bytes = vmexit->u.inout.bytes;
-	KASSERT(bytes == 1 || bytes == 2 || bytes == 4,
-	    ("vm_handle_inout: invalid operand size %d", bytes));
+	if (cfg->iop_count >= ioport_entry_limit) {
+		return (ENOSPC);
+	}
 
-	if (vmexit->u.inout.string)
-		error = emulate_inout_str(vm, vcpuid, vmexit, retu);
-	else
-		error = emulate_inout_port(vm, vcpuid, vmexit, retu);
+	old_count = cfg->iop_count;
+	old_ents = cfg->iop_entries;
+	for (insert_idx = i = 0; i < old_count; i++) {
+		const ioport_entry_t *compare = &old_ents[i];
+		if (compare->iope_port == port) {
+			return (EEXIST);
+		} else if (compare->iope_port < port) {
+			insert_idx = i + 1;
+		}
+	}
 
-	VCPU_CTR4(vm, vcpuid, "%s%s 0x%04x: %s",
-	    vmexit->u.inout.rep ? "rep " : "",
-	    inout_instruction(vmexit),
-	    vmexit->u.inout.port,
-	    error ? "error" : (*retu ? "userspace" : "handled"));
 
-	return (error);
+	ioport_entry_t *new_ents;
+	uint_t new_count = old_count + 1;
+	new_ents = kmem_alloc(new_count * sizeof (ioport_entry_t), KM_SLEEP);
+	vm_inout_insert_space_at(insert_idx, old_count, old_ents, new_ents);
+
+	new_ents[insert_idx].iope_func = func;
+	new_ents[insert_idx].iope_arg = arg;
+	new_ents[insert_idx].iope_port = port;
+	new_ents[insert_idx].iope_flags = flags;
+	new_ents[insert_idx].iope_pad = 0;
+
+	cfg->iop_entries = new_ents;
+	cfg->iop_count = new_count;
+	kmem_free(old_ents, old_count * sizeof (ioport_entry_t));
+
+	return (0);
+}
+
+int
+vm_inout_detach(struct ioport_config *cfg, uint16_t port, bool drv_hook,
+    ioport_handler_t *old_func, void **old_arg)
+{
+	uint_t i, old_count, remove_idx;
+	ioport_entry_t *old_ents;
+
+	old_count = cfg->iop_count;
+	old_ents = cfg->iop_entries;
+	VERIFY(old_count > 1);
+	for (i = 0; i < old_count; i++) {
+		const ioport_entry_t *compare = &old_ents[i];
+		if (compare->iope_port != port) {
+			continue;
+		}
+		/* fixed ports are not allowed to be detached at runtime */
+		if ((compare->iope_flags & IOPF_FIXED) != 0) {
+			return (EPERM);
+		}
+
+		/*
+		 * Driver-attached and bhyve-internal ioport hooks can only be
+		 * removed by the respective party which attached them.
+		 */
+		if (drv_hook && (compare->iope_flags & IOPF_DRV_HOOK) == 0) {
+			return (EPERM);
+		} else if (!drv_hook &&
+		    (compare->iope_flags & IOPF_DRV_HOOK) != 0) {
+			return (EPERM);
+		}
+		break;
+	}
+	if (i == old_count) {
+		return (ENOENT);
+	}
+	remove_idx = i;
+
+	if (old_func != NULL) {
+		*old_func = cfg->iop_entries[remove_idx].iope_func;
+	}
+	if (old_arg != NULL) {
+		*old_arg = cfg->iop_entries[remove_idx].iope_arg;
+	}
+
+	ioport_entry_t *new_ents;
+	uint_t new_count = old_count - 1;
+	new_ents = kmem_alloc(new_count * sizeof (ioport_entry_t), KM_SLEEP);
+	vm_inout_remove_at(remove_idx, old_count, old_ents, new_ents);
+
+	cfg->iop_entries = new_ents;
+	cfg->iop_count = new_count;
+	kmem_free(old_ents, old_count * sizeof (ioport_entry_t));
+
+	return (0);
+}
+
+static ioport_entry_t *
+vm_inout_find(const struct ioport_config *cfg, uint16_t port)
+{
+	const uint_t count = cfg->iop_count;
+	ioport_entry_t *entries = cfg->iop_entries;
+
+	for (uint_t i = 0; i < count; i++) {
+		if (entries[i].iope_port == port) {
+			return (&entries[i]);
+		}
+	}
+	return (NULL);
+}
+
+int
+vm_inout_access(struct ioport_config *cfg, bool in, uint16_t port,
+    uint8_t bytes, uint32_t *val)
+{
+	const ioport_entry_t *ent;
+	int err;
+
+	ent = vm_inout_find(cfg, port);
+	if (ent == NULL) {
+		err = ESRCH;
+	} else {
+		err = ent->iope_func(ent->iope_arg, in, port, bytes, val);
+	}
+
+	return (err);
 }

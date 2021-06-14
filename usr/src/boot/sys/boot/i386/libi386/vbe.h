@@ -33,13 +33,19 @@
  * VESA disabled.
  */
 
-#define VBE_DEFAULT_MODE	"800x600"
+#ifndef _VBE_H
+#define	_VBE_H
+
+#define	VBE_DEFAULT_MODE	"800x600"
 
 struct vbeinfoblock {
 	char VbeSignature[4];
 	uint16_t VbeVersion;
 	uint32_t OemStringPtr;
 	uint32_t Capabilities;
+#define	VBE_CAP_DAC8	(1 << 0)	/* Can switch DAC */
+#define	VBE_CAP_NONVGA	(1 << 1)	/* Controller is not VGA comp. */
+#define	VBE_CAP_SNOW	(1 << 2)	/* Set data during Vertical Reterace */
 	uint32_t VideoModePtr;
 	uint16_t TotalMemory;
 	uint16_t OemSoftwareRev;
@@ -61,8 +67,10 @@ struct modeinfoblock {
 	uint8_t XCharSize, YCharSize, NumberOfPlanes, BitsPerPixel;
 	uint8_t NumberOfBanks, MemoryModel, BankSize, NumberOfImagePages;
 	uint8_t Reserved1;
-	/* Direct Color fields
-	   (required for direct/6 and YUV/7 memory models) */
+	/*
+	 * Direct Color fields
+	 * (required for direct/6 and YUV/7 memory models)
+	 */
 	uint8_t RedMaskSize, RedFieldPosition;
 	uint8_t GreenMaskSize, GreenFieldPosition;
 	uint8_t BlueMaskSize, BlueFieldPosition;
@@ -103,22 +111,21 @@ struct paletteentry {
 	uint8_t Blue;
 	uint8_t Green;
 	uint8_t Red;
-	uint8_t Alignment;
+	uint8_t Reserved;
 } __packed;
 
 struct flatpanelinfo
 {
-	uint16_t HorizontalSize;
-	uint16_t VerticalSize;
-	uint16_t PanelType;
-	uint8_t RedBPP;
-	uint8_t GreenBPP;
-	uint8_t BlueBPP;
-	uint8_t ReservedBPP;
-	uint32_t ReservedOffScreenMemSize;
-	uint32_t ReservedOffScreenMemPtr;
-
-	uint8_t Reserved[14];
+	uint16_t HorizontalSize;	/* Horizontal Size in Pixels */
+	uint16_t VerticalSize;		/* Vertical Size in Lines */
+	uint16_t PanelType;		/* Flat Panel Type */
+	uint8_t RedBPP;			/* Red Bits Per Primary */
+	uint8_t GreenBPP;		/* Green Bits Per Primary */
+	uint8_t BlueBPP;		/* Blue Bits Per Primary */
+	uint8_t ReservedBPP;		/* Reserved Bits Per Primary */
+	uint32_t RsvdOffScreenMemSize;	/* Size in KB of Offscreen Memory */
+	uint32_t RsvdOffScreenMemPtr; /* Pointer to reserved offscreen memory */
+	uint8_t Reserved[14];		/* remainder of FPInfo */
 } __packed;
 
 #define	VBE_BASE_MODE		(0x100)		/* VBE 3.0 page 18 */
@@ -133,6 +140,11 @@ struct flatpanelinfo
 #define	TEXT_ROWS		(25)		/* VGATEXT rows */
 #define	TEXT_COLS		(80)		/* VGATEXT columns */
 
+#define	CMAP_SIZE		256	/* Number of colors in palette */
+
+extern struct paletteentry pe8[CMAP_SIZE];
+extern int palette_format;
+
 /* high-level VBE helpers, from vbe.c */
 void bios_set_text_mode(int);
 int biosvbe_palette_format(int *);
@@ -143,3 +155,5 @@ int vbe_set_mode(int);
 int vbe_get_mode(void);
 int vbe_set_palette(const struct paletteentry *, size_t);
 void vbe_modelist(int);
+
+#endif /* _VBE_H */

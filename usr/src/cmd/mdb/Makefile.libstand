@@ -29,7 +29,7 @@
 
 include ../../Makefile.libstand
 
-SRCS += \
+SRCS_COMMON += \
 	bcmp.c \
 	bcopy.c \
 	bsearch.c \
@@ -49,6 +49,11 @@ SRCS += \
 	strtol.c \
 	strtoul.c
 
+sparcv9_SRCS= \
+	multi3.c
+
+SRCS += $(SRCS_COMMON) $($(MACH64)_SRCS)
+
 # We don't want thread-specific errno's in kmdb, as we're single-threaded.
 DTS_ERRNO=
 
@@ -59,6 +64,12 @@ INCDIRS = \
 
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 CPPFLAGS = $(INCDIRS:%=-I%) -D_KMDB
+
+#
+# We cannot currently use the stack protector in kmdb's standalone
+# environment.
+#
+STACKPROTECT = none
 
 #
 # kmdb is a kernel module, so we'll use the kernel's build flags.

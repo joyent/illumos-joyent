@@ -20,6 +20,10 @@
  * release for licensing terms and conditions.
  */
 
+/*
+ * Copyright 2021 Oxide Computer Company
+ */
+
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
 #include <sys/sunndi.h>
@@ -1483,12 +1487,12 @@ static int
 free_iq_fl(struct port_info *pi, struct sge_iq *iq, struct sge_fl *fl)
 {
 	int rc;
-	struct adapter *sc = iq->adapter;
-	dev_info_t *dip;
-
-	dip = pi ? pi->dip : sc->dip;
 
 	if (iq != NULL) {
+		struct adapter *sc = iq->adapter;
+		dev_info_t *dip;
+
+		dip = pi ? pi->dip : sc->dip;
 		if (iq->flags & IQ_ALLOCATED) {
 			rc = -t4_iq_free(sc, sc->mbox, sc->pf, 0,
 			    FW_IQ_TYPE_FL_INT_CAP, iq->cntxt_id,
@@ -2900,23 +2904,34 @@ write_txpkt_wr(struct port_info *pi, struct sge_txq *txq, mblk_t *m,
 	wr->r3 = 0;
 
 	if (txinfo->flags & HW_LSO) {
+		uint16_t etype;
 		struct cpl_tx_pkt_lso_core *lso = (void *)(wr + 1);
 		char *p = (void *)m->b_rptr;
 		ctrl = V_LSO_OPCODE((u32)CPL_TX_PKT_LSO) | F_LSO_FIRST_SLICE |
 		    F_LSO_LAST_SLICE;
 
-		/* LINTED: E_BAD_PTR_CAST_ALIGN */
-		if (((struct ether_header *)p)->ether_type ==
-		    htons(ETHERTYPE_VLAN)) {
+		etype = ntohs(((struct ether_header *)p)->ether_type);
+		if (etype == ETHERTYPE_VLAN) {
 			ctrl |= V_LSO_ETHHDR_LEN(1);
+			etype = ntohs(((struct ether_vlan_header *)p)->ether_type);
 			p += sizeof (struct ether_vlan_header);
-		} else
+		} else {
 			p += sizeof (struct ether_header);
+		}
 
-		/* LINTED: E_BAD_PTR_CAST_ALIGN for IPH_HDR_LENGTH() */
-		ctrl |= V_LSO_IPHDR_LEN(IPH_HDR_LENGTH(p) / 4);
-		/* LINTED: E_BAD_PTR_CAST_ALIGN for IPH_HDR_LENGTH() */
-		p += IPH_HDR_LENGTH(p);
+		switch (etype) {
+		case ETHERTYPE_IP:
+			ctrl |= V_LSO_IPHDR_LEN(IPH_HDR_LENGTH(p) / 4);
+			p += IPH_HDR_LENGTH(p);
+			break;
+		case ETHERTYPE_IPV6:
+			ctrl |= F_LSO_IPV6;
+			ctrl |= V_LSO_IPHDR_LEN(sizeof (ip6_t) / 4);
+			p += sizeof (ip6_t);
+		default:
+			break;
+		}
+
 		ctrl |= V_LSO_TCPHDR_LEN(TCP_HDR_LENGTH((tcph_t *)p) / 4);
 
 		lso->lso_ctrl = cpu_to_be32(ctrl);

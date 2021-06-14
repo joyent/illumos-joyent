@@ -36,27 +36,36 @@
 
 : logo ( x y -- ) \ color illumos logo
 
-	0 0 0 0 0 s" /boot/illumos.png" fb-putimage if 2drop exit then
+	framebuffer? if
+		s" term-putimage" sfind if
+			>r over	0 swap		( x y 0 x )
+			12 0 22 		( x y 0 x 12 0 22 )
+			s" /boot/illumos-logo.png"
+			r> execute if 2drop exit then
+		else
+			drop
+		then
+	then
 
-	s"     @[33m,                             " logo+
-	s"    @[33m,./% @[31m&                         " logo+
-	s"    @[33m(****@[31m*(                        " logo+
-	s"      @[33m*/*@[31m//                        " logo+
-	s"      @[33m*,//@[31m/((                      " logo+
-	s"        @[33m,*/@[31m/((/%                   " logo+
-	s"          @[33m//@[31m/((((%                 " logo+
-	s"           @[33m,*@[31m/(((((%       @[33m&@[31m#///((&" logo+
-	s"            @[33m./@[31m//((((((%  %/(((/    " logo+
-	s"             @[33m./@[31m///(((((///((,      " logo+
-	s"             @[33m.*//@[31m//((((((((((      " logo+
-	s"                  ./((((((((/      " logo+
-	s"                   (/(((((((       " logo+
-	s"                   ,,((((((/       " logo+
-	s"                     /((((         " logo+
-	s"                  %/((((           " logo+
-	s"              @[33m&@[31m%#/((((.            " logo+
-	s"            @[33m,@[31m( ,/ /(/              " logo+
-	s"                ,/@[m                 " logo+
+	s"     @[33m,@[m                             " logo+
+	s"    @[33m,./% @[31m&@[m                         " logo+
+	s"    @[33m(****@[31m*(@[m                        " logo+
+	s"      @[33m*/*@[31m//@[m                        " logo+
+	s"      @[33m*,//@[31m/((@[m                      " logo+
+	s"        @[33m,*/@[31m/((/%@[m                   " logo+
+	s"          @[33m//@[31m/((((%@[m                 " logo+
+	s"           @[33m,*@[31m/(((((%@[m       @[33m&@[31m#///((&@[m" logo+
+	s"            @[33m./@[31m//((((((%@[m  @[31m%/(((/@[m    " logo+
+	s"             @[33m./@[31m///(((((///((,@[m      " logo+
+	s"             @[33m.*//@[31m//((((((((((@[m      " logo+
+	s"                  @[31m./((((((((/@[m      " logo+
+	s"                   @[31m(/(((((((@[m       " logo+
+	s"                   @[31m,,((((((/@[m       " logo+
+	s"                     @[31m/((((@[m         " logo+
+	s"                  @[31m%/((((@[m           " logo+
+	s"              @[33m&@[31m%#/((((.@[m            " logo+
+	s"            @[33m,@[31m(@[m @[31m,/@[m @[31m/(/@[m              " logo+
+	s"                @[31m,/@[m                 " logo+
 
 	2drop
 ;

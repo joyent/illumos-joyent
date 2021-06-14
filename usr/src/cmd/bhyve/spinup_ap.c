@@ -27,6 +27,18 @@
  *
  * $FreeBSD$
  */
+/*
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * Copyright 2020 Oxide Computer Company
+ */
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
@@ -44,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include "bhyverun.h"
 #include "spinup_ap.h"
 
+#ifdef __FreeBSD__
 static void
 spinup_ap_realmode(struct vmctx *ctx, int newcpu, uint64_t *rip)
 {
@@ -100,11 +113,27 @@ spinup_ap(struct vmctx *ctx, int vcpu, int newcpu, uint64_t rip)
 
 	spinup_ap_realmode(ctx, newcpu, &rip);
 
-#ifdef __FreeBSD__
 	fbsdrun_addcpu(ctx, vcpu, newcpu, rip);
-#else
-	fbsdrun_addcpu(ctx, vcpu, newcpu, rip, false);
-#endif
 
 	return (newcpu);
 }
+#else /* __FreeBSD__ */
+void
+spinup_halted_ap(struct vmctx *ctx, int newcpu)
+{
+	int error;
+
+	assert(newcpu != 0);
+	assert(newcpu < guest_ncpus);
+
+	error = vcpu_reset(ctx, newcpu);
+	assert(error == 0);
+
+	fbsdrun_set_capabilities(ctx, newcpu);
+
+	error = vm_set_run_state(ctx, newcpu, VRS_HALT, 0);
+	assert(error == 0);
+
+	fbsdrun_addcpu(ctx, newcpu, 0, false);
+}
+#endif /* __FreeBSD__ */

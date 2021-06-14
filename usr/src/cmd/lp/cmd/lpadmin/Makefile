@@ -24,10 +24,6 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
-# cmd/lp/cmd/lpadmin/Makefile
-#
 
 include		../../Makefile.lp
 
@@ -66,8 +62,8 @@ LPLIBS=		$(LIBACC)	\
 
 SYSLIBS=	-lcurses
 
-LDLIBS +=	-lsecdb $(LPLIBS) $(SYSLIBS) $(I18N)
-LDFLAGS +=	$(MAPFILE.NGB:%=-M%)
+LDLIBS +=	-lsecdb $(LPLIBS) $(SYSLIBS) $(I18N) $(LDSTACKPROTECT)
+LDFLAGS +=	$(MAPFILE.NGB:%=-Wl,-M%)
 
 PROG=		lpadmin
 
@@ -94,11 +90,5 @@ clean:
 
 clobber: clean
 		-$(RM) $(PROG) $(CLOBBERFILES)
-
-strip:
-		$(STRIP) $(PROG)
-
-lint:
-		$(LINT.c) $(SRCS) $(LDLIBS)
 
 include		../Makefile.msg

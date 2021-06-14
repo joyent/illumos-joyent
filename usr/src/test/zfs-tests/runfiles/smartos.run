@@ -45,7 +45,7 @@ tests = ['bootfs_001_pos', 'bootfs_002_neg', 'bootfs_003_pos',
 [/opt/zfs-tests/tests/functional/cache]
 tests = ['cache_001_pos', 'cache_002_pos', 'cache_003_pos', 'cache_004_neg',
     'cache_005_neg', 'cache_006_pos', 'cache_007_neg', 'cache_008_neg',
-    'cache_009_pos', 'cache_010_neg', 'cache_011_pos']
+    'cache_009_pos', 'cache_010_neg', 'cache_011_pos', 'cache_012_pos']
 
 [/opt/zfs-tests/tests/functional/cachefile]
 tests = ['cachefile_001_pos', 'cachefile_002_pos', 'cachefile_003_pos',
@@ -69,7 +69,8 @@ tests = [ 'clean_mirror_001_pos', 'clean_mirror_002_pos',
     'clean_mirror_003_pos', 'clean_mirror_004_pos']
 
 [/opt/zfs-tests/tests/functional/cli_root/zdb]
-tests = ['zdb_001_neg', 'zdb_002_pos']
+tests = ['zdb_001_neg', 'zdb_002_pos', 'zdb_003_pos', 'zdb_004_pos',
+    'zdb_005_pos']
 pre =
 post =
 
@@ -79,7 +80,7 @@ tests = ['zfs_001_neg', 'zfs_002_pos', 'zfs_003_neg']
 [/opt/zfs-tests/tests/functional/cli_root/zfs_change-key]
 tests = ['zfs_change-key', 'zfs_change-key_child', 'zfs_change-key_format',
     'zfs_change-key_inherit', 'zfs_change-key_load', 'zfs_change-key_location',
-    'zfs_change-key_pbkdf2iters']
+    'zfs_change-key_pbkdf2iters', 'zfs_change-key_clones']
 
 [/opt/zfs-tests/tests/functional/cli_root/zfs_clone]
 tests = ['zfs_clone_001_neg', 'zfs_clone_002_pos', 'zfs_clone_003_pos',
@@ -290,7 +291,8 @@ tests = ['zpool_import_001_pos', 'zpool_import_002_pos',
     'zpool_import_encrypted', 'zpool_import_encrypted_load']
 
 [/opt/zfs-tests/tests/functional/cli_root/zpool_labelclear]
-tests = ['zpool_labelclear_active', 'zpool_labelclear_exported']
+tests = ['zpool_labelclear_active', 'zpool_labelclear_exported',
+    'zpool_labelclear_removed', 'zpool_labelclear_valid']
 pre =
 post =
 
@@ -392,7 +394,7 @@ user =
 
 [/opt/zfs-tests/tests/functional/compression]
 tests = ['compress_001_pos', 'compress_002_pos', 'compress_003_pos',
-    'compress_004_pos']
+    'compress_004_pos', 'l2arc_compressed_arc', 'l2arc_compressed_arc_disabled']
 
 [/opt/zfs-tests/tests/functional/ctime]
 tests = ['ctime_001_pos' ]
@@ -523,7 +525,6 @@ tests = ['refreserv_001_pos', 'refreserv_002_pos', 'refreserv_003_pos',
     'refreserv_005_pos', 'refreserv_raidz',
     'refreserv_multi_raidz']
 
-
 [/opt/zfs-tests/tests/functional/rename_dirs]
 tests = ['rename_dirs_001_pos']
 
@@ -639,12 +640,17 @@ tests = ['zvol_misc_001_neg', 'zvol_misc_002_pos', 'zvol_misc_003_neg',
     'zvol_misc_004_pos', 'zvol_misc_005_neg', 'zvol_misc_006_pos']
 
 [/opt/zfs-tests/tests/functional/libzfs]
-tests = ['many_fds']
-pre =
-post =
+tests = ['many_fds', 'libzfs_input']
 
 [/opt/zfs-tests/tests/functional/log_spacemap]
 tests = ['log_spacemap_import_logs']
 pre =
 post =
 tags = ['functional', 'log_spacemap']
+
+[/opt/zfs-tests/tests/functional/l2arc]
+tests = ['l2arc_arcstats_pos', 'l2arc_mfuonly_pos',
+    'persist_l2arc_001_pos', 'persist_l2arc_002_pos',
+    'persist_l2arc_003_neg', 'persist_l2arc_004_pos', 'persist_l2arc_005_pos',
+    'persist_l2arc_006_pos', 'persist_l2arc_007_pos', 'persist_l2arc_008_pos']
+tags = ['functional', 'l2arc']

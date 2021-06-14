@@ -32,6 +32,7 @@
  * Copyright 2012 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
  * Copyright 2014 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
  * Copyright 2018 Nexenta Systems, Inc.
+ * Copyright 2021 Oxide Computer Company
  */
 
 #ifndef _SYS_X86_ARCHEXT_H
@@ -472,6 +473,7 @@ extern "C" {
  * These values are currently the same between Intel and AMD.
  */
 #define	MSR_PPIN_CTL_MASK	0x03
+#define	MSR_PPIN_CTL_DISABLED	0x00
 #define	MSR_PPIN_CTL_LOCKED	0x01
 #define	MSR_PPIN_CTL_ENABLED	0x02
 
@@ -603,13 +605,6 @@ extern "C" {
 #define	IA32_PKG_THERM_INTERRUPT_TR2_IE		0x00800000
 #define	IA32_PKG_THERM_INTERRUPT_PL_NE		0x01000000
 
-/*
- * This MSR exists on families, 10h, 12h+ for AMD. This controls instruction
- * decoding. Most notably, for the AMD variant of retpolines, we must improve
- * the serializability of lfence for the lfence based method to work.
- */
-#define	MSR_AMD_DECODE_CONFIG			0xc0011029
-#define	AMD_DECODE_CONFIG_LFENCE_DISPATCH	0x02
 
 #define	MCI_CTL_VALUE		0xffffffff
 
@@ -742,6 +737,9 @@ extern "C" {
 #define	X86FSET_TSX_CTRL	97
 #define	X86FSET_TAA_NO		98
 #define	X86FSET_PPIN		99
+#define	X86FSET_VAES		100
+#define	X86FSET_VPCLMULQDQ	101
+#define	X86FSET_LFENCE_SER	102
 
 /*
  * Intel Deep C-State invariant TSC in leaf 0x80000007.
@@ -808,6 +806,9 @@ extern "C" {
 
 #define	X86_VENDOR_NSC		10
 #define	X86_VENDORSTR_NSC	"Geode by NSC"
+
+#define	X86_VENDOR_HYGON	11
+#define	X86_VENDORSTR_HYGON	"HygonGenuine"
 
 /*
  * Vendor string max len + \0
@@ -969,6 +970,15 @@ extern "C" {
 #define	X86_CHIPREV_AMD_17_SSP_B0 \
 	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x17, 0x0008)
 
+#define	X86_CHIPREV_AMD_17_MTS_B0 \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x17, 0x0009)
+
+/*
+ * Definitions for Hygon Family 0x18
+ */
+#define	X86_CHIPREV_HYGON_18_DN_A1 \
+	_X86_CHIPREV_MKREV(X86_VENDOR_HYGON, 0x18, 0x0001)
+
 /*
  * Various socket/package types, extended as the need to distinguish
  * a new type arises.  The top 8 byte identfies the vendor and the
@@ -1024,8 +1034,19 @@ extern "C" {
 #define	X86_SOCKET_SP3		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x1f)
 #define	X86_SOCKET_SP3R2	_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x20)
 #define	X86_SOCKET_FP5		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x21)
-#define	X86_NUM_SOCKETS_AMD	0x22
+#define	X86_SOCKET_FP6		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x22)
+#define	X86_SOCKET_STRX4	_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x23)
+#define	X86_NUM_SOCKETS_AMD	0x24
 
+/*
+ * Hygon socket types
+ */
+#define	X86_SOCKET_SL1		_X86_SOCKET_MKVAL(X86_VENDOR_HYGON, 0x01)
+#define	X86_SOCKET_SL1R2	_X86_SOCKET_MKVAL(X86_VENDOR_HYGON, 0x02)
+#define	X86_SOCKET_DM1		_X86_SOCKET_MKVAL(X86_VENDOR_HYGON, 0x03)
+#define	X86_NUM_SOCKETS_HYGON	0x04
+
+#define	X86_NUM_SOCKETS		(X86_NUM_SOCKETS_AMD + X86_NUM_SOCKETS_HYGON)
 
 /*
  * Definitions for Intel processor models. These are all for Family 6
@@ -1062,11 +1083,26 @@ extern "C" {
 #define	INTC_MODEL_BROADWELL_XEON_D	0x56
 
 #define	INTC_MODEL_SKYLAKE_MOBILE	0x4e
+/*
+ * Note, this model is shared with Cascade Lake and Cooper Lake.
+ */
 #define	INTC_MODEL_SKYLAKE_XEON		0x55
 #define	INTC_MODEL_SKYLAKE_DESKTOP	0x5e
 
+/*
+ * Note, both Kaby Lake models are shared with Coffee Lake, Whiskey Lake, Amber
+ * Lake, and some Comet Lake parts.
+ */
 #define	INTC_MODEL_KABYLAKE_MOBILE	0x8e
 #define	INTC_MODEL_KABYLAKE_DESKTOP	0x9e
+
+#define	INTC_MODEL_ICELAKE_XEON		0x6a
+#define	INTC_MODEL_ICELAKE_MOBILE	0x7e
+#define	INTC_MODEL_TIGERLAKE_MOBILE	0x8c
+
+#define	INTC_MODEL_COMETLAKE		0xa5
+#define	INTC_MODEL_COMETLAKE_MOBILE	0xa6
+#define	INTC_MODEL_ROCKETLAKE		0xa7
 
 /*
  * Atom Processors
@@ -1119,7 +1155,7 @@ extern "C" {
 
 #if defined(_KERNEL) || defined(_KMEMUSER)
 
-#define	NUM_X86_FEATURES	100
+#define	NUM_X86_FEATURES	103
 extern uchar_t x86_featureset[];
 
 extern void free_x86_featureset(void *featureset);

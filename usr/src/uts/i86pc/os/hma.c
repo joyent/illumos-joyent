@@ -11,12 +11,14 @@
 
 /*
  * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/cpuvar.h>
 #include <sys/types.h>
 #include <sys/errno.h>
 #include <sys/machsystm.h>
+#include <sys/archsystm.h>
 #include <sys/controlregs.h>
 #include <sys/x86_archext.h>
 #include <sys/id_space.h>
@@ -33,6 +35,7 @@ struct hma_reg {
 static kmutex_t hma_lock;
 static list_t hma_registrations;
 static boolean_t hma_exclusive = B_FALSE;
+int hma_disable = 0;
 
 static boolean_t hma_vmx_ready = B_FALSE;
 static const char *hma_vmx_error = NULL;
@@ -89,11 +92,17 @@ hma_init(void)
 	list_create(&hma_registrations, sizeof (struct hma_reg),
 	    offsetof(struct hma_reg, hr_node));
 
+	if (hma_disable != 0) {
+		cmn_err(CE_CONT, "?hma_init: disabled");
+		return;
+	}
+
 	switch (cpuid_getvendor(CPU)) {
 	case X86_VENDOR_Intel:
 		(void) hma_vmx_init();
 		break;
 	case X86_VENDOR_AMD:
+	case X86_VENDOR_HYGON:
 		(void) hma_svm_init();
 		break;
 	default:
@@ -114,6 +123,7 @@ hma_register_backend(const char *name)
 		is_ready = hma_vmx_ready;
 		break;
 	case X86_VENDOR_AMD:
+	case X86_VENDOR_HYGON:
 		is_ready = hma_svm_ready;
 		break;
 	default:
@@ -513,9 +523,9 @@ uint8_t
 hma_svm_asid_update(hma_svm_asid_t *vcp, boolean_t flush_by_asid,
     boolean_t npt_flush)
 {
-	hma_svm_asid_t *hcp = &hma_svm_cpu_asid[CPU->cpu_seqid];
-
-	ASSERT(curthread->t_preempt != 0);
+	hma_svm_asid_t *hcp;
+	ulong_t iflag;
+	uint8_t res = VMCB_FLUSH_NOTHING;
 
 	/*
 	 * If NPT changes dictate a TLB flush and by-ASID flushing is not
@@ -525,6 +535,17 @@ hma_svm_asid_update(hma_svm_asid_t *vcp, boolean_t flush_by_asid,
 		vcp->hsa_gen = 0;
 	}
 
+	/*
+	 * It is expected that ASID resource updates will commonly be done
+	 * inside a VMM critical section where the GIF is already cleared,
+	 * preventing any possibility of interruption.  Since that cannot be
+	 * checked (there is no easy way to read the GIF), %rflags.IF is also
+	 * cleared for edge cases where an ASID update is performed outside of
+	 * such a GIF-safe critical section.
+	 */
+	iflag = intr_clear();
+
+	hcp = &hma_svm_cpu_asid[CPU->cpu_seqid];
 	if (vcp->hsa_gen != hcp->hsa_gen) {
 		hcp->hsa_asid++;
 
@@ -547,14 +568,17 @@ hma_svm_asid_update(hma_svm_asid_t *vcp, boolean_t flush_by_asid,
 		ASSERT3U(vcp->hsa_asid, <, hma_svm_max_asid);
 
 		if (flush_by_asid) {
-			return (VMCB_FLUSH_ASID);
+			res = VMCB_FLUSH_ASID;
+		} else {
+			res = VMCB_FLUSH_ALL;
 		}
-		return (VMCB_FLUSH_ALL);
 	} else if (npt_flush) {
 		ASSERT(flush_by_asid);
-		return (VMCB_FLUSH_ASID);
+		res = VMCB_FLUSH_ASID;
 	}
-	return (VMCB_FLUSH_NOTHING);
+
+	intr_restore(iflag);
+	return (res);
 }
 
 static int

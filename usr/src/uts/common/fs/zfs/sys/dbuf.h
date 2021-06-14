@@ -108,6 +108,12 @@ typedef enum override_states {
 	DR_OVERRIDDEN
 } override_states_t;
 
+typedef enum db_lock_type {
+	DLT_NONE,
+	DLT_PARENT,
+	DLT_OBJSET
+} db_lock_type_t;
+
 typedef struct dbuf_dirty_record {
 	/* link on our parents dirty list */
 	list_node_t dr_dirty_node;
@@ -217,6 +223,22 @@ typedef struct dmu_buf_impl {
 	 */
 	uint8_t db_level;
 
+	/*
+	 * Protects db_buf's contents if they contain an indirect block or data
+	 * block of the meta-dnode. We use this lock to protect the structure of
+	 * the block tree. This means that when modifying this dbuf's data, we
+	 * grab its rwlock. When modifying its parent's data (including the
+	 * blkptr to this dbuf), we grab the parent's rwlock. The lock ordering
+	 * for this lock is:
+	 * 1) dn_struct_rwlock
+	 * 2) db_rwlock
+	 * We don't currently grab multiple dbufs' db_rwlocks at once.
+	 */
+	krwlock_t db_rwlock;
+
+	/* buffer holding our data */
+	arc_buf_t *db_buf;
+
 	/* db_mtx protects the members below */
 	kmutex_t db_mtx;
 
@@ -231,9 +253,6 @@ typedef struct dmu_buf_impl {
 	 * Protected by db_mtx.
 	 */
 	zfs_refcount_t db_holds;
-
-	/* buffer holding our data */
-	arc_buf_t *db_buf;
 
 	kcondvar_t db_changed;
 	dbuf_dirty_record_t *db_data_pending;
@@ -289,6 +308,8 @@ typedef struct dbuf_hash_table {
 	kmutex_t hash_mutexes[DBUF_MUTEXES];
 } dbuf_hash_table_t;
 
+typedef void (*dbuf_prefetch_fn)(void *, boolean_t);
+
 uint64_t dbuf_whichblock(struct dnode *di, int64_t level, uint64_t offset);
 
 dmu_buf_impl_t *dbuf_create_tlib(struct dnode *dn, char *data);
@@ -305,7 +326,10 @@ int dbuf_hold_impl(struct dnode *dn, uint8_t level, uint64_t blkid,
     boolean_t fail_sparse, boolean_t fail_uncached,
     void *tag, dmu_buf_impl_t **dbp);
 
-void dbuf_prefetch(struct dnode *dn, int64_t level, uint64_t blkid,
+int dbuf_prefetch_impl(struct dnode *dn, int64_t level, uint64_t blkid,
+    zio_priority_t prio, arc_flags_t aflags, dbuf_prefetch_fn cb,
+    void *arg);
+int dbuf_prefetch(struct dnode *dn, int64_t level, uint64_t blkid,
     zio_priority_t prio, arc_flags_t aflags);
 
 void dbuf_add_ref(dmu_buf_impl_t *db, void *tag);
@@ -336,6 +360,8 @@ void dbuf_setdirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
 void dbuf_unoverride(dbuf_dirty_record_t *dr);
 void dbuf_sync_list(list_t *list, int level, dmu_tx_t *tx);
 void dbuf_release_bp(dmu_buf_impl_t *db);
+db_lock_type_t dmu_buf_lock_parent(dmu_buf_impl_t *db, krw_t rw, void *tag);
+void dmu_buf_unlock_parent(dmu_buf_impl_t *db, db_lock_type_t type, void *tag);
 
 boolean_t dbuf_can_remap(const dmu_buf_impl_t *buf);
 

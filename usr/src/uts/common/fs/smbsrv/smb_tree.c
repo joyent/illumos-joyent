@@ -21,8 +21,8 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2021 Tintri by DDN, Inc. All rights reserved.
  */
 
 /*
@@ -188,6 +188,7 @@ static void smb_tree_dealloc(void *);
 static boolean_t smb_tree_is_connected_locked(smb_tree_t *);
 static char *smb_tree_get_sharename(char *);
 static int smb_tree_getattr(const smb_kshare_t *, smb_node_t *, smb_tree_t *);
+static void smb_tree_get_creation(smb_node_t *, smb_tree_t *);
 static void smb_tree_get_volname(vfs_t *, smb_tree_t *);
 static void smb_tree_get_flags(const smb_kshare_t *, vfs_t *, smb_tree_t *);
 static void smb_tree_log(smb_request_t *, const char *, const char *, ...);
@@ -917,10 +918,6 @@ smb_tree_alloc(smb_request_t *sr, const smb_kshare_t *si,
 	tree->t_session = session;
 	tree->t_server = session->s_server;
 
-	/* grab a ref for tree->t_owner */
-	smb_user_hold_internal(sr->uid_user);
-	tree->t_owner = sr->uid_user;
-
 	if (STYPE_ISDSK(stype) || STYPE_ISPRN(stype)) {
 		if (smb_tree_getattr(si, snode, tree) != 0) {
 			smb_idpool_free(&session->s_tid_pool, tid);
@@ -963,6 +960,10 @@ smb_tree_alloc(smb_request_t *sr, const smb_kshare_t *si,
 	tree->t_access = access;
 	tree->t_connect_time = gethrestime_sec();
 	tree->t_execflags = execflags;
+
+	/* grab a ref for tree->t_owner */
+	smb_user_hold_internal(sr->uid_user);
+	tree->t_owner = sr->uid_user;
 
 	/* if FS is readonly, enforce that here */
 	if (tree->t_flags & SMB_TREE_READONLY)
@@ -1099,15 +1100,29 @@ static int
 smb_tree_getattr(const smb_kshare_t *si, smb_node_t *node, smb_tree_t *tree)
 {
 	vfs_t *vfsp = SMB_NODE_VFS(node);
+	vfs_t *realvfsp;
 	smb_cfg_val_t srv_encrypt;
 
 	ASSERT(vfsp);
 
-	if (getvfs(&vfsp->vfs_fsid) != vfsp)
-		return (ESTALE);
-
+	smb_tree_get_creation(node, tree);
 	smb_tree_get_volname(vfsp, tree);
-	smb_tree_get_flags(si, vfsp, tree);
+
+	/*
+	 * In the case of an lofs mount, we need to ask the (real)
+	 * underlying filesystem about capabilities, where the
+	 * passed in vfs_t will be from lofs.
+	 */
+	realvfsp = getvfs(&vfsp->vfs_fsid);
+	if (realvfsp != NULL) {
+		smb_tree_get_flags(si, realvfsp, tree);
+		VFS_RELE(realvfsp);
+	} else {
+		cmn_err(CE_NOTE, "Failed getting info for share: %s",
+		    si->shr_name);
+		/* do the best we can without realvfsp */
+		smb_tree_get_flags(si, vfsp, tree);
+	}
 
 	srv_encrypt = tree->t_session->s_server->sv_cfg.skc_encrypt;
 	if (tree->t_session->dialect >= SMB_VERS_3_0) {
@@ -1122,8 +1137,24 @@ smb_tree_getattr(const smb_kshare_t *si, smb_node_t *node, smb_tree_t *tree)
 	} else
 		tree->t_encrypt = SMB_CONFIG_DISABLED;
 
-	VFS_RELE(vfsp);
 	return (0);
+}
+
+/*
+ * File volume creation time
+ */
+static void
+smb_tree_get_creation(smb_node_t *node, smb_tree_t *tree)
+{
+	smb_attr_t	attr;
+	cred_t		*kcr = zone_kcred();
+
+	bzero(&attr, sizeof (attr));
+	attr.sa_mask = SMB_AT_CRTIME;
+	(void) smb_node_getattr(NULL, node, kcr, NULL, &attr);
+	/* On failure we'll have time zero, which is OK */
+
+	tree->t_create_time = attr.sa_crtime;
 }
 
 /*

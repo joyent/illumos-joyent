@@ -78,6 +78,9 @@ static vis_modechg_cb_t modechg_cb;
 static struct vis_modechg_arg *modechg_arg;
 static tem_vt_state_t tem;
 
+/* RGB colors for 8-bit depth */
+struct paletteentry pe8[CMAP_SIZE];
+
 #define	KEYBUFSZ	10
 #define	DEFAULT_FGCOLOR	7
 #define	DEFAULT_BGCOLOR	0
@@ -105,10 +108,10 @@ struct visual_ops fb_ops = {
 	.ident = &fb_ident,
 	.kdsetmode = NULL,
 	.devinit = vidc_vbe_devinit,
-	.cons_copy = NULL,
-	.cons_display = NULL,
+	.cons_copy = gfx_fb_cons_copy,
+	.cons_display = gfx_fb_cons_display,
 	.cons_cursor = vidc_cons_cursor,
-	.cons_clear = NULL,
+	.cons_clear = gfx_fb_cons_clear,
 	.cons_put_cmap = vidc_vbe_cons_put_cmap
 };
 
@@ -538,42 +541,53 @@ vidc_cons_cursor(struct vis_conscursor *cc)
 	}
 }
 
-static uint8_t
-c24_to_vga(uint8_t c, uint8_t mask)
-{
-	switch (c) {
-	case 0x40:
-		return (0x15 & mask);
-	case 0x80:
-		return (0x2A & mask);
-	case 0xFF:
-		return (c & mask);
-	default:
-		return (0);
-	}
-}
-
 static int
 vidc_vbe_cons_put_cmap(struct vis_cmap *cm)
 {
-	int i, bits, rc = 0;
-	struct paletteentry pe;
+	int i, rc;
+	rgb_t rgb;
+	uint32_t c;
 
-	bits = 1;	/* get DAC palette width */
-	rc = biosvbe_palette_format(&bits);
-	if (rc != VBE_SUCCESS)
-		return (rc);
+	rc = 0;
 
-	bits = 0xFF >> (8 - (bits >> 8));
-	pe.Alignment = 0;
-	for (i = 0; i < cm->count; i++) {
-		pe.Red = c24_to_vga(cm->red[i], bits);
-		pe.Green = c24_to_vga(cm->green[i], bits);
-		pe.Blue = c24_to_vga(cm->blue[i], bits);
-		rc = vbe_set_palette(&pe,
-		    solaris_color_to_pc_color[cm->index + i]);
-		if (rc != 0)
-			break;
+	/*
+	 * we need to set position and size for rgb_color_map()
+	 * to be able to work.
+	 */
+	gfx_fb.u.fb2.framebuffer_red_field_position = 16;
+	gfx_fb.u.fb2.framebuffer_green_field_position = 8;
+	gfx_fb.u.fb2.framebuffer_blue_field_position = 0;
+	gfx_fb.u.fb2.framebuffer_red_mask_size = palette_format;
+	gfx_fb.u.fb2.framebuffer_green_mask_size = palette_format;
+	gfx_fb.u.fb2.framebuffer_blue_mask_size = palette_format;
+
+	rgb.red.pos = gfx_fb.u.fb2.framebuffer_red_field_position;
+	rgb.red.size = gfx_fb.u.fb2.framebuffer_red_mask_size;
+
+	rgb.green.pos = gfx_fb.u.fb2.framebuffer_green_field_position;
+	rgb.green.size = gfx_fb.u.fb2.framebuffer_green_mask_size;
+
+	rgb.blue.pos = gfx_fb.u.fb2.framebuffer_blue_field_position;
+	rgb.blue.size = gfx_fb.u.fb2.framebuffer_blue_mask_size;
+
+	for (i = cm->index; i < NCMAP && rc == 0; i++) {
+		int idx;
+
+		/* Pick RGB from cmap4_to_24 */
+		c = rgb_color_map(&rgb, i);
+		/* The first 16 colors need to be in VGA color order. */
+		if (i < NCOLORS)
+			idx = solaris_color_to_pc_color[i];
+		else
+			idx = i;
+
+		pe8[i].Red = (c >> rgb.red.pos) & ((1 << rgb.red.size) - 1);
+		pe8[i].Green =
+		    (c >> rgb.green.pos) & ((1 << rgb.green.size) - 1);
+		pe8[i].Blue =
+		    (c >> rgb.blue.pos) & ((1 << rgb.blue.size) - 1);
+		pe8[i].Reserved = 0;
+		rc = vbe_set_palette(&pe8[i], idx);
 	}
 	return (rc);
 }
@@ -855,7 +869,7 @@ vidc_init(struct console *cp, int arg)
 		}
 	}
 
-	gfx_framework_init(&fb_ops);
+	gfx_framework_init();
 	/* set up callback before calling tem_info_init(). */
 	tem_register_modechg_cb(vidc_install_font, (tem_modechg_cb_arg_t)cp);
 	rc = tem_info_init(cp);

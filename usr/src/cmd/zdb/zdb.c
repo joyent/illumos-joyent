@@ -58,8 +58,10 @@
 #include <sys/dmu_traverse.h>
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
+#include <zfs_fletcher.h>
 #include <sys/zfs_fuid.h>
 #include <sys/arc.h>
+#include <sys/arc_impl.h>
 #include <sys/ddt.h>
 #include <sys/zfeature.h>
 #include <sys/abd.h>
@@ -1354,10 +1356,7 @@ dump_history(spa_t *spa)
 	uint64_t resid, len, off = 0;
 	uint_t num = 0;
 	int error;
-	time_t tsec;
-	struct tm t;
 	char tbuf[30];
-	char internalstr[MAXPATHLEN];
 
 	char *buf = umem_alloc(SPA_MAXBLOCKSIZE, UMEM_NOFAIL);
 	do {
@@ -1379,38 +1378,81 @@ dump_history(spa_t *spa)
 
 	(void) printf("\nHistory:\n");
 	for (unsigned i = 0; i < num; i++) {
-		uint64_t time, txg, ievent;
-		char *cmd, *intstr;
 		boolean_t printed = B_FALSE;
 
-		if (nvlist_lookup_uint64(events[i], ZPOOL_HIST_TIME,
-		    &time) != 0)
-			goto next;
-		if (nvlist_lookup_string(events[i], ZPOOL_HIST_CMD,
-		    &cmd) != 0) {
-			if (nvlist_lookup_uint64(events[i],
-			    ZPOOL_HIST_INT_EVENT, &ievent) != 0)
-				goto next;
-			verify(nvlist_lookup_uint64(events[i],
-			    ZPOOL_HIST_TXG, &txg) == 0);
-			verify(nvlist_lookup_string(events[i],
-			    ZPOOL_HIST_INT_STR, &intstr) == 0);
+		if (nvlist_exists(events[i], ZPOOL_HIST_TIME)) {
+			time_t tsec;
+			struct tm t;
+
+			tsec = fnvlist_lookup_uint64(events[i],
+			    ZPOOL_HIST_TIME);
+			(void) localtime_r(&tsec, &t);
+			(void) strftime(tbuf, sizeof (tbuf), "%F.%T", &t);
+		} else {
+			tbuf[0] = '\0';
+		}
+
+		if (nvlist_exists(events[i], ZPOOL_HIST_CMD)) {
+			(void) printf("%s %s\n", tbuf,
+			    fnvlist_lookup_string(events[i], ZPOOL_HIST_CMD));
+		} else if (nvlist_exists(events[i], ZPOOL_HIST_INT_EVENT)) {
+			uint64_t ievent;
+
+			ievent = fnvlist_lookup_uint64(events[i],
+			    ZPOOL_HIST_INT_EVENT);
 			if (ievent >= ZFS_NUM_LEGACY_HISTORY_EVENTS)
 				goto next;
 
-			(void) snprintf(internalstr,
-			    sizeof (internalstr),
-			    "[internal %s txg:%ju] %s",
-			    zfs_history_event_names[ievent], (uintmax_t)txg,
-			    intstr);
-			cmd = internalstr;
-		}
-		tsec = time;
-		(void) localtime_r(&tsec, &t);
-		(void) strftime(tbuf, sizeof (tbuf), "%F.%T", &t);
-		(void) printf("%s %s\n", tbuf, cmd);
-		printed = B_TRUE;
+			(void) printf(" %s [internal %s txg:%ju] %s\n",
+			    tbuf,
+			    zfs_history_event_names[ievent],
+			    fnvlist_lookup_uint64(events[i],
+			    ZPOOL_HIST_TXG),
+			    fnvlist_lookup_string(events[i],
+			    ZPOOL_HIST_INT_STR));
+		} else if (nvlist_exists(events[i], ZPOOL_HIST_INT_NAME)) {
+			(void) printf("%s [txg:%ju] %s", tbuf,
+			    fnvlist_lookup_uint64(events[i],
+			    ZPOOL_HIST_TXG),
+			    fnvlist_lookup_string(events[i],
+			    ZPOOL_HIST_INT_NAME));
 
+			if (nvlist_exists(events[i], ZPOOL_HIST_DSNAME)) {
+				(void) printf(" %s (%llu)",
+				    fnvlist_lookup_string(events[i],
+				    ZPOOL_HIST_DSNAME),
+				    (u_longlong_t)fnvlist_lookup_uint64(
+				    events[i],
+				    ZPOOL_HIST_DSID));
+			}
+
+			(void) printf(" %s\n", fnvlist_lookup_string(events[i],
+			    ZPOOL_HIST_INT_STR));
+		} else if (nvlist_exists(events[i], ZPOOL_HIST_IOCTL)) {
+			(void) printf("%s ioctl %s\n", tbuf,
+			    fnvlist_lookup_string(events[i],
+			    ZPOOL_HIST_IOCTL));
+
+			if (nvlist_exists(events[i], ZPOOL_HIST_INPUT_NVL)) {
+				(void) printf("    input:\n");
+				dump_nvlist(fnvlist_lookup_nvlist(events[i],
+				    ZPOOL_HIST_INPUT_NVL), 8);
+			}
+			if (nvlist_exists(events[i], ZPOOL_HIST_OUTPUT_NVL)) {
+				(void) printf("    output:\n");
+				dump_nvlist(fnvlist_lookup_nvlist(events[i],
+				    ZPOOL_HIST_OUTPUT_NVL), 8);
+			}
+			if (nvlist_exists(events[i], ZPOOL_HIST_ERRNO)) {
+				(void) printf("    errno: %lld\n",
+				    (longlong_t)fnvlist_lookup_int64(events[i],
+				    ZPOOL_HIST_ERRNO));
+			}
+		} else {
+			goto next;
+		}
+
+		printed = B_TRUE;
 next:
 		if (dump_opt['h'] > 1) {
 			if (!printed)
@@ -2550,7 +2592,7 @@ dump_uberblock(uberblock_t *ub, const char *header, const char *footer)
 		    (unsigned int) ub->ub_mmp_config & 0xFF);
 	}
 
-	if (dump_opt['u'] >= 3) {
+	if (dump_opt['u'] >= 4) {
 		char blkbuf[BP_SPRINTF_LEN];
 		snprintf_blkptr(blkbuf, sizeof (blkbuf), &ub->ub_rootbp);
 		(void) printf("\trootbp = %s\n", blkbuf);
@@ -2630,34 +2672,265 @@ dump_cachefile(const char *cachefile)
 	nvlist_free(config);
 }
 
-#define	ZDB_MAX_UB_HEADER_SIZE 32
+static void
+print_l2arc_header(void)
+{
+	(void) printf("------------------------------------\n");
+	(void) printf("L2ARC device header\n");
+	(void) printf("------------------------------------\n");
+}
 
 static void
-dump_label_uberblocks(vdev_label_t *lbl, uint64_t ashift)
+print_l2arc_log_blocks(void)
 {
-	vdev_t vd;
-	vdev_t *vdp = &vd;
-	char header[ZDB_MAX_UB_HEADER_SIZE];
+	(void) printf("------------------------------------\n");
+	(void) printf("L2ARC device log blocks\n");
+	(void) printf("------------------------------------\n");
+}
 
-	vd.vdev_ashift = ashift;
-	vdp->vdev_top = vdp;
-
-	for (int i = 0; i < VDEV_UBERBLOCK_COUNT(vdp); i++) {
-		uint64_t uoff = VDEV_UBERBLOCK_OFFSET(vdp, i);
-		uberblock_t *ub = (void *)((char *)lbl + uoff);
-
-		if (uberblock_verify(ub))
-			continue;
-
-		if ((dump_opt['u'] < 4) &&
-		    (ub->ub_mmp_magic == MMP_MAGIC) && ub->ub_mmp_delay &&
-		    (i >= VDEV_UBERBLOCK_COUNT(&vd) - MMP_BLOCKS_PER_LABEL))
-			continue;
-
-		(void) snprintf(header, ZDB_MAX_UB_HEADER_SIZE,
-		    "Uberblock[%d]\n", i);
-		dump_uberblock(ub, header, "");
+static void
+dump_l2arc_log_entries(uint64_t log_entries,
+    l2arc_log_ent_phys_t *le, uint64_t i)
+{
+	for (uint64_t j = 0; j < log_entries; j++) {
+		dva_t dva = le[j].le_dva;
+		(void) printf("lb[%4llu]\tle[%4d]\tDVA asize: %llu, "
+		    "vdev: %llu, offset: %llu\n",
+		    (u_longlong_t)i, j + 1,
+		    (u_longlong_t)DVA_GET_ASIZE(&dva),
+		    (u_longlong_t)DVA_GET_VDEV(&dva),
+		    (u_longlong_t)DVA_GET_OFFSET(&dva));
+		(void) printf("|\t\t\t\tbirth: %llu\n",
+		    (u_longlong_t)le[j].le_birth);
+		(void) printf("|\t\t\t\tlsize: %llu\n",
+		    (u_longlong_t)L2BLK_GET_LSIZE((&le[j])->le_prop));
+		(void) printf("|\t\t\t\tpsize: %llu\n",
+		    (u_longlong_t)L2BLK_GET_PSIZE((&le[j])->le_prop));
+		(void) printf("|\t\t\t\tcompr: %llu\n",
+		    (u_longlong_t)L2BLK_GET_COMPRESS((&le[j])->le_prop));
+		(void) printf("|\t\t\t\ttype: %llu\n",
+		    (u_longlong_t)L2BLK_GET_TYPE((&le[j])->le_prop));
+		(void) printf("|\t\t\t\tprotected: %llu\n",
+		    (u_longlong_t)L2BLK_GET_PROTECTED((&le[j])->le_prop));
+		(void) printf("|\t\t\t\tprefetch: %llu\n",
+		    (u_longlong_t)L2BLK_GET_PREFETCH((&le[j])->le_prop));
+		(void) printf("|\t\t\t\taddress: %llu\n",
+		    (u_longlong_t)le[j].le_daddr);
+		(void) printf("|\t\t\t\tARC state: %llu\n",
+		    (u_longlong_t)L2BLK_GET_STATE((&le[j])->le_prop));
+		(void) printf("|\n");
 	}
+	(void) printf("\n");
+}
+
+static void
+dump_l2arc_log_blkptr(l2arc_log_blkptr_t lbps)
+{
+	(void) printf("|\t\tdaddr: %llu\n", (u_longlong_t)lbps.lbp_daddr);
+	(void) printf("|\t\tpayload_asize: %llu\n",
+	    (u_longlong_t)lbps.lbp_payload_asize);
+	(void) printf("|\t\tpayload_start: %llu\n",
+	    (u_longlong_t)lbps.lbp_payload_start);
+	(void) printf("|\t\tlsize: %llu\n",
+	    (u_longlong_t)L2BLK_GET_LSIZE((&lbps)->lbp_prop));
+	(void) printf("|\t\tasize: %llu\n",
+	    (u_longlong_t)L2BLK_GET_PSIZE((&lbps)->lbp_prop));
+	(void) printf("|\t\tcompralgo: %llu\n",
+	    (u_longlong_t)L2BLK_GET_COMPRESS((&lbps)->lbp_prop));
+	(void) printf("|\t\tcksumalgo: %llu\n",
+	    (u_longlong_t)L2BLK_GET_CHECKSUM((&lbps)->lbp_prop));
+	(void) printf("|\n\n");
+}
+
+static void
+dump_l2arc_log_blocks(int fd, l2arc_dev_hdr_phys_t l2dhdr,
+    l2arc_dev_hdr_phys_t *rebuild)
+{
+	l2arc_log_blk_phys_t this_lb;
+	uint64_t asize;
+	l2arc_log_blkptr_t lbps[2];
+	abd_t *abd;
+	zio_cksum_t cksum;
+	int failed = 0;
+	l2arc_dev_t dev;
+
+	if (!dump_opt['q'])
+		print_l2arc_log_blocks();
+	bcopy((&l2dhdr)->dh_start_lbps, lbps, sizeof (lbps));
+
+	dev.l2ad_evict = l2dhdr.dh_evict;
+	dev.l2ad_start = l2dhdr.dh_start;
+	dev.l2ad_end = l2dhdr.dh_end;
+
+	if (l2dhdr.dh_start_lbps[0].lbp_daddr == 0) {
+		/* no log blocks to read */
+		if (!dump_opt['q']) {
+			(void) printf("No log blocks to read\n");
+			(void) printf("\n");
+		}
+		return;
+	} else {
+		dev.l2ad_hand = lbps[0].lbp_daddr +
+		    L2BLK_GET_PSIZE((&lbps[0])->lbp_prop);
+	}
+
+	dev.l2ad_first = !!(l2dhdr.dh_flags & L2ARC_DEV_HDR_EVICT_FIRST);
+
+	for (;;) {
+		if (!l2arc_log_blkptr_valid(&dev, &lbps[0]))
+			break;
+
+		/* L2BLK_GET_PSIZE returns aligned size for log blocks */
+		asize = L2BLK_GET_PSIZE((&lbps[0])->lbp_prop);
+		if (pread64(fd, &this_lb, asize, lbps[0].lbp_daddr) !=
+		    (ssize_t)asize) {
+			if (!dump_opt['q']) {
+				(void) printf("Error while reading next log "
+				    "block\n\n");
+			}
+			break;
+		}
+
+		fletcher_4_native(&this_lb, asize, NULL, &cksum);
+		if (!ZIO_CHECKSUM_EQUAL(cksum, lbps[0].lbp_cksum)) {
+			failed++;
+			if (!dump_opt['q']) {
+				(void) printf("Invalid cksum\n");
+				dump_l2arc_log_blkptr(lbps[0]);
+			}
+			break;
+		}
+
+		switch (L2BLK_GET_COMPRESS((&lbps[0])->lbp_prop)) {
+		case ZIO_COMPRESS_OFF:
+			break;
+		case ZIO_COMPRESS_LZ4:
+			abd = abd_alloc_for_io(asize, B_TRUE);
+			abd_copy_from_buf_off(abd, &this_lb, 0, asize);
+			zio_decompress_data(L2BLK_GET_COMPRESS(
+			    (&lbps[0])->lbp_prop), abd, &this_lb,
+			    asize, sizeof (this_lb));
+			abd_free(abd);
+			break;
+		default:
+			break;
+		}
+
+		if (this_lb.lb_magic == BSWAP_64(L2ARC_LOG_BLK_MAGIC))
+			byteswap_uint64_array(&this_lb, sizeof (this_lb));
+		if (this_lb.lb_magic != L2ARC_LOG_BLK_MAGIC) {
+			if (!dump_opt['q'])
+				(void) printf("Invalid log block magic\n\n");
+			break;
+		}
+
+		rebuild->dh_lb_count++;
+		rebuild->dh_lb_asize += asize;
+		if (dump_opt['l'] > 1 && !dump_opt['q']) {
+			(void) printf("lb[%4llu]\tmagic: %llu\n",
+			    (u_longlong_t)rebuild->dh_lb_count,
+			    (u_longlong_t)this_lb.lb_magic);
+			dump_l2arc_log_blkptr(lbps[0]);
+		}
+
+		if (dump_opt['l'] > 2 && !dump_opt['q'])
+			dump_l2arc_log_entries(l2dhdr.dh_log_entries,
+			    this_lb.lb_entries,
+			    rebuild->dh_lb_count);
+
+		if (l2arc_range_check_overlap(lbps[1].lbp_payload_start,
+		    lbps[0].lbp_payload_start, dev.l2ad_evict) &&
+		    !dev.l2ad_first)
+			break;
+
+		lbps[0] = lbps[1];
+		lbps[1] = this_lb.lb_prev_lbp;
+	}
+
+	if (!dump_opt['q']) {
+		(void) printf("log_blk_count:\t %llu with valid cksum\n",
+		    (u_longlong_t)rebuild->dh_lb_count);
+		(void) printf("\t\t %d with invalid cksum\n", failed);
+		(void) printf("log_blk_asize:\t %llu\n\n",
+		    (u_longlong_t)rebuild->dh_lb_asize);
+	}
+}
+
+static int
+dump_l2arc_header(int fd)
+{
+	l2arc_dev_hdr_phys_t l2dhdr, rebuild;
+	int error = B_FALSE;
+
+	bzero(&l2dhdr, sizeof (l2dhdr));
+	bzero(&rebuild, sizeof (rebuild));
+
+	if (pread64(fd, &l2dhdr, sizeof (l2dhdr),
+	    VDEV_LABEL_START_SIZE) != sizeof (l2dhdr)) {
+		error = B_TRUE;
+	} else {
+		if (l2dhdr.dh_magic == BSWAP_64(L2ARC_DEV_HDR_MAGIC))
+			byteswap_uint64_array(&l2dhdr, sizeof (l2dhdr));
+
+		if (l2dhdr.dh_magic != L2ARC_DEV_HDR_MAGIC)
+			error = B_TRUE;
+	}
+
+	if (error) {
+		(void) printf("L2ARC device header not found\n\n");
+		/* Do not return an error here for backward compatibility */
+		return (0);
+	} else if (!dump_opt['q']) {
+		print_l2arc_header();
+
+		(void) printf("    magic: %llu\n",
+		    (u_longlong_t)l2dhdr.dh_magic);
+		(void) printf("    version: %llu\n",
+		    (u_longlong_t)l2dhdr.dh_version);
+		(void) printf("    pool_guid: %llu\n",
+		    (u_longlong_t)l2dhdr.dh_spa_guid);
+		(void) printf("    flags: %llu\n",
+		    (u_longlong_t)l2dhdr.dh_flags);
+		(void) printf("    start_lbps[0]: %llu\n",
+		    (u_longlong_t)
+		    l2dhdr.dh_start_lbps[0].lbp_daddr);
+		(void) printf("    start_lbps[1]: %llu\n",
+		    (u_longlong_t)
+		    l2dhdr.dh_start_lbps[1].lbp_daddr);
+		(void) printf("    log_blk_ent: %llu\n",
+		    (u_longlong_t)l2dhdr.dh_log_entries);
+		(void) printf("    start: %llu\n",
+		    (u_longlong_t)l2dhdr.dh_start);
+		(void) printf("    end: %llu\n",
+		    (u_longlong_t)l2dhdr.dh_end);
+		(void) printf("    evict: %llu\n",
+		    (u_longlong_t)l2dhdr.dh_evict);
+		(void) printf("    lb_asize_refcount: %llu\n",
+		    (u_longlong_t)l2dhdr.dh_lb_asize);
+		(void) printf("    lb_count_refcount: %llu\n\n",
+		    (u_longlong_t)l2dhdr.dh_lb_count);
+	}
+
+	dump_l2arc_log_blocks(fd, l2dhdr, &rebuild);
+	/*
+	 * The total aligned size of log blocks and the number of log blocks
+	 * reported in the header of the device may be less than what zdb
+	 * reports by dump_l2arc_log_blocks() which emulates l2arc_rebuild().
+	 * This happens because dump_l2arc_log_blocks() lacks the memory
+	 * pressure valve that l2arc_rebuild() has. Thus, if we are on a system
+	 * with low memory, l2arc_rebuild will exit prematurely and dh_lb_asize
+	 * and dh_lb_count will be lower to begin with than what exists on the
+	 * device. This is normal and zdb should not exit with an error. The
+	 * opposite case should never happen though, the values reported in the
+	 * header should never be higher than what dump_l2arc_log_blocks() and
+	 * l2arc_rebuild() report. If this happens there is a leak in the
+	 * accounting of log blocks.
+	 */
+	if (l2dhdr.dh_lb_asize > rebuild.dh_lb_asize ||
+	    l2dhdr.dh_lb_count > rebuild.dh_lb_count)
+		return (1);
+
+	return (0);
 }
 
 static char curpath[PATH_MAX];
@@ -2762,17 +3035,179 @@ dump_path(char *ds, char *path)
 	return (err);
 }
 
+typedef struct cksum_record {
+	zio_cksum_t cksum;
+	boolean_t labels[VDEV_LABELS];
+	avl_node_t link;
+} cksum_record_t;
+
+static int
+cksum_record_compare(const void *x1, const void *x2)
+{
+	const cksum_record_t *l = (cksum_record_t *)x1;
+	const cksum_record_t *r = (cksum_record_t *)x2;
+	int arraysize = ARRAY_SIZE(l->cksum.zc_word);
+	int difference;
+
+	for (int i = 0; i < arraysize; i++) {
+		difference = AVL_CMP(l->cksum.zc_word[i], r->cksum.zc_word[i]);
+		if (difference)
+			break;
+	}
+
+	return (difference);
+}
+
+static cksum_record_t *
+cksum_record_alloc(zio_cksum_t *cksum, int l)
+{
+	cksum_record_t *rec;
+
+	rec = umem_zalloc(sizeof (*rec), UMEM_NOFAIL);
+	rec->cksum = *cksum;
+	rec->labels[l] = B_TRUE;
+
+	return (rec);
+}
+
+static cksum_record_t *
+cksum_record_lookup(avl_tree_t *tree, zio_cksum_t *cksum)
+{
+	cksum_record_t lookup = { .cksum = *cksum };
+	avl_index_t where;
+
+	return (avl_find(tree, &lookup, &where));
+}
+
+static cksum_record_t *
+cksum_record_insert(avl_tree_t *tree, zio_cksum_t *cksum, int l)
+{
+	cksum_record_t *rec;
+
+	rec = cksum_record_lookup(tree, cksum);
+	if (rec) {
+		rec->labels[l] = B_TRUE;
+	} else {
+		rec = cksum_record_alloc(cksum, l);
+		avl_add(tree, rec);
+	}
+
+	return (rec);
+}
+
+static int
+first_label(cksum_record_t *rec)
+{
+	for (int i = 0; i < VDEV_LABELS; i++)
+		if (rec->labels[i])
+			return (i);
+
+	return (-1);
+}
+
+static void
+print_label_numbers(char *prefix, cksum_record_t *rec)
+{
+	printf("%s", prefix);
+	for (int i = 0; i < VDEV_LABELS; i++)
+		if (rec->labels[i] == B_TRUE)
+			printf("%d ", i);
+	printf("\n");
+}
+
+#define	MAX_UBERBLOCK_COUNT (VDEV_UBERBLOCK_RING >> UBERBLOCK_SHIFT)
+
+typedef struct zdb_label {
+	vdev_label_t label;
+	nvlist_t *config_nv;
+	cksum_record_t *config;
+	cksum_record_t *uberblocks[MAX_UBERBLOCK_COUNT];
+	boolean_t header_printed;
+	boolean_t read_failed;
+} zdb_label_t;
+
+static void
+print_label_header(zdb_label_t *label, int l)
+{
+
+	if (dump_opt['q'])
+		return;
+
+	if (label->header_printed == B_TRUE)
+		return;
+
+	(void) printf("------------------------------------\n");
+	(void) printf("LABEL %d\n", l);
+	(void) printf("------------------------------------\n");
+
+	label->header_printed = B_TRUE;
+}
+
+static void
+dump_config_from_label(zdb_label_t *label, size_t buflen, int l)
+{
+	if (dump_opt['q'])
+		return;
+
+	if ((dump_opt['l'] < 3) && (first_label(label->config) != l))
+		return;
+
+	print_label_header(label, l);
+	dump_nvlist(label->config_nv, 4);
+	print_label_numbers("    labels = ", label->config);
+}
+
+#define	ZDB_MAX_UB_HEADER_SIZE 32
+
+static void
+dump_label_uberblocks(zdb_label_t *label, uint64_t ashift, int label_num)
+{
+	vdev_t vd;
+	char header[ZDB_MAX_UB_HEADER_SIZE];
+
+	vd.vdev_ashift = ashift;
+	vd.vdev_top = &vd;
+
+	for (int i = 0; i < VDEV_UBERBLOCK_COUNT(&vd); i++) {
+		uint64_t uoff = VDEV_UBERBLOCK_OFFSET(&vd, i);
+		uberblock_t *ub = (void *)((char *)&label->label + uoff);
+		cksum_record_t *rec = label->uberblocks[i];
+
+		if (rec == NULL) {
+			if (dump_opt['u'] >= 2) {
+				print_label_header(label, label_num);
+				(void) printf("    Uberblock[%d] invalid\n", i);
+			}
+			continue;
+		}
+
+		if ((dump_opt['u'] < 3) && (first_label(rec) != label_num))
+			continue;
+
+		print_label_header(label, label_num);
+		(void) snprintf(header, ZDB_MAX_UB_HEADER_SIZE,
+		    "    Uberblock[%d]\n", i);
+		dump_uberblock(ub, header, "");
+		print_label_numbers("        labels = ", rec);
+	}
+}
+
 static int
 dump_label(const char *dev)
 {
-	int fd;
-	vdev_label_t label;
 	char path[MAXPATHLEN];
-	char *buf = label.vl_vdev_phys.vp_nvlist;
-	size_t buflen = sizeof (label.vl_vdev_phys.vp_nvlist);
+	zdb_label_t labels[VDEV_LABELS];
+	uint64_t psize, ashift, l2cache;
 	struct stat64 statbuf;
-	uint64_t psize, ashift;
-	boolean_t label_found = B_FALSE;
+	boolean_t config_found = B_FALSE;
+	boolean_t error = B_FALSE;
+	boolean_t read_l2arc_header = B_FALSE;
+	avl_tree_t config_tree;
+	avl_tree_t uberblock_tree;
+	void *node, *cookie;
+	int fd;
+
+	bzero(labels, sizeof (labels));
 
 	(void) strlcpy(path, dev, sizeof (path));
 	if (dev[0] == '/') {
@@ -2812,57 +3247,140 @@ dump_label(const char *dev)
 		exit(1);
 	}
 
+	avl_create(&config_tree, cksum_record_compare,
+	    sizeof (cksum_record_t), offsetof(cksum_record_t, link));
+	avl_create(&uberblock_tree, cksum_record_compare,
+	    sizeof (cksum_record_t), offsetof(cksum_record_t, link));
+
 	psize = statbuf.st_size;
 	psize = P2ALIGN(psize, (uint64_t)sizeof (vdev_label_t));
+	ashift = SPA_MINBLOCKSHIFT;
 
+	/*
+	 * 1. Read the label from disk
+	 * 2. Unpack the configuration and insert in config tree.
+	 * 3. Traverse all uberblocks and insert in uberblock tree.
+	 */
 	for (int l = 0; l < VDEV_LABELS; l++) {
-		nvlist_t *config = NULL;
+		zdb_label_t *label = &labels[l];
+		char *buf = label->label.vl_vdev_phys.vp_nvlist;
+		size_t buflen = sizeof (label->label.vl_vdev_phys.vp_nvlist);
+		nvlist_t *config;
+		cksum_record_t *rec;
+		zio_cksum_t cksum;
+		vdev_t vd;
 
-		if (!dump_opt['q']) {
-			(void) printf("------------------------------------\n");
-			(void) printf("LABEL %d\n", l);
-			(void) printf("------------------------------------\n");
-		}
-
-		if (pread64(fd, &label, sizeof (label),
-		    vdev_label_offset(psize, l, 0)) != sizeof (label)) {
+		if (pread64(fd, &label->label, sizeof (label->label),
+		    vdev_label_offset(psize, l, 0)) != sizeof (label->label)) {
 			if (!dump_opt['q'])
 				(void) printf("failed to read label %d\n", l);
+			label->read_failed = B_TRUE;
+			error = B_TRUE;
 			continue;
 		}
 
-		if (nvlist_unpack(buf, buflen, &config, 0) != 0) {
-			if (!dump_opt['q'])
-				(void) printf("failed to unpack label %d\n", l);
-			ashift = SPA_MINBLOCKSHIFT;
-		} else {
-			nvlist_t *vdev_tree = NULL;
+		label->read_failed = B_FALSE;
 
-			if (!dump_opt['q'])
-				dump_nvlist(config, 4);
+		if (nvlist_unpack(buf, buflen, &config, 0) == 0) {
+			nvlist_t *vdev_tree = NULL;
+			size_t size;
+
 			if ((nvlist_lookup_nvlist(config,
 			    ZPOOL_CONFIG_VDEV_TREE, &vdev_tree) != 0) ||
 			    (nvlist_lookup_uint64(vdev_tree,
 			    ZPOOL_CONFIG_ASHIFT, &ashift) != 0))
 				ashift = SPA_MINBLOCKSHIFT;
-			nvlist_free(config);
-			label_found = B_TRUE;
+
+			/* If the device is a cache device clear the header. */
+			if (!read_l2arc_header) {
+				if (nvlist_lookup_uint64(config,
+				    ZPOOL_CONFIG_POOL_STATE, &l2cache) == 0 &&
+				    l2cache == POOL_STATE_L2CACHE) {
+					read_l2arc_header = B_TRUE;
+				}
+			}
+
+			if (nvlist_size(config, &size, NV_ENCODE_XDR) != 0)
+				size = buflen;
+
+			fletcher_4_native(buf, size, NULL, &cksum);
+			rec = cksum_record_insert(&config_tree, &cksum, l);
+
+			label->config = rec;
+			label->config_nv = config;
+			config_found = B_TRUE;
+		} else {
+			error = B_TRUE;
 		}
-		if (dump_opt['u'])
-			dump_label_uberblocks(&label, ashift);
+
+		vd.vdev_ashift = ashift;
+		vd.vdev_top = &vd;
+
+		for (int i = 0; i < VDEV_UBERBLOCK_COUNT(&vd); i++) {
+			uint64_t uoff = VDEV_UBERBLOCK_OFFSET(&vd, i);
+			uberblock_t *ub = (void *)((char *)label + uoff);
+
+			if (uberblock_verify(ub))
+				continue;
+
+			fletcher_4_native(ub, sizeof (*ub), NULL, &cksum);
+			rec = cksum_record_insert(&uberblock_tree, &cksum, l);
+
+			label->uberblocks[i] = rec;
+		}
 	}
+
+	/*
+	 * Dump the label and uberblocks.
+	 */
+	for (int l = 0; l < VDEV_LABELS; l++) {
+		zdb_label_t *label = &labels[l];
+		size_t buflen = sizeof (label->label.vl_vdev_phys.vp_nvlist);
+
+		if (label->read_failed == B_TRUE)
+			continue;
+
+		if (label->config_nv) {
+			dump_config_from_label(label, buflen, l);
+		} else {
+			if (!dump_opt['q'])
+				(void) printf("failed to unpack label %d\n", l);
+		}
+
+		if (dump_opt['u'])
+			dump_label_uberblocks(label, ashift, l);
+
+		nvlist_free(label->config_nv);
+	}
+
+	/*
+	 * Dump the L2ARC header, if existent.
+	 */
+	if (read_l2arc_header)
+		error |= dump_l2arc_header(fd);
+
+	cookie = NULL;
+	while ((node = avl_destroy_nodes(&config_tree, &cookie)) != NULL)
+		umem_free(node, sizeof (cksum_record_t));
+
+	cookie = NULL;
+	while ((node = avl_destroy_nodes(&uberblock_tree, &cookie)) != NULL)
+		umem_free(node, sizeof (cksum_record_t));
+
+	avl_destroy(&config_tree);
+	avl_destroy(&uberblock_tree);
 
 	(void) close(fd);
 
-	return (label_found ? 0 : 2);
+	return (config_found == B_FALSE ? 2 :
+	    (error == B_TRUE ? 1 : 0));
 }
 
 static uint64_t dataset_feature_count[SPA_FEATURES];
 static uint64_t remap_deadlist_count = 0;
 
-/*ARGSUSED*/
 static int
-dump_one_dir(const char *dsname, void *arg)
+dump_one_dir(const char *dsname, void *arg __unused)
 {
 	int error;
 	objset_t *os;
@@ -3764,7 +4282,9 @@ zdb_leak_init_prepare_indirect_vdevs(spa_t *spa, zdb_cb_t *zcb)
 		 */
 		VERIFY0(vdev_metaslab_init(vd, 0));
 
+#if defined(DEBUG)
 		vdev_indirect_mapping_t *vim = vd->vdev_indirect_mapping;
+#endif
 		uint64_t vim_idx = 0;
 		for (uint64_t m = 0; m < vd->vdev_ms_count; m++) {
 
@@ -4738,7 +5258,7 @@ verify_checkpoint_vdev_spacemaps(spa_t *checkpoint, spa_t *current)
 		for (uint64_t c = ckpoint_rvd->vdev_children;
 		    c < current_rvd->vdev_children; c++) {
 			vdev_t *current_vd = current_rvd->vdev_child[c];
-			ASSERT3P(current_vd->vdev_checkpoint_sm, ==, NULL);
+			VERIFY3P(current_vd->vdev_checkpoint_sm, ==, NULL);
 		}
 	}
 

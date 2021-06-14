@@ -570,7 +570,7 @@ void smb_nt_transact_notify_finish(void *);
 void smb2_change_notify_finish(void *);
 
 int smb_fem_fcn_install(smb_node_t *);
-void smb_fem_fcn_uninstall(smb_node_t *);
+int smb_fem_fcn_uninstall(smb_node_t *);
 int smb_fem_oplock_install(smb_node_t *);
 void smb_fem_oplock_uninstall(smb_node_t *);
 
@@ -739,6 +739,7 @@ cred_t *smb_cred_create(smb_token_t *);
 cred_t *smb_kcred_create(void);
 void smb_user_setcred(smb_user_t *, cred_t *, uint32_t);
 boolean_t smb_is_same_user(cred_t *, cred_t *);
+boolean_t smb_user_has_security_priv(smb_user_t *, cred_t *);
 
 /*
  * SMB tree functions (file smb_tree.c)

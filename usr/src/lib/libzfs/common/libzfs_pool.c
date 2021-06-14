@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2020 by Delphix. All rights reserved.
  * Copyright 2019 Joyent, Inc.
  * Copyright 2016 Nexenta Systems, Inc.
  * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
@@ -342,15 +342,23 @@ zpool_get_prop(zpool_handle_t *zhp, zpool_prop_t prop, char *buf, size_t len,
 		case ZPOOL_PROP_FRAGMENTATION:
 			if (intval == UINT64_MAX) {
 				(void) strlcpy(buf, "-", len);
+			} else if (literal) {
+				(void) snprintf(buf, len, "%llu",
+				    (u_longlong_t)intval);
 			} else {
 				(void) snprintf(buf, len, "%llu%%",
 				    (u_longlong_t)intval);
 			}
 			break;
 		case ZPOOL_PROP_DEDUPRATIO:
-			(void) snprintf(buf, len, "%llu.%02llux",
-			    (u_longlong_t)(intval / 100),
-			    (u_longlong_t)(intval % 100));
+			if (literal)
+				(void) snprintf(buf, len, "%llu.%02llu",
+				    (u_longlong_t)(intval / 100),
+				    (u_longlong_t)(intval % 100));
+			else
+				(void) snprintf(buf, len, "%llu.%02llux",
+				    (u_longlong_t)(intval / 100),
+				    (u_longlong_t)(intval % 100));
 			break;
 		case ZPOOL_PROP_HEALTH:
 			verify(nvlist_lookup_nvlist(zpool_get_config(zhp, NULL),
@@ -397,7 +405,7 @@ zpool_get_prop(zpool_handle_t *zhp, zpool_prop_t prop, char *buf, size_t len,
  * Assuming bootfs is a valid dataset name.
  */
 static boolean_t
-bootfs_name_valid(const char *pool, char *bootfs)
+bootfs_name_valid(const char *pool, const char *bootfs)
 {
 	int len = strlen(pool);
 	if (bootfs[0] == '\0')
@@ -1502,13 +1510,6 @@ zpool_add(zpool_handle_t *zhp, nvlist_t *nvroot)
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "pool must be upgraded to add these vdevs"));
 			(void) zfs_error(hdl, EZFS_BADVERSION, msg);
-			break;
-
-		case EDOM:
-			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-			    "root pool can not have multiple vdevs"
-			    " or separate logs"));
-			(void) zfs_error(hdl, EZFS_POOL_NOTSUP, msg);
 			break;
 
 		default:
@@ -2797,10 +2798,9 @@ zpool_get_physpath(zpool_handle_t *zhp, char *physpath, size_t phypath_size)
  * the disk to use the new unallocated space.
  */
 static int
-zpool_relabel_disk(libzfs_handle_t *hdl, const char *name)
+zpool_relabel_disk(libzfs_handle_t *hdl, const char *name, const char *msg)
 {
 	char path[MAXPATHLEN];
-	char errbuf[1024];
 	int fd, error;
 	int (*_efi_use_whole_disk)(int);
 
@@ -2813,7 +2813,7 @@ zpool_relabel_disk(libzfs_handle_t *hdl, const char *name)
 	if ((fd = open(path, O_RDWR | O_NDELAY)) < 0) {
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN, "cannot "
 		    "relabel '%s': unable to open device"), name);
-		return (zfs_error(hdl, EZFS_OPENFAILED, errbuf));
+		return (zfs_error(hdl, EZFS_OPENFAILED, msg));
 	}
 
 	/*
@@ -2826,7 +2826,7 @@ zpool_relabel_disk(libzfs_handle_t *hdl, const char *name)
 	if (error && error != VT_ENOSPC) {
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN, "cannot "
 		    "relabel '%s': unable to read disk capacity"), name);
-		return (zfs_error(hdl, EZFS_NOCAP, errbuf));
+		return (zfs_error(hdl, EZFS_NOCAP, msg));
 	}
 	return (0);
 }
@@ -2845,6 +2845,7 @@ zpool_vdev_online(zpool_handle_t *zhp, const char *path, int flags,
 	nvlist_t *tgt;
 	boolean_t avail_spare, l2cache, islog;
 	libzfs_handle_t *hdl = zhp->zpool_hdl;
+	int error;
 
 	if (flags & ZFS_ONLINE_EXPAND) {
 		(void) snprintf(msg, sizeof (msg),
@@ -2883,7 +2884,9 @@ zpool_vdev_online(zpool_handle_t *zhp, const char *path, int flags,
 
 		if (wholedisk) {
 			pathname += strlen(ZFS_DISK_ROOT) + 1;
-			(void) zpool_relabel_disk(hdl, pathname);
+			error = zpool_relabel_disk(hdl, pathname, msg);
+			if (error != 0)
+				return (error);
 		}
 	}
 
@@ -4419,6 +4422,38 @@ zpool_obj_to_path(zpool_handle_t *zhp, uint64_t dsobj, uint64_t obj,
 		(void) snprintf(pathname, len, "%s:<0x%llx>", dsname, obj);
 	}
 	free(mntpnt);
+}
+
+int
+zpool_set_bootenv(zpool_handle_t *zhp, const nvlist_t *envmap)
+{
+	int error = lzc_set_bootenv(zhp->zpool_name, envmap);
+	if (error != 0) {
+		(void) zpool_standard_error_fmt(zhp->zpool_hdl, error,
+		    dgettext(TEXT_DOMAIN,
+		    "error setting bootenv in pool '%s'"), zhp->zpool_name);
+	}
+
+	return (error);
+}
+
+int
+zpool_get_bootenv(zpool_handle_t *zhp, nvlist_t **nvlp)
+{
+	nvlist_t *nvl;
+	int error;
+
+	nvl = NULL;
+	error = lzc_get_bootenv(zhp->zpool_name, &nvl);
+	if (error != 0) {
+		(void) zpool_standard_error_fmt(zhp->zpool_hdl, error,
+		    dgettext(TEXT_DOMAIN,
+		    "error getting bootenv in pool '%s'"), zhp->zpool_name);
+	} else {
+		*nvlp = nvl;
+	}
+
+	return (error);
 }
 
 /*

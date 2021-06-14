@@ -13,6 +13,9 @@
  * Copyright 2015 OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2018, Joyent, Inc.
  * Copyright 2017 Tegile Systems, Inc.  All rights reserved.
+ * Copyright 2020 Ryan Zezeski
+ * Copyright 2020 RackTop Systems, Inc.
+ * Copyright 2021 Oxide Computer Company
  */
 
 /*
@@ -177,7 +180,7 @@ i40e_m_start(void *arg)
 		goto done;
 	}
 
-	if (!i40e_start(i40e, B_TRUE)) {
+	if (!i40e_start(i40e)) {
 		rc = EIO;
 		goto done;
 	}
@@ -200,7 +203,7 @@ i40e_m_stop(void *arg)
 		goto done;
 
 	atomic_and_32(&i40e->i40e_state, ~I40E_STARTED);
-	i40e_stop(i40e, B_TRUE);
+	i40e_stop(i40e);
 done:
 	mutex_exit(&i40e->i40e_general_lock);
 }
@@ -434,6 +437,10 @@ static int
 i40e_ring_start(mac_ring_driver_t rh, uint64_t gen_num)
 {
 	i40e_trqpair_t *itrq = (i40e_trqpair_t *)rh;
+	int rv;
+
+	if ((rv = i40e_setup_ring(itrq)) != 0)
+		return (rv);
 
 	/*
 	 * GLDv3 requires we keep track of a generation number, as it uses
@@ -443,6 +450,19 @@ i40e_ring_start(mac_ring_driver_t rh, uint64_t gen_num)
 	itrq->itrq_rxgen = gen_num;
 	mutex_exit(&itrq->itrq_rx_lock);
 	return (0);
+}
+
+static void
+i40e_ring_stop(mac_ring_driver_t rh)
+{
+	i40e_trqpair_t *itrq = (i40e_trqpair_t *)rh;
+
+	if (!i40e_shutdown_ring(itrq)) {
+		i40e_t *i40e = itrq->itrq_i40e;
+
+		ddi_fm_service_impact(i40e->i40e_dip, DDI_SERVICE_LOST);
+		i40e_error(i40e, "Failed to stop ring %u", itrq->itrq_index);
+	}
 }
 
 /* ARGSUSED */
@@ -528,7 +548,7 @@ i40e_fill_rx_ring(void *arg, mac_ring_type_t rtype, const int group_index,
 	itrq->itrq_macrxring = rh;
 	infop->mri_driver = (mac_ring_driver_t)itrq;
 	infop->mri_start = i40e_ring_start;
-	infop->mri_stop = NULL;
+	infop->mri_stop = i40e_ring_stop;
 	infop->mri_poll = i40e_ring_rx_poll;
 	infop->mri_stat = i40e_rx_ring_stat;
 	mintr->mi_handle = (mac_intr_handle_t)itrq;
@@ -565,7 +585,7 @@ i40e_fill_rx_group(void *arg, mac_ring_type_t rtype, const int index,
 	infop->mgi_addmac = i40e_group_add_mac;
 	infop->mgi_remmac = i40e_group_remove_mac;
 
-	ASSERT(i40e->i40e_num_rx_groups <= I40E_GROUP_MAX);
+	ASSERT3U(i40e->i40e_num_rx_groups, <=, I40E_MAX_NUM_RX_GROUPS);
 	infop->mgi_count = i40e->i40e_num_trqpairs_per_vsi;
 }
 
@@ -651,7 +671,7 @@ i40e_transceiver_read(void *arg, uint_t id, uint_t page, void *buf,
 		uint32_t val;
 
 		status = i40e_aq_get_phy_register(hw,
-		    I40E_AQ_PHY_REG_ACCESS_EXTERNAL_MODULE, page, offset,
+		    I40E_AQ_PHY_REG_ACCESS_EXTERNAL_MODULE, page, TRUE, offset,
 		    &val, NULL);
 		if (status != I40E_SUCCESS) {
 			mutex_exit(&i40e->i40e_general_lock);
@@ -946,10 +966,80 @@ i40e_m_propinfo_private(i40e_t *i40e, const char *pr_name,
 }
 
 static int
+i40e_update_fec(i40e_t *i40e, link_fec_t fec)
+{
+	struct i40e_hw *hw = &i40e->i40e_hw_space;
+	struct i40e_aq_get_phy_abilities_resp abilities;
+	struct i40e_aq_set_phy_config config;
+	link_fec_t fec_requested;
+	int req_fec;
+
+	ASSERT(MUTEX_HELD(&i40e->i40e_general_lock));
+
+	if (fec == i40e->i40e_fec_requested)
+		return (0);
+
+	fec_requested = fec;
+	if ((fec & LINK_FEC_AUTO) != 0) {
+		req_fec = I40E_AQ_SET_FEC_AUTO;
+		fec &= ~LINK_FEC_AUTO;
+	} else if ((fec & LINK_FEC_NONE) != 0) {
+		req_fec = 0;
+		fec &= ~LINK_FEC_NONE;
+	} else {
+		req_fec = 0;
+		if ((fec & LINK_FEC_BASE_R) != 0) {
+			req_fec |= I40E_AQ_SET_FEC_ABILITY_KR |
+			    I40E_AQ_SET_FEC_REQUEST_KR;
+			fec &= ~LINK_FEC_BASE_R;
+		}
+		if ((fec & LINK_FEC_RS) != 0) {
+			req_fec |= I40E_AQ_SET_FEC_ABILITY_RS |
+			    I40E_AQ_SET_FEC_REQUEST_RS;
+			fec &= ~LINK_FEC_RS;
+		}
+		if (req_fec == 0)
+			return (EINVAL);
+	}
+
+	/*
+	 * if fec is not zero now, then there is an invalid fec or
+	 * combination of settings.
+	 */
+	if (fec != 0)
+		return (EINVAL);
+
+	if (i40e_aq_get_phy_capabilities(hw, B_FALSE, B_FALSE, &abilities,
+	    NULL) != I40E_SUCCESS)
+		return (EIO);
+
+	bzero(&config, sizeof (config));
+	config.abilities = abilities.abilities;
+	/* Restart the link */
+	config.abilities |= I40E_AQ_PHY_ENABLE_ATOMIC_LINK;
+	config.phy_type = abilities.phy_type;
+	config.phy_type_ext = abilities.phy_type_ext;
+	config.link_speed = abilities.link_speed;
+	config.eee_capability = abilities.eee_capability;
+	config.eeer = abilities.eeer_val;
+	config.low_power_ctrl = abilities.d3_lpan;
+	config.fec_config = req_fec & I40E_AQ_PHY_FEC_CONFIG_MASK;
+	if (i40e_aq_set_phy_config(hw, &config, NULL) != I40E_SUCCESS)
+		return (EIO);
+
+	if (i40e_update_link_info(hw) != I40E_SUCCESS)
+		return (EIO);
+
+	i40e->i40e_fec_requested = fec_requested;
+
+	return (0);
+}
+static int
 i40e_m_setprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
     uint_t pr_valsize, const void *pr_val)
 {
 	uint32_t new_mtu;
+	link_fec_t fec;
 	i40e_t *i40e = arg;
 	int ret = 0;
 
@@ -968,6 +1058,8 @@ i40e_m_setprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 	case MAC_PROP_STATUS:
 	case MAC_PROP_ADV_100FDX_CAP:
 	case MAC_PROP_ADV_1000FDX_CAP:
+	case MAC_PROP_ADV_2500FDX_CAP:
+	case MAC_PROP_ADV_5000FDX_CAP:
 	case MAC_PROP_ADV_10GFDX_CAP:
 	case MAC_PROP_ADV_25GFDX_CAP:
 	case MAC_PROP_ADV_40GFDX_CAP:
@@ -979,6 +1071,8 @@ i40e_m_setprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 	 */
 	case MAC_PROP_EN_100FDX_CAP:
 	case MAC_PROP_EN_1000FDX_CAP:
+	case MAC_PROP_EN_2500FDX_CAP:
+	case MAC_PROP_EN_5000FDX_CAP:
 	case MAC_PROP_EN_10GFDX_CAP:
 	case MAC_PROP_EN_25GFDX_CAP:
 	case MAC_PROP_EN_40GFDX_CAP:
@@ -1010,6 +1104,12 @@ i40e_m_setprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 		}
 		break;
 
+	case MAC_PROP_EN_FEC_CAP:
+		bcopy(pr_val, &fec, sizeof (fec));
+
+		ret = i40e_update_fec(i40e, fec);
+		break;
+
 	case MAC_PROP_PRIVATE:
 		ret = i40e_m_setprop_private(i40e, pr_name, pr_valsize, pr_val);
 		break;
@@ -1020,6 +1120,20 @@ i40e_m_setprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 
 	mutex_exit(&i40e->i40e_general_lock);
 	return (ret);
+}
+
+static link_fec_t
+i40e_fec_to_linkfec(struct i40e_hw *hw)
+{
+	struct i40e_link_status *ls = &hw->phy.link_info;
+
+	if ((ls->fec_info & I40E_AQ_CONFIG_FEC_KR_ENA) != 0)
+		return (LINK_FEC_BASE_R);
+
+	if ((ls->fec_info & I40E_AQ_CONFIG_FEC_RS_ENA) != 0)
+		return (LINK_FEC_RS);
+
+	return (LINK_FEC_NONE);
 }
 
 static int
@@ -1084,6 +1198,21 @@ i40e_m_getprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 		}
 		bcopy(&i40e->i40e_sdu, pr_val, sizeof (uint32_t));
 		break;
+	case MAC_PROP_ADV_FEC_CAP:
+		if (pr_valsize < sizeof (link_fec_t)) {
+			ret = EOVERFLOW;
+			break;
+		}
+		*(link_fec_t *)pr_val =
+		    i40e_fec_to_linkfec(&i40e->i40e_hw_space);
+		break;
+	case MAC_PROP_EN_FEC_CAP:
+		if (pr_valsize < sizeof (link_fec_t)) {
+			ret = EOVERFLOW;
+			break;
+		}
+		*(link_fec_t *)pr_val = i40e->i40e_fec_requested;
+		break;
 
 	/*
 	 * Because we don't let users control the speeds we may auto-negotiate
@@ -1106,6 +1235,24 @@ i40e_m_getprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 		}
 		u8 = pr_val;
 		*u8 = (i40e->i40e_phy.link_speed & I40E_LINK_SPEED_1GB) != 0;
+		break;
+	case MAC_PROP_ADV_2500FDX_CAP:
+	case MAC_PROP_EN_2500FDX_CAP:
+		if (pr_valsize < sizeof (uint8_t)) {
+			ret = EOVERFLOW;
+			break;
+		}
+		u8 = pr_val;
+		*u8 = (i40e->i40e_phy.link_speed & I40E_LINK_SPEED_2_5GB) != 0;
+		break;
+	case MAC_PROP_ADV_5000FDX_CAP:
+	case MAC_PROP_EN_5000FDX_CAP:
+		if (pr_valsize < sizeof (uint8_t)) {
+			ret = EOVERFLOW;
+			break;
+		}
+		u8 = pr_val;
+		*u8 = (i40e->i40e_phy.link_speed & I40E_LINK_SPEED_5GB) != 0;
 		break;
 	case MAC_PROP_ADV_10GFDX_CAP:
 	case MAC_PROP_EN_10GFDX_CAP:
@@ -1171,6 +1318,19 @@ i40e_m_propinfo(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 		break;
 	case MAC_PROP_MTU:
 		mac_prop_info_set_range_uint32(prh, I40E_MIN_MTU, I40E_MAX_MTU);
+		break;
+	case MAC_PROP_ADV_FEC_CAP:
+		mac_prop_info_set_perm(prh, MAC_PROP_PERM_READ);
+		if (i40e_is_25G_device(i40e->i40e_hw_space.device_id))
+			mac_prop_info_set_default_fec(prh, LINK_FEC_AUTO);
+		break;
+	case MAC_PROP_EN_FEC_CAP:
+		if (i40e_is_25G_device(i40e->i40e_hw_space.device_id)) {
+			mac_prop_info_set_perm(prh, MAC_PROP_PERM_RW);
+			mac_prop_info_set_default_fec(prh, LINK_FEC_AUTO);
+		} else {
+			mac_prop_info_set_perm(prh, MAC_PROP_PERM_READ);
+		}
 		break;
 
 	/*

@@ -50,8 +50,6 @@ NATIVE_BUILD=$(POUND_SIGN)
 $(NATIVE_BUILD)PROG = $(MYPROG:%=%-native)
 $(NATIVE_BUILD)OBJS = $(MYOBJS:%.o=%-native.o)
 
-ROOTCMDDIR=	$(ROOT)/lib/svc/bin
-
 MYCPPFLAGS = -I. -I../common -I../../../common/svc \
 	-I$(ROOT)/usr/include/sqlite-sys -D_REENTRANT
 CPPFLAGS += $(MYCPPFLAGS)
@@ -75,7 +73,7 @@ LIBUUTIL	= $(SRC)/lib/libuutil
 LIBSCF		= $(SRC)/lib/libscf
 
 SCRIPTFILE	= restore_repository
-ROOTSCRIPTFILE	= $(ROOTCMDDIR)/$(SCRIPTFILE)
+ROOTSCRIPTFILE	= $(ROOTLIBSVCBIN)/$(SCRIPTFILE)
 
 #
 # Native variant (used in ../seed).
@@ -110,8 +108,8 @@ clobber := TARGET = clobber
 all: $(PROG)
 
 native: FRC
-	@cd $(LIBUUTIL)/native; pwd; $(MAKE) $(MFLAGS) install
-	@NATIVE_BUILD= $(MAKE) $(MFLAGS) all
+	@cd $(LIBUUTIL)/native; pwd; $(MAKE) install
+	@NATIVE_BUILD= $(MAKE) all
 
 $(PROG): $(OBJS)
 	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
@@ -121,10 +119,10 @@ $(PROG): $(OBJS)
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
-$(ROOTCMDDIR)/%: %.sh
+$(ROOTLIBSVCBIN)/%: %.sh
 	$(INS.rename)
 
-install: all $(ROOTCMD) $(ROOTVARSADMFILE) $(ROOTSCRIPTFILE)
+install: all $(ROOTLIBSVCBINPROG) $(ROOTVARSADMFILE) $(ROOTSCRIPTFILE)
 
 clean: FRC
 	$(RM) $(MYOBJS) $(MYOBJS:%.o=%-native.o)

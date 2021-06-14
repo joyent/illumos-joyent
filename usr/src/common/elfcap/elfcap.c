@@ -173,6 +173,71 @@ static const elfcap_desc_t hw1_sparc[ELFCAP_NUM_HW1_SPARC] = {
 		AV_SPARC_ASI_CACHE_SPARING,
 		STRDESC("AV_SPARC_ASI_CACHE_SPARING"),
 		STRDESC("CSPARE"), STRDESC("cspare"),
+	},
+	{						/* 0x00020000 */
+		AV_SPARC_PAUSE,
+		STRDESC("AV_SPARC_PAUSE"),
+		STRDESC("PAUSE"), STRDESC("pause"),
+	},
+	{						/* 0x00040000 */
+		AV_SPARC_CBCOND,
+		STRDESC("AV_SPARC_CBCOND"),
+		STRDESC("CBCOND"), STRDESC("cbcond"),
+	},
+	{						/* 0x00080000 */
+		AV_SPARC_AES,
+		STRDESC("AV_SPARC_AES"),
+		STRDESC("AES"), STRDESC("aes"),
+	},
+	{						/* 0x00100000 */
+		AV_SPARC_DES,
+		STRDESC("AV_SPARC_DES"),
+		STRDESC("DES"), STRDESC("des"),
+	},
+	{						/* 0x00200000 */
+		AV_SPARC_KASUMI,
+		STRDESC("AV_SPARC_KASUMI"),
+		STRDESC("KASUMI"), STRDESC("kasumi"),
+	},
+	{						/* 0x00400000 */
+		AV_SPARC_CAMELLIA,
+		STRDESC("AV_SPARC_CAMELLIA"),
+		STRDESC("CAMELLIA"), STRDESC("camellia"),
+	},
+	{						/* 0x00800000 */
+		AV_SPARC_MD5,
+		STRDESC("AV_SPARC_MD5"),
+		STRDESC("MD5"), STRDESC("md5"),
+	},
+	{						/* 0x01000000 */
+		AV_SPARC_SHA1,
+		STRDESC("AV_SPARC_SHA1"),
+		STRDESC("SHA1"), STRDESC("sha1"),
+	},
+	{						/* 0x02000000 */
+		AV_SPARC_SHA256,
+		STRDESC("AV_SPARC_SHA256"),
+		STRDESC("SHA256"), STRDESC("sha256"),
+	},
+	{						/* 0x04000000 */
+		AV_SPARC_SHA512,
+		STRDESC("AV_SPARC_SHA512"),
+		STRDESC("SHA512"), STRDESC("sha512"),
+	},
+	{						/* 0x08000000 */
+		AV_SPARC_MPMUL,
+		STRDESC("AV_SPARC_MPMUL"),
+		STRDESC("MPMUL"), STRDESC("mpmul"),
+	},
+	{						/* 0x10000000 */
+		AV_SPARC_MONT,
+		STRDESC("AV_SPARC_MONT"),
+		STRDESC("MONT"), STRDESC("mont"),
+	},
+	{						/* 0x20000000 */
+		AV_SPARC_CRC32C,
+		STRDESC("AV_SPARC_CRC32C"),
+		STRDESC("CRC32C"), STRDESC("crc32c"),
 	}
 };
 
@@ -415,6 +480,14 @@ static const elfcap_desc_t hw2_386[ELFCAP_NUM_HW2_386] = {
 	{						/* 0x04000000 */
 		AV_386_2_AVX512_VNNI, STRDESC("AV_386_2_AVX512_VNNI"),
 		STRDESC("AVX512_VNNI"), STRDESC("avx512_vnni")
+	},
+	{						/* 0x08000000 */
+		AV_386_2_VPCLMULQDQ, STRDESC("AV_386_2_VPCLMULQDQ"),
+		STRDESC("VPCLMULQDQ"), STRDESC("vpclmulqdq")
+	},
+	{						/* 0x10000000 */
+		AV_386_2_VAES, STRDESC("AV_386_2_VAES"),
+		STRDESC("VAES"), STRDESC("vaes")
 	}
 };
 

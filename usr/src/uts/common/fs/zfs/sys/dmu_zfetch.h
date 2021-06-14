@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2014, 2017 by Delphix. All rights reserved.
  */
 
 #ifndef	_DMU_ZFETCH_H
@@ -40,6 +40,13 @@ extern uint64_t	zfetch_array_rd_sz;
 
 struct dnode;				/* so we can reference dnode */
 
+typedef struct zfetch {
+	krwlock_t	zf_rwlock;	/* protects zfetch structure */
+	list_t		zf_stream;	/* list of zstream_t's */
+	struct dnode	*zf_dnode;	/* dnode that owns this zfetch */
+	int		zf_numstreams;	/* number of zstream_t's */
+} zfetch_t;
+
 typedef struct zstream {
 	uint64_t	zs_blkid;	/* expect next access at this blkid */
 	uint64_t	zs_pf_blkid;	/* next block to prefetch */
@@ -52,21 +59,19 @@ typedef struct zstream {
 
 	kmutex_t	zs_lock;	/* protects stream */
 	hrtime_t	zs_atime;	/* time last prefetch issued */
+	hrtime_t	zs_start_time;	/* start of last prefetch */
 	list_node_t	zs_node;	/* link for zf_stream */
+	zfetch_t	*zs_fetch;	/* parent fetch */
+	zfs_refcount_t	zs_blocks; /* number of pending blocks in the stream */
 } zstream_t;
-
-typedef struct zfetch {
-	krwlock_t	zf_rwlock;	/* protects zfetch structure */
-	list_t		zf_stream;	/* list of zstream_t's */
-	struct dnode	*zf_dnode;	/* dnode that owns this zfetch */
-} zfetch_t;
 
 void		zfetch_init(void);
 void		zfetch_fini(void);
 
 void		dmu_zfetch_init(zfetch_t *, struct dnode *);
 void		dmu_zfetch_fini(zfetch_t *);
-void		dmu_zfetch(zfetch_t *, uint64_t, uint64_t, boolean_t);
+void		dmu_zfetch(zfetch_t *, uint64_t, uint64_t, boolean_t,
+    boolean_t);
 
 
 #ifdef	__cplusplus

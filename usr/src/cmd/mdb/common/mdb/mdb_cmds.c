@@ -26,7 +26,7 @@
 
 /*
  * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2021 Joyent, Inc.
  * Copyright (c) 2013 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
  * Copyright (c) 2015, 2017 by Delphix. All rights reserved.
  * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
@@ -71,6 +71,7 @@
 #include <mdb/mdb_macalias.h>
 #include <mdb/mdb_tab.h>
 #include <mdb/mdb_typedef.h>
+#include <mdb/mdb_linkerset.h>
 #ifdef _KMDB
 #include <kmdb/kmdb_kdi.h>
 #endif
@@ -320,6 +321,9 @@ write_arglist(mdb_tgt_as_t as, mdb_tgt_addr_t addr,
 	case 'Z':
 		write_value = write_uint64;
 		break;
+	default:
+		write_value = NULL;
+		break;
 	}
 
 	for (argv++, i = 1; i < argc; i++, argv++) {
@@ -434,6 +438,10 @@ match_arglist(mdb_tgt_as_t as, uint_t flags, mdb_tgt_addr_t addr,
 	case 'M':
 		match_value = match_uint64;
 		break;
+	default:
+		mdb_warn("unknown match value %c\n",
+		    argv->a_un.a_char);
+		return (DCMD_ERR);
 	}
 
 	for (argv++, i = 1; i < argc; i++, argv++) {
@@ -3171,6 +3179,8 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	    head_help },
 	{ "help", "[cmd]", "list commands/command help", cmd_help, NULL,
 	    cmd_help_tab },
+	{ "linkerset", "[name]", "display linkersets", cmd_linkerset,
+	    linkerset_help, cmd_linkerset_tab },
 	{ "list", "?type member [variable]",
 	    "walk list using member as link pointer", cmd_list, NULL,
 	    mdb_tab_complete_mt },

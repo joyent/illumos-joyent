@@ -25,6 +25,8 @@
  * Copyright 2017 Nexenta Systems, Inc.
  * Copyright (c) 2018 Joyent, Inc.
  * Copyright (c) 2015 by Delphix. All rights reserved.
+ * Copyright 2020 Oxide Computer Company
+ * Copyright (c) 2020 Carlos Neira <cneirabustos@gmail.com>
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -74,6 +76,7 @@
 #include <sys/memlist_plat.h>
 #include <sys/varargs.h>
 #include <sys/promif.h>
+#include <sys/prom_debug.h>
 #include <sys/modctl.h>
 
 #include <sys/sunddi.h>
@@ -233,8 +236,8 @@ static void layout_kernel_va(void);
 pgcnt_t physmem = PHYSMEM;
 pgcnt_t obp_pages;	/* Memory used by PROM for its text and data */
 
-char *kobj_file_buf;
-int kobj_file_bufsize;	/* set in /etc/system */
+extern char *kobj_file_buf;
+extern int kobj_file_bufsize;	/* set in /etc/system */
 
 /* Global variables for MP support. Used in mp_startup */
 caddr_t	rm_platter_va = 0;
@@ -319,13 +322,13 @@ static struct seg *segmap = &kmapseg;	/* easier to use name for in here */
 
 struct seg *segkp = &kpseg;	/* Pageable kernel virtual memory segment */
 
-struct seg kvseg_core;		/* Segment used for the core heap */
+extern struct seg kvseg_core;		/* Segment used for the core heap */
 struct seg kpmseg;		/* Segment used for physical mapping */
 struct seg *segkpm = &kpmseg;	/* 64bit kernel physical mapping segment */
 
 caddr_t segkp_base;		/* Base address of segkp */
 caddr_t segzio_base;		/* Base address of segzio */
-pgcnt_t segkpsize = btop(SEGKPDEFSIZE);	/* size of segkp segment in pages */
+pgcnt_t segkpsize;		/* size of segkp segment in pages */
 caddr_t segkvmm_base;
 pgcnt_t segkvmmsize;
 pgcnt_t segziosize;
@@ -464,7 +467,7 @@ static pgcnt_t kphysm_init(page_t *, pgcnt_t);
  *			|			|
  * 0xFFFFFXXX.XXX00000  |-----------------------|- segkvmm_base (floating)
  *			|	 segkp		|
- * 			|-----------------------|- segkp_base (floating)
+ *			|-----------------------|- segkp_base (floating)
  *			|   page_t structures	|  valloc_base + valloc_sz
  *			|   memsegs, memlists,	|
  *			|   page hash, etc.	|
@@ -623,20 +626,7 @@ size_t		toxic_bit_map_len = 0;	/* in bits */
 
 #endif	/* __i386 */
 
-/*
- * Simple boot time debug facilities
- */
-static char *prm_dbg_str[] = {
-	"%s:%d: '%s' is 0x%x\n",
-	"%s:%d: '%s' is 0x%llx\n"
-};
-
 int prom_debug;
-
-#define	PRM_DEBUG(q)	if (prom_debug)		\
-	prom_printf(prm_dbg_str[sizeof (q) >> 3], "startup.c", __LINE__, #q, q);
-#define	PRM_POINT(q)	if (prom_debug)		\
-	prom_printf("%s:%d: %s\n", "startup.c", __LINE__, q);
 
 /*
  * This structure is used to keep track of the intial allocations
@@ -1906,9 +1896,9 @@ layout_kernel_va(void)
 	segkp_base = (caddr_t)valloc_base + valloc_sz;
 	if (!segkp_fromheap) {
 		size = mmu_ptob(segkpsize);
-
 		/*
-		 * determine size of segkp
+		 * Determine size of segkp
+		 * Users can change segkpsize through eeprom.
 		 */
 		if (size < SEGKPMINSIZE || size > SEGKPMAXSIZE) {
 			size = SEGKPDEFSIZE;
@@ -1917,7 +1907,6 @@ layout_kernel_va(void)
 			    mmu_btop(size));
 		}
 		size = MIN(size, MAX(SEGKPMINSIZE, physmem_size));
-
 		segkpsize = mmu_btop(ROUND_UP_LPAGE(size));
 	}
 	PRM_DEBUG(segkp_base);
@@ -2273,6 +2262,7 @@ startup_end(void)
 	 * We can now setup for XSAVE because fpu_probe is done in configure().
 	 */
 	if (fp_save_mech == FP_XSAVE) {
+		PRM_POINT("xsave_setup_msr()");
 		xsave_setup_msr(CPU);
 	}
 
@@ -2281,7 +2271,9 @@ startup_end(void)
 	 * support.
 	 */
 	setx86isalist();
+	PRM_POINT("cpu_intr_alloc()");
 	cpu_intr_alloc(CPU, NINTR_THREADS);
+	PRM_POINT("psm_install()");
 	psm_install();
 
 	/*
@@ -3108,6 +3100,13 @@ get_system_configuration(void)
 	else
 		segmapfreelists = (int)lvalue;
 
+	if (BOP_GETPROPLEN(bootops, "segkpsize") > sizeof (prop) ||
+	    BOP_GETPROP(bootops, "segkpsize", prop) < 0 ||
+	    kobj_getvalue(prop, &lvalue) == -1)
+		segkpsize = mmu_btop(SEGKPDEFSIZE);
+	else
+		segkpsize = mmu_btop((size_t)lvalue);
+
 	/* physmem used to be here, but moved much earlier to fakebop.c */
 }
 
@@ -3220,6 +3219,7 @@ setx86isalist(void)
 	switch (x86_vendor) {
 	case X86_VENDOR_Intel:
 	case X86_VENDOR_AMD:
+	case X86_VENDOR_HYGON:
 	case X86_VENDOR_TM:
 		if (is_x86_feature(x86_featureset, X86FSET_CMOV)) {
 			/*

@@ -24,6 +24,7 @@
  * Copyright 2020 Joyent, Inc.
  * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -51,6 +52,7 @@
 #include <sys/vfs.h>
 #include <sys/vfs_opreg.h>
 #include <sys/vnode.h>
+#include <sys/filio.h>
 #include <sys/rwstlock.h>
 #include <sys/fem.h>
 #include <sys/stat.h>
@@ -1164,7 +1166,20 @@ top:
 	 * Do remaining checks for FNOFOLLOW and FNOLINKS.
 	 */
 	if ((filemode & FNOFOLLOW) && vp->v_type == VLNK) {
-		error = ELOOP;
+		/*
+		 * The __FLXPATH flag is a private interface for use by the lx
+		 * brand in order to emulate open(O_NOFOLLOW|O_PATH) which,
+		 * when a symbolic link is encountered, returns a file
+		 * descriptor which references it.
+		 * See uts/common/brand/lx/syscall/lx_open.c
+		 *
+		 * When this flag is set, VOP_OPEN() is not called (for a
+		 * symlink, most filesystems will return ENOSYS anyway)
+		 * and the link's vnode is returned to be linked to the
+		 * file descriptor.
+		 */
+		if ((filemode & __FLXPATH) == 0)
+			error = ELOOP;
 		goto out;
 	}
 	if (filemode & FNOLINKS) {
@@ -1253,6 +1268,22 @@ top:
 		vattr.va_mask = AT_SIZE;
 		if ((error = VOP_SETATTR(vp, &vattr, 0, CRED(), NULL)) != 0)
 			goto out;
+	}
+
+	/*
+	 * Turn on directio, if requested.
+	 */
+	if (filemode & FDIRECT) {
+		if ((error = VOP_IOCTL(vp, _FIODIRECTIO, DIRECTIO_ON, 0,
+		    CRED(), NULL, NULL)) != 0) {
+			/*
+			 * On Linux, O_DIRECT returns EINVAL when the file
+			 * system does not support directio, so we'll do the
+			 * same.
+			 */
+			error = EINVAL;
+			goto out;
+		}
 	}
 out:
 	ASSERT(vp->v_count > 0);

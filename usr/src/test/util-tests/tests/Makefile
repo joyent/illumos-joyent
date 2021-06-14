@@ -15,11 +15,11 @@
 # Copyright 2014 Nexenta Systems, Inc. All rights reserved.
 # Copyright 2017 Jason King
 # Copyright 2020 Joyent, Inc.
-# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 
 SUBDIRS = date dis dladm iconv libnvpair_json libsff printf xargs grep_xpg4
 SUBDIRS += demangle mergeq workq chown ctf smbios libjedec awk make sleep
-SUBDIRS += bunyan libcustr find mdb
+SUBDIRS += bunyan libcustr find mdb sed head pcidb pcieadm svr4pkg
 
 include $(SRC)/test/Makefile.com

@@ -24,13 +24,13 @@
 # Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
 # Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
-# Copyright 2018 Nexenta Systems, Inc.
 # Copyright 2017 Toomas Soome <tsoome@me.com>
 # Copyright 2017 RackTop Systems.
-# Copyright 2019, Joyent, Inc.
+# Copyright 2018 Nexenta Systems, Inc.
 # Copyright 2018 Jason King
+# Copyright 2019, Joyent, Inc.
+# Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
 # Copyright 2020 Peter Tribble
-# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 #
@@ -452,6 +452,10 @@ usr/lib/sparcv9/libdll.so		sparc
 # libpp (a helper library needed by AST's msgcc)
 usr/lib/libpp.so
 usr/lib/locale/C/LC_MESSAGES/libpp
+# libcmd
+usr/lib/libcmd.so
+usr/lib/amd64/libcmd.so			i386
+usr/lib/sparcv9/libcmd.so		sparc
 # libshell
 usr/lib/libshell.so
 usr/lib/amd64/libshell.so		i386
@@ -744,11 +748,13 @@ usr/lib/sparcv9/libvrrpadm.so		sparc
 #
 opt/onbld/bin/i386/mandoc	i386
 opt/onbld/bin/sparc/mandoc	sparc
+opt/onbld/bin/i386/geniconvtbl	i386
+opt/onbld/bin/sparc/geniconvtbl	sparc
 opt/onbld/bin/i386/makesoftcore	i386
-opt/onbld/bin/i386/rpcgen	i386
-opt/onbld/bin/i386/vtfontcvt	i386
 opt/onbld/bin/sparc/makesoftcore	sparc
+opt/onbld/bin/i386/rpcgen	i386
 opt/onbld/bin/sparc/rpcgen	sparc
+opt/onbld/bin/i386/vtfontcvt	i386
 opt/onbld/bin/sparc/vtfontcvt	sparc
 
 #
@@ -860,12 +866,6 @@ usr/lib/libdwarf.so
 #
 usr/bin/ctfconvert
 usr/bin/ctfmerge
-
-#
-# SPARC doesn't currently use this today, though it may in the future.
-#
-usr/include/sys/sensors.h	sparc
-usr/lib/devfsadm/linkmod/SUNW_sensor_link.so	sparc
 
 #
 # libjedec is private

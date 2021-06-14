@@ -39,13 +39,11 @@
 struct vatpit *vatpit_init(struct vm *vm);
 void vatpit_cleanup(struct vatpit *vatpit);
 
-int vatpit_handler(struct vm *vm, int vcpuid, bool in, int port, int bytes,
+int vatpit_handler(void *arg, bool in, uint16_t port, uint8_t bytes,
     uint32_t *eax);
-int vatpit_nmisc_handler(struct vm *vm, int vcpuid, bool in, int port,
-    int bytes, uint32_t *eax);
+int vatpit_nmisc_handler(void *arg, bool in, uint16_t port, uint8_t bytes,
+    uint32_t *eax);
 
-#ifndef __FreeBSD__
 void vatpit_localize_resources(struct vatpit *);
-#endif
 
 #endif	/* _VATPIT_H_ */

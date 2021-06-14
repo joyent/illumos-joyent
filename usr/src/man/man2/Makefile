@@ -15,6 +15,7 @@
 # Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2018, Joyent, Inc.  All rights reserved.
 # Copyright 2017 Peter Tribble
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include		$(SRC)/Makefile.master
@@ -154,6 +155,7 @@ MANFILES=	Intro.2			\
 		umount.2		\
 		uname.2			\
 		unlink.2		\
+		upanic.2		\
 		ustat.2			\
 		utime.2			\
 		utimes.2		\
@@ -196,6 +198,7 @@ MANLINKS=	_Exit.2				\
 		fstat.2				\
 		fstatat.2			\
 		fstatvfs.2			\
+		futimes.2			\
 		futimesat.2			\
 		futimens.2			\
 		getaudit_addr.2			\
@@ -213,6 +216,7 @@ MANLINKS=	_Exit.2				\
 		lchown.2			\
 		linkat.2			\
 		lstat.2				\
+		lutimes.2			\
 		mkdirat.2			\
 		mknodat.2			\
 		openat.2			\
@@ -396,7 +400,9 @@ umount2.2			:= LINKSRC = umount.2
 unlinkat.2			:= LINKSRC = unlink.2
 
 futimens.2			:= LINKSRC = utimes.2
+futimes.2			:= LINKSRC = utimes.2
 futimesat.2			:= LINKSRC = utimes.2
+lutimes.2			:= LINKSRC = utimes.2
 utimensat.2			:= LINKSRC = utimes.2
 
 vforkx.2			:= LINKSRC = vfork.2

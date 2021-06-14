@@ -4839,7 +4839,7 @@ zfs_seek(vnode_t *vp, offset_t ooff, offset_t *noffp,
 {
 	if (vp->v_type == VDIR)
 		return (0);
-	return ((*noffp < 0 || *noffp > MAXOFFSET_T) ? EINVAL : 0);
+	return ((*noffp < 0) ? EINVAL : 0);
 }
 
 /*
@@ -5147,27 +5147,6 @@ zfs_addmap(vnode_t *vp, offset_t off, struct as *as, caddr_t addr,
 	return (0);
 }
 
-/*
- * The reason we push dirty pages as part of zfs_delmap() is so that we get a
- * more accurate mtime for the associated file.  Since we don't have a way of
- * detecting when the data was actually modified, we have to resort to
- * heuristics.  If an explicit msync() is done, then we mark the mtime when the
- * last page is pushed.  The problem occurs when the msync() call is omitted,
- * which by far the most common case:
- *
- *	open()
- *	mmap()
- *	<modify memory>
- *	munmap()
- *	close()
- *	<time lapse>
- *	putpage() via fsflush
- *
- * If we wait until fsflush to come along, we can have a modification time that
- * is some arbitrary point in the future.  In order to prevent this in the
- * common case, we flush pages whenever a (MAP_SHARED, PROT_WRITE) mapping is
- * torn down.
- */
 /* ARGSUSED */
 static int
 zfs_delmap(vnode_t *vp, offset_t off, struct as *as, caddr_t addr,
@@ -5610,7 +5589,6 @@ zfs_isdir()
 /*
  * Directory vnode operations template
  */
-vnodeops_t *zfs_dvnodeops;
 const fs_operation_def_t zfs_dvnodeops_template[] = {
 	VOPNAME_OPEN,		{ .vop_open = zfs_open },
 	VOPNAME_CLOSE,		{ .vop_close = zfs_close },
@@ -5643,7 +5621,6 @@ const fs_operation_def_t zfs_dvnodeops_template[] = {
 /*
  * Regular file vnode operations template
  */
-vnodeops_t *zfs_fvnodeops;
 const fs_operation_def_t zfs_fvnodeops_template[] = {
 	VOPNAME_OPEN,		{ .vop_open = zfs_open },
 	VOPNAME_CLOSE,		{ .vop_close = zfs_close },
@@ -5678,7 +5655,6 @@ const fs_operation_def_t zfs_fvnodeops_template[] = {
 /*
  * Symbolic link vnode operations template
  */
-vnodeops_t *zfs_symvnodeops;
 const fs_operation_def_t zfs_symvnodeops_template[] = {
 	VOPNAME_GETATTR,	{ .vop_getattr = zfs_getattr },
 	VOPNAME_SETATTR,	{ .vop_setattr = zfs_setattr },
@@ -5695,7 +5671,6 @@ const fs_operation_def_t zfs_symvnodeops_template[] = {
 /*
  * special share hidden files vnode operations template
  */
-vnodeops_t *zfs_sharevnodeops;
 const fs_operation_def_t zfs_sharevnodeops_template[] = {
 	VOPNAME_GETATTR,	{ .vop_getattr = zfs_getattr },
 	VOPNAME_ACCESS,		{ .vop_access = zfs_access },
@@ -5721,7 +5696,6 @@ const fs_operation_def_t zfs_sharevnodeops_template[] = {
  *	zfs_link()	- no links into/out of attribute space
  *	zfs_rename()	- no moves into/out of attribute space
  */
-vnodeops_t *zfs_xdvnodeops;
 const fs_operation_def_t zfs_xdvnodeops_template[] = {
 	VOPNAME_OPEN,		{ .vop_open = zfs_open },
 	VOPNAME_CLOSE,		{ .vop_close = zfs_close },
@@ -5752,7 +5726,6 @@ const fs_operation_def_t zfs_xdvnodeops_template[] = {
 /*
  * Error vnode operations template
  */
-vnodeops_t *zfs_evnodeops;
 const fs_operation_def_t zfs_evnodeops_template[] = {
 	VOPNAME_INACTIVE,	{ .vop_inactive = zfs_inactive },
 	VOPNAME_PATHCONF,	{ .vop_pathconf = zfs_pathconf },

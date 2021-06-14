@@ -61,10 +61,10 @@ static MALLOC_DEFINE(M_VHPET, "vhpet", "bhyve virtual hpet");
 #define	FS_PER_S	1000000000000000ul
 
 /* Timer N Configuration and Capabilities Register */
-#define	HPET_TCAP_RO_MASK	(HPET_TCAP_INT_ROUTE 	|		\
-				 HPET_TCAP_FSB_INT_DEL	|		\
-				 HPET_TCAP_SIZE		|		\
-				 HPET_TCAP_PER_INT)
+#define	HPET_TCAP_RO_MASK	(HPET_TCAP_INT_ROUTE	|	\
+				HPET_TCAP_FSB_INT_DEL	|	\
+				HPET_TCAP_SIZE		|	\
+				HPET_TCAP_PER_INT)
 /*
  * HPET requires at least 3 timers and up to 32 timers per block.
  */
@@ -160,13 +160,8 @@ vhpet_counter(struct vhpet *vhpet, sbintime_t *nowptr)
 	if (vhpet_counter_enabled(vhpet)) {
 		now = sbinuptime();
 		delta = now - vhpet->countbase_sbt;
-#ifdef	__FreeBSD__
-		KASSERT(delta >= 0, ("vhpet_counter: uptime went backwards: "
-		    "%#lx to %#lx", vhpet->countbase_sbt, now));
-#else
 		KASSERT(delta >= 0, ("vhpet_counter: uptime went backwards: "
 		    "%lx to %lx", vhpet->countbase_sbt, now));
-#endif
 		val += delta / vhpet->freq_sbt;
 		if (nowptr != NULL)
 			*nowptr = now;
@@ -242,7 +237,7 @@ vhpet_timer_interrupt(struct vhpet *vhpet, int n)
 		lapic_intr_msi(vhpet->vm, vhpet->timer[n].msireg >> 32,
 		    vhpet->timer[n].msireg & 0xffffffff);
 		return;
-	}	
+	}
 
 	pin = vhpet_timer_ioapic_pin(vhpet, n);
 	if (pin == 0) {
@@ -319,7 +314,6 @@ vhpet_handler(void *a)
 	vhpet_timer_interrupt(vhpet, n);
 done:
 	VHPET_UNLOCK(vhpet);
-	return;
 }
 
 static void
@@ -478,8 +472,8 @@ vhpet_timer_update_config(struct vhpet *vhpet, int n, uint64_t data,
 }
 
 int
-vhpet_mmio_write(void *vm, int vcpuid, uint64_t gpa, uint64_t val, int size,
-    void *arg)
+vhpet_mmio_write(struct vm *vm, int vcpuid, uint64_t gpa, uint64_t val,
+    int size)
 {
 	struct vhpet *vhpet;
 	uint64_t data, mask, oldval, val64;
@@ -504,7 +498,7 @@ vhpet_mmio_write(void *vm, int vcpuid, uint64_t gpa, uint64_t val, int size,
 		if ((offset & 0x4) != 0) {
 			mask <<= 32;
 			data <<= 32;
-		} 
+		}
 		break;
 	default:
 		VM_CTR2(vhpet->vm, "hpet invalid mmio write: "
@@ -628,8 +622,8 @@ done:
 }
 
 int
-vhpet_mmio_read(void *vm, int vcpuid, uint64_t gpa, uint64_t *rval, int size,
-    void *arg)
+vhpet_mmio_read(struct vm *vm, int vcpuid, uint64_t gpa, uint64_t *rval,
+    int size)
 {
 	int i, offset;
 	struct vhpet *vhpet;
@@ -658,7 +652,7 @@ vhpet_mmio_read(void *vm, int vcpuid, uint64_t gpa, uint64_t *rval, int size,
 
 	if (offset == HPET_CAPABILITIES || offset == HPET_CAPABILITIES + 4) {
 		data = vhpet_capabilities();
-		goto done;	
+		goto done;
 	}
 
 	if (offset == HPET_CONFIG || offset == HPET_CONFIG + 4) {
@@ -718,8 +712,8 @@ vhpet_init(struct vm *vm)
 	struct vhpet_callout_arg *arg;
 	struct bintime bt;
 
-	vhpet = malloc(sizeof(struct vhpet), M_VHPET, M_WAITOK | M_ZERO);
-        vhpet->vm = vm;
+	vhpet = malloc(sizeof (struct vhpet), M_VHPET, M_WAITOK | M_ZERO);
+	vhpet->vm = vm;
 	mtx_init(&vhpet->mtx, "vhpet lock", NULL, MTX_DEF);
 
 	FREQ2BT(HPET_FREQ, &bt);
@@ -770,7 +764,6 @@ vhpet_getcap(struct vm_hpet_cap *cap)
 	cap->capabilities = vhpet_capabilities();
 	return (0);
 }
-#ifndef __FreeBSD__
 void
 vhpet_localize_resources(struct vhpet *vhpet)
 {
@@ -778,4 +771,3 @@ vhpet_localize_resources(struct vhpet *vhpet)
 		vmm_glue_callout_localize(&vhpet->timer[i].callout);
 	}
 }
-#endif /* __FreeBSD */

@@ -23,8 +23,9 @@
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  * Copyright (c) 2014, OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -1301,6 +1302,10 @@ const struct ioc {
 		"zfs_cmd_t" },
 	{ (uint_t)ZFS_IOC_CHANGE_KEY,		"ZFS_IOC_CHANGE_KEY",
 		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_SET_BOOTENV,		"ZFS_IOC_SET_BOOTENV",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_GET_BOOTENV,		"ZFS_IOC_GET_BOOTENV",
+		"zfs_cmd_t" },
 
 	/* kssl ioctls */
 	{ (uint_t)KSSL_ADD_ENTRY,		"KSSL_ADD_ENTRY",
@@ -1962,7 +1967,7 @@ pathconfname(int code)
 #define	ALL_O_FLAGS \
 	(O_NDELAY|O_APPEND|O_SYNC|O_DSYNC|O_NONBLOCK|O_CREAT|O_TRUNC\
 	|O_EXCL|O_NOCTTY|O_LARGEFILE|O_RSYNC|O_XATTR|O_NOFOLLOW|O_NOLINKS\
-	|O_CLOEXEC|O_DIRECTORY|FXATTRDIROPEN)
+	|O_CLOEXEC|O_DIRECTORY|O_DIRECT|FXATTRDIROPEN|__FLXPATH)
 
 const char *
 openarg(private_t *pri, int arg)
@@ -2024,8 +2029,12 @@ openarg(private_t *pri, int arg)
 		(void) strlcat(str, "|O_CLOEXEC", sizeof (pri->code_buf));
 	if (arg & O_DIRECTORY)
 		(void) strlcat(str, "|O_DIRECTORY", sizeof (pri->code_buf));
+	if (arg & O_DIRECT)
+		(void) strlcat(str, "|O_DIRECT", sizeof (pri->code_buf));
 	if (arg & FXATTRDIROPEN)
 		(void) strlcat(str, "|FXATTRDIROPEN", sizeof (pri->code_buf));
+	if (arg & __FLXPATH)
+		(void) strlcat(str, "|__FLXPATH", sizeof (pri->code_buf));
 
 	return ((const char *)str);
 }

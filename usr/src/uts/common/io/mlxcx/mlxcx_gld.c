@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (c) 2020, the University of Queensland
+ * Copyright (c) 2021, the University of Queensland
  * Copyright 2020 RackTop Systems, Inc.
  */
 
@@ -666,12 +666,6 @@ mlxcx_group_add_mac(void *arg, const uint8_t *mac_addr)
 	return (ret);
 }
 
-/*
- * Support for VLAN steering into groups is not yet available in upstream
- * illumos.
- */
-#if defined(MAC_VLAN_UNTAGGED)
-
 static int
 mlxcx_group_add_vlan(mac_group_driver_t gh, uint16_t vid)
 {
@@ -715,8 +709,6 @@ mlxcx_group_remove_vlan(mac_group_driver_t gh, uint16_t vid)
 
 	return (ret);
 }
-
-#endif /* MAC_VLAN_UNTAGGED */
 
 static int
 mlxcx_group_remove_mac(void *arg, const uint8_t *mac_addr)
@@ -817,19 +809,32 @@ mlxcx_mac_ring_stop(mac_ring_driver_t rh)
 
 
 	if (wq->mlwq_state & MLXCX_WQ_BUFFERS) {
+		list_t cq_buffers;
+
+		/*
+		 * Take the buffers away from the CQ. If the CQ is being
+		 * processed and the WQ has been stopped, a completion
+		 * which does not match to a buffer will be ignored.
+		 */
+		list_create(&cq_buffers, sizeof (mlxcx_buffer_t),
+		    offsetof(mlxcx_buffer_t, mlb_cq_entry));
+
+		list_move_tail(&cq_buffers, &cq->mlcq_buffers);
+
+		mutex_enter(&cq->mlcq_bufbmtx);
+		list_move_tail(&cq_buffers, &cq->mlcq_buffers_b);
+		mutex_exit(&cq->mlcq_bufbmtx);
+
+		cq->mlcq_bufcnt = 0;
+
 		mutex_exit(&wq->mlwq_mtx);
 		mutex_exit(&cq->mlcq_mtx);
 
 		/* Return any outstanding buffers to the free pool. */
-		while ((buf = list_remove_head(&cq->mlcq_buffers)) != NULL) {
+		while ((buf = list_remove_head(&cq_buffers)) != NULL) {
 			mlxcx_buf_return_chain(mlxp, buf, B_FALSE);
 		}
-		mutex_enter(&cq->mlcq_bufbmtx);
-		while ((buf = list_remove_head(&cq->mlcq_buffers_b)) != NULL) {
-			mlxcx_buf_return_chain(mlxp, buf, B_FALSE);
-		}
-		mutex_exit(&cq->mlcq_bufbmtx);
-		cq->mlcq_bufcnt = 0;
+		list_destroy(&cq_buffers);
 
 		s = wq->mlwq_bufs;
 		mutex_enter(&s->mlbs_mtx);
@@ -918,23 +923,22 @@ static int
 mlxcx_mac_ring_intr_enable(mac_intr_handle_t intrh)
 {
 	mlxcx_completion_queue_t *cq = (mlxcx_completion_queue_t *)intrh;
-	mlxcx_event_queue_t *eq = cq->mlcq_eq;
 	mlxcx_t *mlxp = cq->mlcq_mlx;
 
 	/*
-	 * We are going to call mlxcx_arm_cq() here, so we take the EQ lock
+	 * We are going to call mlxcx_arm_cq() here, so we take the arm lock
 	 * as well as the CQ one to make sure we don't race against
 	 * mlxcx_intr_n().
 	 */
-	mutex_enter(&eq->mleq_mtx);
+	mutex_enter(&cq->mlcq_arm_mtx);
 	mutex_enter(&cq->mlcq_mtx);
 	if (cq->mlcq_state & MLXCX_CQ_POLLING) {
-		cq->mlcq_state &= ~MLXCX_CQ_POLLING;
+		atomic_and_uint(&cq->mlcq_state, ~MLXCX_CQ_POLLING);
 		if (!(cq->mlcq_state & MLXCX_CQ_ARMED))
 			mlxcx_arm_cq(mlxp, cq);
 	}
 	mutex_exit(&cq->mlcq_mtx);
-	mutex_exit(&eq->mleq_mtx);
+	mutex_exit(&cq->mlcq_arm_mtx);
 
 	return (0);
 }
@@ -1035,10 +1039,8 @@ mlxcx_mac_fill_rx_group(void *arg, mac_ring_type_t rtype, const int index,
 	infop->mgi_stop = NULL;
 	infop->mgi_addmac = mlxcx_group_add_mac;
 	infop->mgi_remmac = mlxcx_group_remove_mac;
-#if defined(MAC_VLAN_UNTAGGED)
 	infop->mgi_addvlan = mlxcx_group_add_vlan;
 	infop->mgi_remvlan = mlxcx_group_remove_vlan;
-#endif /* MAC_VLAN_UNTAGGED */
 
 	infop->mgi_count = g->mlg_nwqs;
 }
@@ -1491,6 +1493,8 @@ mlxcx_register_mac(mlxcx_t *mlxp)
 	VERIFY3U(mlxp->mlx_nports, ==, 1);
 	port = &mlxp->mlx_ports[0];
 
+	mutex_enter(&port->mlp_mtx);
+
 	mac->m_type_ident = MAC_PLUGIN_IDENT_ETHER;
 	mac->m_driver = mlxp;
 	mac->m_dip = mlxp->mlx_dip;
@@ -1507,6 +1511,8 @@ mlxcx_register_mac(mlxcx_t *mlxp)
 		mlxcx_warn(mlxp, "mac_register() returned %d", ret);
 	}
 	mac_free(mac);
+
+	mutex_exit(&port->mlp_mtx);
 
 	mlxcx_update_link_state(mlxp, port);
 
