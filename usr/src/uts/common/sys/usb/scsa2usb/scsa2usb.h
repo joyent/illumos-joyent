@@ -124,6 +124,9 @@ extern "C" {
 #define	MS_WD_VID	0x1058	/* Vendor ID of Western Digital */
 #define	MS_WD_PID   0x1001  /* PID for Western Digital USB External HDD */
 
+#define	MS_QNAP_VID		0x1c04 /* Vendor ID of QNAP */
+#define	MS_QNAP_TR_004_PID	0x0013 /* PID for QNAP TR-004 */
+
 /*
  * The AMI virtual floppy device is not a real USB storage device, but
  * emulated by the SP firmware shipped together with important Sun x86

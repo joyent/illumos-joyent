@@ -384,6 +384,10 @@ static struct blacklist {
 
 	/* Western Digital External HDD */
 	{MS_WD_VID, MS_WD_PID, 0,
+	    SCSA2USB_ATTRS_INQUIRY_EVPD},
+
+	/* QNAP TR-004 */
+	{MS_QNAP_VID, MS_QNAP_TR_004_PID, 0,
 	    SCSA2USB_ATTRS_INQUIRY_EVPD}
 };
 
@@ -1772,6 +1776,15 @@ scsa2usb_validate_attrs(scsa2usb_state_t *scsa2usbp)
 			scsa2usbp->scsa2usb_cmd_protocol &= ~mask;
 		}
 		scsa2usbp->scsa2usb_cmd_protocol |= SCSA2USB_UFI_CMDSET;
+	}
+	/*
+	 * QNAP TR-004 reports the enclosure SN for all disks.
+	 * This causes zfs to assign the same devid for all disks, confusing
+	 * libdiskmgt. A Let's try clearing it.
+	 */
+	if ((desc->idVendor == MS_QNAP_VID) &&
+	    (desc->idProduct == MS_QNAP_TR_004_PID)) {
+		scsa2usbp->scsa2usb_dev_data->dev_serial = 0x0;
 	}
 
 	if (scsa2usbp->scsa2usb_attrs != SCSA2USB_ALL_ATTRS) {
