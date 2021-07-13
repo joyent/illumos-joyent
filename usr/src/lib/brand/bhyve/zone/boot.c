@@ -53,6 +53,14 @@ typedef enum {
 	PCI_SLOT_LPC = 31,		/* Windows requires lpc in slot 31 */
 } pci_slot_t;
 
+/*
+ * The min and max slot values on bus 0 for a NIC when specifying an explicit
+ * location. We reserve (and use) PCI_SLOT_NICS for NICs that don't have an
+ * explicit location.
+ */
+#define	PCI_SLOT_NICS_MIN (PCI_SLOT_NICS + 1)
+#define	PCI_SLOT_NICS_MAX (PCI_SLOT_FBUF - 1)
+
 static boolean_t debug;
 static const char *zonename;
 static const char *zonepath;
@@ -422,7 +430,7 @@ add_nets(int *argc, char **argv)
 	char *nets;
 	char *net;
 	char *lasts;
-	int nextpcifn = 1;		/* 0 reserved for primary */
+	uint_t nextpcifn = 1;		/* 0 reserved for primary */
 	char slotconf[MAXNAMELEN];
 	char *primary = NULL;
 
@@ -433,7 +441,10 @@ add_nets(int *argc, char **argv)
 
 	for (net = strtok_r(nets, " ", &lasts); net != NULL;
 	    net = strtok_r(NULL, " ", &lasts)) {
-		int pcifn;
+		char *slotstr;
+		uint_t pcibus = 0;
+		uint_t pcislot = PCI_SLOT_NICS;
+		uint_t pcifn;
 
 		/* zoneadmd is not careful about a trailing delimiter. */
 		if (net[0] == '\0') {
@@ -450,14 +461,31 @@ add_nets(int *argc, char **argv)
 			}
 			primary = net;
 			pcifn = 0;
+		} else if ((slotstr = get_zcfg_var("net", net,
+		    "pci_slot")) != NULL) {
+			if (parse_pcislot(slotstr, &pcibus, &pcislot,
+			    &pcifn) != 0) {
+				/*
+				 * parse_pcislot() already emits an error
+				 * on failure, so we don't need to
+				 */
+				return (-1);
+			}
+			if (pcibus == 0 && (pcislot < PCI_SLOT_NICS_MIN ||
+			    pcislot > PCI_SLOT_NICS_MAX)) {
+				(void) printf("Error: pci slot for nic %s "
+				    "(%u:%u:%u) is out of range\n",
+				    net, pcibus, pcislot, pcifn);
+				return (-1);
+			}
 		} else {
 			pcifn = nextpcifn;
 			nextpcifn++;
 		}
 
 		if (snprintf(slotconf, sizeof (slotconf),
-		    "%d:%d,virtio-net-viona,%s", PCI_SLOT_NICS, pcifn, net) >=
-		    sizeof (slotconf)) {
+		    "%u:%u:%u,virtio-net-viona,%s",
+		    pcibus, pcislot, pcifn, net) >= sizeof (slotconf)) {
 			(void) printf("Error: net '%s' too long\n", net);
 			return (-1);
 		}
