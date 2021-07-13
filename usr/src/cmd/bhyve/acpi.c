@@ -272,7 +272,19 @@ basl_fwrite_madt(FILE *fp)
 		EFPRINTF(fp, "[0001]\t\tLocal Apic ID : %02x\n", i);
 		EFPRINTF(fp, "[0004]\t\tFlags (decoded below) : 00000001\n");
 		EFPRINTF(fp, "\t\t\tProcessor Enabled : 1\n");
+#ifdef __FreeBSD__
 		EFPRINTF(fp, "\t\t\tRuntime Online Capable : 0\n");
+#else
+		/*
+		 * Outputting this additional line, even though it is saying
+		 * that the bit is not set, causes the ACPI compiler (iasl)
+		 * to abort with:
+		 * Error  6302 - Flag value is too large ^  (Maximum 1 bit)
+		 *
+		 * Note this can be re-enabled when we update our acpi version.
+		 */
+		/*EFPRINTF(fp, "\t\t\tRuntime Online Capable : 0\n");*/
+#endif
 		EFPRINTF(fp, "\n");
 	}
 
