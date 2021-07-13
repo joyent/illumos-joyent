@@ -10,7 +10,7 @@
 #
 
 #
-# Copyright 2015 Joyent, Inc.
+# Copyright 2018 Joyent, Inc.
 #
 
 LIBRARY =	libvarpd.a
@@ -39,8 +39,7 @@ LINTFLAGS +=	-erroff=E_STRUCT_DERIVED_FROM_FLEX_MBR \
 LINTFLAGS64  +=	-erroff=E_STRUCT_DERIVED_FROM_FLEX_MBR \
 		-erroff=E_BAD_PTR_CAST_ALIGN
 
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=		$(CSTD_GNU99)
 
 SRCDIR =	../common
 
