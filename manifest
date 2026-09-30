@@ -2980,7 +2980,7 @@ f usr/bin/pax 0555 root bin
 s usr/bin/pcat=unpack
 h usr/bin/pcred=usr/lib/isaexec
 h usr/bin/penv=usr/lib/isaexec
-s usr/bin/perl=/opt/local/bin/perl
+h usr/bin/perl=usr/lib/altexec
 h usr/bin/pfbash=usr/bin/pfexec
 h usr/bin/pfcsh=usr/bin/pfexec
 f usr/bin/pfexec 0555 root bin
