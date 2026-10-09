@@ -1534,7 +1534,14 @@ lxpr_read_pid_auxv(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		for (i = 0, cnt = 0; i < __KERN_NAUXV_IMPL; i++) {
 			auxv_t temp;
 
-			if (lx_auxv_stol(&p->p_user.u_auxv[i],
+			if (p->p_user.u_auxv[i].a_type ==
+			    AT_SUN_BRAND_LX_PHDR &&
+			    pd->l_vdso_sysinfo != (uintptr_t)NULL) {
+				buf[cnt].a_type = AT_SYSINFO;
+				buf[cnt].a_un.a_val =
+				    (uint32_t)pd->l_vdso_sysinfo;
+				cnt++;
+			} else if (lx_auxv_stol(&p->p_user.u_auxv[i],
 			    &temp, edp) == 0) {
 				buf[cnt].a_type = (int)temp.a_type;
 				buf[cnt].a_un.a_val = (int)temp.a_un.a_val;
