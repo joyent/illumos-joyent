@@ -49,6 +49,7 @@ extern "C" {
 #define	LX_SEMOP	1
 #define	LX_SEMGET	2
 #define	LX_SEMCTL	3
+#define	LX_SEMTIMEDOP	4
 #define	LX_MSGSND	11
 #define	LX_MSGRCV	12
 #define	LX_MSGGET	13

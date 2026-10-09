@@ -149,7 +149,8 @@ extern long lx_xattr4(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 
 extern long lx_keyctl(void);
 
-extern long lx_ipc(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+extern long lx_ipc(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t,
+    uintptr_t);
 extern long lx_msgget(key_t, int);
 extern long lx_msgsnd(int, void *, size_t, int);
 extern long lx_msgrcv(int, void *, size_t, long, int);

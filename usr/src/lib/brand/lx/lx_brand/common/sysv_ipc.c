@@ -910,13 +910,13 @@ lx_shmctl(int shmid, int cmd, void *buf)
  */
 long
 lx_ipc(uintptr_t cmd, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3,
-    uintptr_t arg4)
+    uintptr_t arg4, uintptr_t arg5)
 {
 	int r;
 	void *bufptr = (void *)arg4;
 
-	lx_debug("lx_ipc(%d, %d, %d, %d, 0x%p, %d)\n",
-	    cmd, arg1, arg2, arg3, bufptr, arg4);
+	lx_debug("lx_ipc(%d, %d, %d, %d, 0x%p, 0x%p)\n",
+	    cmd, arg1, arg2, arg3, bufptr, (void *)arg5);
 
 	switch (cmd) {
 	case LX_MSGGET:
@@ -956,6 +956,10 @@ lx_ipc(uintptr_t cmd, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3,
 		 * pass bufptr straight through.
 		 */
 		r = lx_semop((int)arg1, bufptr, (size_t)arg2);
+		break;
+	case LX_SEMTIMEDOP:
+		r = lx_semtimedop((int)arg1, bufptr, (size_t)arg2,
+		    (struct timespec *)arg5);
 		break;
 	case LX_SEMGET:
 		r = lx_semget((int)arg1, (size_t)arg2, (int)arg3);
