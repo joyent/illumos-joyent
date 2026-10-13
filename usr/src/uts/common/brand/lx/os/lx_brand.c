@@ -2092,10 +2092,14 @@ lx_map_vdso(struct uarg *args, struct cred *cred, uintptr_t *sysinfo)
 	if (args->to_model != DATAMODEL_NATIVE) {
 		Elf32_Ehdr ehdr;
 		ssize_t resid;
+		uint8_t vsyscall[3];
 
 		/*
 		 * The i386 vDSO ELF entry is __vsyscall.  Read it from the
-		 * vDSO file rather than assuming a fixed offset.
+		 * vDSO file rather than assuming a fixed offset.  execmap maps
+		 * this file from offset zero, so e_entry is also the file offset
+		 * of the trampoline.  Only advertise the entry if it contains
+		 * the int 0x80; ret sequence implemented by this vDSO.
 		 */
 		if (attr.va_size < (off_t)sizeof (ehdr) ||
 		    vn_rdwr(UIO_READ, vp, (caddr_t)&ehdr, sizeof (ehdr), 0,
@@ -2109,7 +2113,13 @@ lx_map_vdso(struct uarg *args, struct cred *cred, uintptr_t *sysinfo)
 		    ehdr.e_type != ET_DYN ||
 		    ehdr.e_machine != EM_386 ||
 		    ehdr.e_entry == 0 ||
-		    ehdr.e_entry >= attr.va_size) {
+		    ehdr.e_entry > attr.va_size - sizeof (vsyscall) ||
+		    vn_rdwr(UIO_READ, vp, (caddr_t)vsyscall,
+		    sizeof (vsyscall), ehdr.e_entry, UIO_SYSSPACE, 0, 0,
+		    cred, &resid) != 0 ||
+		    resid != 0 ||
+		    vsyscall[0] != 0xcd || vsyscall[1] != 0x80 ||
+		    vsyscall[2] != 0xc3) {
 			VN_RELE(vp);
 			return ((uintptr_t)NULL);
 		}

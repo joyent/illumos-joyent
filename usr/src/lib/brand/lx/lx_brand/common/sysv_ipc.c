@@ -22,6 +22,7 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2017 Joyent, Inc.  All rights reserved.
+ * Copyright 2026 Edgecast Cloud LLC.
  */
 
 #include <errno.h>
@@ -917,6 +918,15 @@ lx_ipc(uintptr_t cmd, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3,
 
 	lx_debug("lx_ipc(%d, %d, %d, %d, 0x%p, 0x%p)\n",
 	    cmd, arg1, arg2, arg3, bufptr, (void *)arg5);
+
+	/*
+	 * Linux ipc(2) keeps the operation in the low 16 bits and uses the
+	 * upper bits as a version.  SEMTIMEDOP has the same arguments for
+	 * every version.  Do not discard the version for other operations:
+	 * MSGRCV and SHMAT have version-dependent argument layouts.
+	 */
+	if ((cmd & 0xffff) == LX_SEMTIMEDOP)
+		cmd = LX_SEMTIMEDOP;
 
 	switch (cmd) {
 	case LX_MSGGET:
