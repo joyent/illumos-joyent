@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2026 Carlos Neira.
+ * Copyright 2026 Edgecast Cloud LLC.
  *
  * i386 LX auxv/vDSO regression probe.  Assemble with:
  *   as --32 -o auxv_sysinfo.o auxv_sysinfo.s
@@ -61,6 +61,10 @@ _start:
 	call	*%edi
 	testl	%eax, %eax
 	jle	13f
+	movl	%ebx, %ebp		/* stack AT_SYSINFO_EHDR */
+	.ifdef LX_TEST_BAD_EHDR
+	xorl	$1, %ebp		/* negative control for /proc check */
+	.endif
 	subl	$512, %esp
 	movl	$5, %eax		/* Linux i386 open */
 	movl	$auxv_path, %ebx
@@ -77,19 +81,32 @@ _start:
 	jle	14f
 	leal	(%esp,%eax), %esi	/* end of auxv data */
 	movl	%esp, %edx
+	xorl	%ecx, %ecx		/* bits: SYSINFO=1, EHDR=2 */
 6:
-	cmpl	%esi, %edx
-	jae	14f
+	leal	8(%edx), %eax		/* need a complete auxv pair */
+	cmpl	%esi, %eax
+	ja	14f
 	movl	(%edx), %eax
 	testl	%eax, %eax
 	je	14f
 	cmpl	$32, %eax
 	je	7f
-	addl	$8, %edx
-	jmp	6b
+	cmpl	$33, %eax
+	je	8f
+	jmp	9f
 7:
 	cmpl	%edi, 4(%edx)
 	jne	14f
+	orl	$1, %ecx
+	jmp	9f
+8:
+	cmpl	%ebp, 4(%edx)
+	jne	14f
+	orl	$2, %ecx
+9:
+	addl	$8, %edx
+	cmpl	$3, %ecx
+	jne	6b
 	xorl	%ebx, %ebx
 	jmp	99f
 10:

@@ -2328,7 +2328,10 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 
 	/*
 	 * After execing the brand library (which should have implicitly mapped
-	 * in the comm page), map the VDSO into the approprate place in the AS.
+	 * in the comm page), map the VDSO into the appropriate place in the AS.
+	 * Keep the i386 vDSO optional: if mapping or validation fails,
+	 * AT_SYSINFO_EHDR is zero and AT_SYSINFO is omitted, allowing libc
+	 * to use its int 0x80 fallback.
 	 */
 	lxpd->l_vdso = lx_map_vdso(args, cred,
 	    &lxpd->l_vdso_sysinfo);

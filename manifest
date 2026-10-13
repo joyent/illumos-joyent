@@ -5840,6 +5840,7 @@ s usr/lib/brand/lx/64=amd64
 d usr/lib/brand/lx/amd64 0755 root bin
 f usr/lib/brand/lx/amd64/lx_librtld_db.so.1 0755 root root
 f usr/lib/brand/lx/amd64/lx_vdso.so.1 0755 root root
+f usr/lib/brand/lx/auxv_sysinfo.s 0444 root root
 f usr/lib/brand/lx/config.xml 0444 root root
 f usr/lib/brand/lx/etc_default_nfs 0444 root root
 d usr/lib/brand/lx/ld 0755 root root
@@ -5867,6 +5868,7 @@ f usr/lib/brand/lx/platform.xml 0444 root root
 f usr/lib/brand/lx/poststate 0755 root root
 f usr/lib/brand/lx/prestate 0755 root root
 f usr/lib/brand/lx/pts_ignorelist 0444 root root
+f usr/lib/brand/lx/run_auxv_sysinfo.sh 0755 root root
 f usr/lib/brand/lx/statechange 0755 root root
 d usr/lib/brand/shared 0755 root sys
 f usr/lib/brand/shared/common.ksh 0444 root bin
