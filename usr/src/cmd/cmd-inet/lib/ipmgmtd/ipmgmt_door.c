@@ -24,7 +24,7 @@
  * Copyright 2014, Joyent, Inc. All rights reserved.
  * Copyright (c) 2016-2017, Chris Fraire <cfraire@me.com>.
  * Copyright 2021, Tintri by DDN. All rights reserved.
- * Copyright 2022, Oxide Computer Company.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -87,7 +87,7 @@ static ipmgmt_door_info_t i_ipmgmt_door_info_tbl[] = {
 	{ IPMGMT_CMD_ADDROBJ_ADD,	B_TRUE,  ipmgmt_aobjop_handler },
 	{ IPMGMT_CMD_AOBJNAME2ADDROBJ,	B_FALSE, ipmgmt_aobjop_handler },
 	{ IPMGMT_CMD_LIF2ADDROBJ,	B_FALSE, ipmgmt_aobjop_handler },
-	{ IPMGMT_CMD_IPMP_UPDATE,	B_FALSE, ipmgmt_ipmp_update_handler},
+	{ IPMGMT_CMD_IPMP_UPDATE,	B_TRUE,  ipmgmt_ipmp_update_handler },
 	{ 0, 0, NULL },
 };
 
@@ -135,7 +135,6 @@ ipmgmt_handler(void *cookie, char *argp, size_t argsz, door_desc_t *dp,
 			goto fail;
 		}
 		uid = ucred_getruid(cred);
-		ucred_free(cred);
 		if ((int)uid < 0) {
 			err = errno;
 			ipmgmt_log(LOG_ERR, "Could not get user id.");
@@ -161,6 +160,7 @@ ipmgmt_handler(void *cookie, char *argp, size_t argsz, door_desc_t *dp,
 				goto fail;
 			}
 		}
+		ucred_free(cred);
 	}
 
 	/* individual handlers take care of calling door_return */
