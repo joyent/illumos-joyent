@@ -935,8 +935,16 @@ lx_mremap(uintptr_t old_addr, size_t old_size, size_t new_size, int flags,
 	/*
 	 * Search our address space to find the specified mapping.
 	 */
-	if ((res = lx_get_mapping(old_addr, old_size, &map, &vp, &off)) > 0)
+	if ((res = lx_get_mapping(old_addr, old_size, &map, &vp, &off)) > 0) {
+		/*
+		 * A subset cannot grow in place.  Linux returns ENOMEM.
+		 * Musl uses this to probe the stack.
+		 */
+		if (res == EINVAL && flags == 0 && old_size != 0 &&
+		    (old_size & PAGEOFFSET) == 0 && new_size > old_size)
+			res = ENOMEM;
 		return (set_errno(res));
+	}
 
 	/*
 	 * We found the mapping.
