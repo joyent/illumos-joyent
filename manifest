@@ -12689,6 +12689,7 @@ f usr/share/man/man2/chmod.2 0444 root bin
 f usr/share/man/man2/chown.2 0444 root bin
 f usr/share/man/man2/chroot.2 0444 root bin
 f usr/share/man/man2/close.2 0444 root bin
+f usr/share/man/man2/close_range.2 0444 root bin
 f usr/share/man/man2/creat.2 0444 root bin
 f usr/share/man/man2/dup.2 0444 root bin
 f usr/share/man/man2/exec.2 0444 root bin
