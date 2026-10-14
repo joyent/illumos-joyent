@@ -11,6 +11,7 @@
 
 #
 # Copyright 2019 Joyent, Inc.
+# Copyright 2026 Edgecast Cloud LLC.
 #
 
 #
@@ -38,6 +39,11 @@ dir  path=opt/smartos-test
 file path=opt/smartos-test/README mode=0444
 dir  path=opt/smartos-test/bin
 file path=opt/smartos-test/bin/smartos-test mode=0555
+# LX auxv regression probe for the tests archive.
+dir  path=usr/lib/brand owner=root group=bin mode=0755
+dir  path=usr/lib/brand/lx owner=root group=bin mode=0755
+file path=usr/lib/brand/lx/auxv_sysinfo.s owner=root group=root mode=0444
+file path=usr/lib/brand/lx/run_auxv_sysinfo.sh owner=root group=root mode=0755
 # Needed by the /opt/utils-test suite
 file path=usr/bin/ctfconvert mode=0555
 file path=usr/bin/ctfmerge mode=0555
