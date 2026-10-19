@@ -11,11 +11,9 @@
 
 #
 # Copyright 2016 Joyent, Inc.
-# Copyright 2026 Edgecast Cloud LLC.
 #
 
-TXTS = ltp_skiplist ltp_tests pts_ignorelist auxv_sysinfo.s
-PROGS = run_auxv_sysinfo.sh
+TXTS = ltp_skiplist ltp_tests pts_ignorelist
 
 all:
 
@@ -26,7 +24,7 @@ all :=		TARGET= all
 install :=	TARGET= install
 clobber :=	TARGET= clobber
 
-install: $(ROOTTXTS) $(ROOTPROGS)
+install: $(ROOTTXTS)
 
 _msg:
 
@@ -35,4 +33,4 @@ lint:
 clean:
 
 clobber:
-	-$(RM) $(ROOTTXTS) $(ROOTPROGS)
+	-$(RM) $(ROOTTXTS)
