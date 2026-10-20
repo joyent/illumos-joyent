@@ -2241,12 +2241,13 @@ natinfo_t *ni;
 				port += ntohs(np->in_pmin);
 			}
 			port = htons(port);
-			np->in_pnext++;
 
-			if (np->in_pnext > ntohs(np->in_pmax)) {
+			if (np->in_pnext >= ntohs(np->in_pmax)) {
 				np->in_pnext = ntohs(np->in_pmin);
 				if (np->in_outmsk != 0xffffffff)
 					np->in_nip++;
+			} else {
+				np->in_pnext++;
 			}
 		}
 

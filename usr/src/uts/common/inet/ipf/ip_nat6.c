@@ -444,13 +444,14 @@ natinfo_t *ni;
 				port += ntohs(np->in_pmin);
 			}
 			port = htons(port);
-			np->in_pnext++;
 
-			if (np->in_pnext > ntohs(np->in_pmax)) {
+			if (np->in_pnext >= ntohs(np->in_pmax)) {
 				np->in_pnext = ntohs(np->in_pmin);
 				if (!IP6_ISONES(&np->in_out[1])) {
 					IP6_INC(&np->in_next6);
 				}
+			} else {
+				np->in_pnext++;
 			}
 		}
 
