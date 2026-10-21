@@ -457,12 +457,35 @@ vq_devcfg_changed(struct virtio_softc *vs)
 	vi_interrupt(vs, VIRTIO_PCI_ISR_CONFIG, vs->vs_msix_cfg_idx);
 }
 
+#ifndef __FreeBSD__
+/*
+ * Fault injection. When non-zero, vq_kick_enable() sleeps for this many
+ * microseconds before re-enabling guest notifications. This widens the window
+ * in which the guest can make descriptors available without notifying the
+ * device, so a device model which fails to check the ring again after
+ * re-enabling notifications reliably stalls. It is intended to be set at
+ * runtime with mdb, for example "vq_kick_delay_us/W 0t1000".
+ */
+extern volatile uint32_t vq_kick_delay_us;
+void	vq_kick_delay(void);
+#endif
+
 static inline void
 vq_kick_enable(struct vqueue_info *vq)
 {
-	vq->vq_used->flags &= ~VRING_USED_F_NO_NOTIFY;
+#ifndef __FreeBSD__
+	if (vq_kick_delay_us != 0)
+		vq_kick_delay();
+#endif
+
+	if ((vq->vq_vs->vs_negotiated_caps & VIRTIO_RING_F_EVENT_IDX) != 0) {
+		VQ_AVAIL_EVENT_IDX(vq) = vq->vq_last_avail;
+	} else {
+		vq->vq_used->flags &= ~VRING_USED_F_NO_NOTIFY;
+	}
+
 	/*
-	 * Full memory barrier to make sure the store to vq_used->flags
+	 * Full memory barrier to make sure the store to avail_event/flags
 	 * happens before the load from vq_avail->idx, which results from a
 	 * subsequent call to vq_has_descs().
 	 */
@@ -472,7 +495,11 @@ vq_kick_enable(struct vqueue_info *vq)
 static inline void
 vq_kick_disable(struct vqueue_info *vq)
 {
-	vq->vq_used->flags |= VRING_USED_F_NO_NOTIFY;
+	if ((vq->vq_vs->vs_negotiated_caps & VIRTIO_RING_F_EVENT_IDX) != 0) {
+		VQ_AVAIL_EVENT_IDX(vq) = vq->vq_last_avail - 1;
+	} else {
+		vq->vq_used->flags |= VRING_USED_F_NO_NOTIFY;
+	}
 }
 
 #define	VIRTIO_LEGACY_BAR	0	/* BAR for virtio legacy cfg regs */
