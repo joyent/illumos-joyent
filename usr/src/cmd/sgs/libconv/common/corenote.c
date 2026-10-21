@@ -27,7 +27,7 @@
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
  * Copyright (c) 2018 Joyent, Inc.
  * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
- * Copyright 2024 Oxide Computer Company
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -217,7 +217,7 @@ conv_cnote_syscall(Word sysnum, Conv_fmt_flags_t fmt_flags,
 		MSG_SYS_STATFS,			MSG_SYS_SYNC,
 		MSG_SYS_KILL,			MSG_SYS_FSTATFS,
 		MSG_SYS_PGRPSYS,		MSG_SYS_UUCOPYSTR,
-		MSG_SYS_41,			MSG_SYS_PIPE,
+		MSG_SYS_CLOSE_RANGE,		MSG_SYS_PIPE,
 		MSG_SYS_TIMES,			MSG_SYS_PROFIL,
 		MSG_SYS_FACCESSAT,		MSG_SYS_SETGID,
 		MSG_SYS_GETGID,			MSG_SYS_48,
@@ -268,7 +268,7 @@ conv_cnote_syscall(Word sysnum, Conv_fmt_flags_t fmt_flags,
 		MSG_SYS_SYSCONFIG,		MSG_SYS_ADJTIME,
 		MSG_SYS_SYSTEMINFO,		MSG_SYS_SHAREFS,
 		MSG_SYS_SETEUID,		MSG_SYS_FORKSYS,
-		MSG_SYS_143,			MSG_SYS_SIGTIMEDWAIT,
+		MSG_SYS_SPAWN,			MSG_SYS_SIGTIMEDWAIT,
 		MSG_SYS_LWP_INFO,		MSG_SYS_YIELD,
 		MSG_SYS_147,			MSG_SYS_LWP_SEMA_POST,
 		MSG_SYS_LWP_SEMA_TRYWAIT,	MSG_SYS_LWP_DETACH,
@@ -348,7 +348,6 @@ conv_cnote_syscall(Word sysnum, Conv_fmt_flags_t fmt_flags,
 	case 11:
 	case 22:
 	case 30:
-	case 41:
 	case 48:
 	case 76:
 	case 87:
@@ -358,7 +357,6 @@ conv_cnote_syscall(Word sysnum, Conv_fmt_flags_t fmt_flags,
 	case 124:
 	case 125:
 	case 126:
-	case 143:
 	case 147:
 	case 154:
 	case 169:
@@ -1888,7 +1886,7 @@ conv_cnote_fltset(uint32_t *maskarr, int n_mask,
 	MSG_SYS_FSTATFS_ALT_SIZE		/* 38 */ + \
 	MSG_SYS_PGRPSYS_ALT_SIZE		/* 39 */ + \
 	MSG_SYS_UUCOPYSTR_ALT_SIZE		/* 40 */ + \
-	MSG_SYS_41_SIZE				/* 41 (unused) */ + \
+	MSG_SYS_CLOSE_RANGE_ALT_SIZE		/* 41 */ + \
 	MSG_SYS_PIPE_ALT_SIZE			/* 42 */ + \
 	MSG_SYS_TIMES_ALT_SIZE			/* 43 */ + \
 	MSG_SYS_PROFIL_ALT_SIZE			/* 44 */ + \
@@ -1996,7 +1994,7 @@ conv_cnote_fltset(uint32_t *maskarr, int n_mask,
 	MSG_SYS_SHAREFS_ALT_SIZE		/* 140 */ + \
 	MSG_SYS_SETEUID_ALT_SIZE		/* 141 */ + \
 	MSG_SYS_FORKSYS_ALT_SIZE		/* 142 */ + \
-	MSG_SYS_143_SIZE			/* 143 (unused) */ + \
+	MSG_SYS_SPAWN_ALT_SIZE			/* 143 */ + \
 	MSG_SYS_SIGTIMEDWAIT_ALT_SIZE		/* 144 */ + \
 	MSG_SYS_LWP_INFO_ALT_SIZE		/* 145 */ + \
 	MSG_SYS_YIELD_ALT_SIZE			/* 146 */ + \
@@ -2209,7 +2207,7 @@ conv_cnote_sysset(uint32_t *maskarr, int n_mask,
 		{ 0x00000020,	MSG_SYS_FSTATFS_ALT },
 		{ 0x00000040,	MSG_SYS_PGRPSYS_ALT },
 		{ 0x00000080,	MSG_SYS_UUCOPYSTR_ALT },
-		{ 0x00000100,	MSG_SYS_41 },
+		{ 0x00000100,	MSG_SYS_CLOSE_RANGE_ALT },
 		{ 0x00000200,	MSG_SYS_PIPE_ALT },
 		{ 0x00000400,	MSG_SYS_TIMES_ALT },
 		{ 0x00000800,	MSG_SYS_PROFIL_ALT },
@@ -2226,7 +2224,7 @@ conv_cnote_sysset(uint32_t *maskarr, int n_mask,
 		{ 0x00400000,	MSG_SYS_UADMIN_ALT },
 		{ 0x00800000,	MSG_SYS_FCHOWNAT_ALT },
 		{ 0x01000000,	MSG_SYS_UTSSYS_ALT },
-		{ 0x0200000,	MSG_SYS_FDSYNC_ALT },
+		{ 0x02000000,	MSG_SYS_FDSYNC_ALT },
 		{ 0x04000000,	MSG_SYS_EXECVE_ALT },
 		{ 0x08000000,	MSG_SYS_UMASK_ALT },
 		{ 0x10000000,	MSG_SYS_CHROOT_ALT },
@@ -2320,7 +2318,7 @@ conv_cnote_sysset(uint32_t *maskarr, int n_mask,
 		{ 0x00000800,	MSG_SYS_SHAREFS_ALT },
 		{ 0x00001000,	MSG_SYS_SETEUID_ALT },
 		{ 0x00002000,	MSG_SYS_FORKSYS_ALT },
-		{ 0x00004000,	MSG_SYS_143 },
+		{ 0x00004000,	MSG_SYS_SPAWN_ALT },
 		{ 0x00008000,	MSG_SYS_SIGTIMEDWAIT_ALT },
 		{ 0x00010000,	MSG_SYS_LWP_INFO_ALT },
 		{ 0x00020000,	MSG_SYS_YIELD_ALT },

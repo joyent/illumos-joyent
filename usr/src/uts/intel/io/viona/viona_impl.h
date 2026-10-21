@@ -50,6 +50,7 @@
 #include <sys/sysmacros.h>
 #include <sys/uio.h>
 
+#include <sys/ethernet.h>
 #include <sys/mac_client.h>
 #include <sys/mac_provider.h>
 #include <sys/mac_client_priv.h>
@@ -181,6 +182,20 @@ typedef struct viona_vring {
 	uint16_t	vr_mask;	/* cached from vr_size */
 	uint16_t	vr_cur_aidx;	/* trails behind 'avail_idx' */
 	uint16_t	vr_cur_uidx;	/* drives 'used_idx' */
+	/*
+	 * The value of uidx the last time the device _checked_ if the
+	 * driver requires an interrupt. When F_EVENT_IDX is
+	 * negotiated we use this as the value of "old_idx" per the
+	 * notification logic described in the VIRTIO spec. This field
+	 * provides an easy place to hang the start of the range of
+	 * newly pushed descriptors as opposed to threading the
+	 * "old_idx" value through various functions. The decision to
+	 * send an interrupt is always based on the most recently
+	 * published range of descriptors and the current value of
+	 * "used_event". After each interrupt check this value should
+	 * be equal to vr_cur_uidx.
+	 */
+	uint16_t	vr_last_chk_uidx;
 
 	/* Reference to guest pages holding virtqueue */
 	void		**vr_map_pages;
@@ -260,7 +275,31 @@ struct viona_link {
 	mac_client_handle_t	l_mch;
 	mac_promisc_handle_t	l_mph;
 	mac_unicast_handle_t	l_muh;
+	/*
+	 * Classified unicast state (see viona_ioc_set_mac_addr()).
+	 * l_ucast_primary is set when l_muh wraps the link's primary address
+	 * rather than an explicitly installed one.  l_ucast_addr holds the
+	 * explicit address and is meaningful only when l_ucast_primary is
+	 * clear.
+	 */
+	bool			l_ucast_primary;
+	uint8_t			l_ucast_addr[ETHERADDRL];
+	/*
+	 * Requested reception mode and the mode active in the receive
+	 * callbacks.  They differ while callbacks are torn down or when their
+	 * restoration fails.  l_promisc retains the intent for a retry while
+	 * l_rx_mode reflects the fallback with only classified reception
+	 * (see viona_rx_set()).
+	 */
 	viona_promisc_t		l_promisc;
+	viona_promisc_t		l_rx_mode;
+	/* Classified receive callback installed (see viona_rx_set()) */
+	bool			l_rx_classified;
+
+	/* Guest-requested multicast filters installed on the MAC client */
+	uint32_t		l_nmcast_filters;
+	uint8_t			l_mcast_filters[VIONA_MAX_MCAST_FILTERS]
+				    [ETHERADDRL];
 
 	pollhead_t		l_pollhead;
 
@@ -494,10 +533,11 @@ int vq_popchain(viona_vring_t *, struct iovec *, uint_t, uint16_t *,
 void vq_pushchain(viona_vring_t *, uint32_t, uint16_t);
 void vq_pushchain_many(viona_vring_t *, uint_t, used_elem_t *);
 
-void viona_intr_ring(viona_vring_t *ring, boolean_t);
-void viona_ring_set_no_notify(viona_vring_t *, boolean_t);
+bool viona_ring_need_intr(viona_vring_t *);
+void viona_ring_intr(viona_vring_t *);
 void viona_ring_disable_notify(viona_vring_t *);
 void viona_ring_enable_notify(viona_vring_t *);
+
 uint16_t viona_ring_num_avail(viona_vring_t *);
 
 void viona_ring_stat_accept(viona_vring_t *, size_t, size_t);

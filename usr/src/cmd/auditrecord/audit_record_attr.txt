@@ -5,6 +5,7 @@
 ## Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
 ## Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
 ## Copyright 2019 Joyent, Inc.
+## Copyright 2026 Oxide Computer Company
 ##
 ## CDDL HEADER START
 ##
@@ -610,6 +611,12 @@ label=AUE_CLOCK_SETTIME
 label=AUE_CLOSE
   format=arg1:[path]:[attr]
     comment=1, file descriptor, "fd"
+
+label=AUE_CLOSERANGE
+  format=arg1:arg2:arg3
+    comment=1, lowest file descriptor in the range, "low fd":
+    comment=2, highest file descriptor in the range, "high fd":
+    comment=3, flags, "flags"
 
 label=AUE_CONFIGKSSL
   case=Adding KSSL entry.
@@ -1998,6 +2005,14 @@ syscall=putmsg
     comment=1, file descriptor, "fd":
     comment=4, priority, "pri"
 # see AUE_SOCKACCEPT
+
+label=AUE_SPAWN
+  format=[path]1:[attr]2:[exec_args]3:[exec_env]4
+    comment=omitted if the spawn arguments were invalid:
+    comment=omitted if the file attributes could not be read:
+    comment=output if argv policy is set:
+    comment=output if arge policy is set
+  note=On success the return token contains the child process ID.
 
 label=AUE_STAT
   format=path:[attr]
