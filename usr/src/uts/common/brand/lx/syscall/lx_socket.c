@@ -26,6 +26,7 @@
  * Copyright 2022 Joyent, Inc.
  * Copyright 2024 Carlos Neira <cneirabustos@gmail.com>
  * Copyright 2024 MNX Cloud, Inc.
+ * Copyright 2026 Edgecast Cloud LLC.
  */
 
 #include <sys/errno.h>
@@ -1489,8 +1490,14 @@ lx_socket_create(int domain, int type, int protocol, int options, file_t **fpp,
 	 * Linux programs do not tolerate errors appearing from asynchronous
 	 * events (such as ICMP messages arriving).  Setting SM_DEFERERR will
 	 * prevent checking/delivery of such errors.
+	 *
+	 * A peer reset or write shutdown sets SS_CANTSENDMORE, causing
+	 * sockfs's X/Open check to reject setsockopt() before handling
+	 * the option. Linux does not reject setsockopt() solely because of
+	 * these states. Set SM_NOSETOPTCHK on LX-created sockets to skip
+	 * that early check; normal option validation still applies.
 	 */
-	so->so_mode |= SM_DEFERERR;
+	so->so_mode |= SM_DEFERERR | SM_NOSETOPTCHK;
 
 	/* Now fill in the entries that falloc reserved */
 	if (options & SOCK_NONBLOCK) {
@@ -3378,6 +3385,53 @@ lx_setsockopt_ip(sonode_t *so, int optname, void *optval, socklen_t optlen)
 	return (error);
 }
 
+/*
+ * Linux rejects IPV6_V6ONLY once a socket has a local port.  The direct
+ * sockfs bind path delegates to TCP/UDP without setting SS_ISBOUND on
+ * the sonode, so inspect the port returned by getsockname().  An
+ * unbound TPI socket can report success without writing an address;
+ * zero the address first and use SS_ISBOUND if no address was returned.
+ * Reject a failed or malformed query.
+ *
+ * If getsockname() returns no address, read SS_ISBOUND under so_lock.
+ * Do not hold that lock across socket_getsockname(), which takes socket
+ * locks itself.  A concurrent bind can assign a port before
+ * socket_setsockopt() runs, allowing a late change; the two operations
+ * are not atomic.
+ */
+static boolean_t
+lx_v6only_setsockopt_einval(sonode_t *so)
+{
+	sin6_t addr;
+	socklen_t addrlen = sizeof (addr);
+	boolean_t isbound;
+	int error;
+
+	/* Linux stores the protocol in inet_num on raw sockets. */
+	if (so->so_type == SOCK_RAW && so->so_protocol != 0)
+		return (B_TRUE);
+
+	/* SCTP already enforces its own bind-time restriction. */
+	if (so->so_protocol == IPPROTO_SCTP)
+		return (B_FALSE);
+
+	bzero(&addr, sizeof (addr));
+	error = socket_getsockname(so, (struct sockaddr *)&addr, &addrlen,
+	    CRED());
+	if (error != 0 || addrlen < sizeof (addr))
+		return (B_TRUE);
+	if (addr.sin6_family == 0) {
+		mutex_enter(&so->so_lock);
+		isbound = (so->so_state & SS_ISBOUND) != 0;
+		mutex_exit(&so->so_lock);
+		return (isbound);
+	}
+	if (addr.sin6_family != AF_INET6)
+		return (B_TRUE);
+
+	return (addr.sin6_port != 0);
+}
+
 static int
 lx_setsockopt_ipv6(sonode_t *so, int optname, void *optval, socklen_t optlen)
 {
@@ -3410,6 +3464,11 @@ lx_setsockopt_ipv6(sonode_t *so, int optname, void *optval, socklen_t optlen)
 	if (!lx_sockopt_lookup(sockopts_tbl, &optname, &optlen)) {
 		return (ENOPROTOOPT);
 	}
+	/* UDP retains its local port after disconnect, unlike Linux. */
+	if (optname == IPV6_V6ONLY && so->so_family == AF_INET6 &&
+	    so->so_type != SOCK_DGRAM &&
+	    lx_v6only_setsockopt_einval(so))
+		return (EINVAL);
 	error = socket_setsockopt(so, IPPROTO_IPV6, optname, optval, optlen,
 	    CRED());
 	return (error);
