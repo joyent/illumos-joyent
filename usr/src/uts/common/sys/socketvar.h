@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 1996, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2015 Joyent, Inc.
+ * Copyright 2026 Edgecast Cloud LLC.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -391,6 +392,7 @@ struct sonode {
 #define	SM_ACCEPTOR_ID		0x100	/* so_acceptor_id is valid */
 
 #define	SM_KERNEL		0x200	/* kernel socket */
+#define	SM_NOSETOPTCHK		0x2000	/* Private: skip setsockopt check */
 
 /* The modes below are only for non-streams sockets */
 #define	SM_ACCEPTSUPP		0x400	/* can handle accept() */

@@ -27,6 +27,7 @@
  * Copyright (c) 2015, Joyent, Inc.  All rights reserved.
  * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
  * Copyright 2022 Garrett D'Amore
+ * Copyright 2026 Edgecast Cloud LLC.
  */
 
 #include <sys/types.h>
@@ -762,7 +763,8 @@ so_setsockopt(struct sonode *so, int level, int option_name,
 	    SOP_SETSOCKOPT(so, level, option_name, optval, optlen, cr));
 
 	/* X/Open requires this check */
-	if (so->so_state & SS_CANTSENDMORE && !xnet_skip_checks) {
+	if ((so->so_state & SS_CANTSENDMORE) && !xnet_skip_checks &&
+	    (so->so_mode & SM_NOSETOPTCHK) == 0) {
 		SO_UNBLOCK_FALLBACK(so);
 		if (xnet_check_print)
 			printf("sockfs: X/Open setsockopt check => EINVAL\n");

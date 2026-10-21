@@ -25,6 +25,7 @@
  * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2022 Garrett D'Amore
  * Copyright 2024 Oxide Computer Company
+ * Copyright 2026 Edgecast Cloud LLC.
  */
 
 #include <sys/types.h>
@@ -5371,7 +5372,8 @@ sotpi_setsockopt(struct sonode *so, int level, int option_name,
 	    pr_state(so->so_state, so->so_mode)));
 
 	/* X/Open requires this check */
-	if ((so->so_state & SS_CANTSENDMORE) && !xnet_skip_checks) {
+	if ((so->so_state & SS_CANTSENDMORE) && !xnet_skip_checks &&
+	    (so->so_mode & SM_NOSETOPTCHK) == 0) {
 		if (xnet_check_print)
 			printf("sockfs: X/Open setsockopt check => EINVAL\n");
 		return (EINVAL);
