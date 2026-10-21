@@ -442,8 +442,15 @@ alloc_req_rep_desc(struct mrsas_instance *instance)
 	con_log(CL_ANN1, (CE_NOTE, " reply q desc len = %x",
 	    (uint_t)sizeof (MPI2_REPLY_DESCRIPTORS_UNION)));
 
-	/* reply queue size should be multiple of 16 */
-	max_reply_q_sz = ((instance->max_fw_cmds + 1 + 15)/16)*16;
+	/*
+	 * The reply queue size should be a multiple of 16.  Make it twice the
+	 * number of commands: commands are returned to the free pool before
+	 * the firmware is told which reply descriptors have been consumed, so
+	 * a busy controller can have more replies outstanding than there are
+	 * commands.  A SAS3008 (Dell PERC H330) that finds no free reply
+	 * descriptor faults, and only a power cycle recovers it.
+	 */
+	max_reply_q_sz = 2 * (((instance->max_fw_cmds + 1 + 15) / 16) * 16);
 
 	reply_q_sz = 8 * max_reply_q_sz;
 
@@ -2604,6 +2611,8 @@ mr_sas_tbolt_process_outstanding_cmd(struct mrsas_instance *instance)
 
 	struct mrsas_header	*hdr;
 	struct scsi_pkt		*pkt;
+	uint_t			threshold_reply_count = 0;
+	uint_t			threshold = instance->max_fw_cmds / 4;
 
 	(void) ddi_dma_sync(instance->reply_desc_dma_obj.dma_handle,
 	    0, 0, DDI_DMA_SYNC_FORDEV);
@@ -2684,6 +2693,7 @@ mr_sas_tbolt_process_outstanding_cmd(struct mrsas_instance *instance)
 		}
 		/* set it back to all 1s. */
 		desc->Words = -1LL;
+		threshold_reply_count++;
 
 		instance->reply_read_index++;
 
@@ -2711,6 +2721,21 @@ mr_sas_tbolt_process_outstanding_cmd(struct mrsas_instance *instance)
 
 		if (replyType == MPI2_RPY_DESCRIPT_FLAGS_UNUSED)
 			break;
+
+		/*
+		 * More replies are pending.  Tell the firmware which reply
+		 * descriptors have been consumed every so often, rather than
+		 * only once the queue is drained, so that it always has free
+		 * descriptors to post to.
+		 */
+		if (threshold_reply_count >= threshold) {
+			(void) ddi_dma_sync(
+			    instance->reply_desc_dma_obj.dma_handle,
+			    0, 0, DDI_DMA_SYNC_FORDEV);
+			WR_MPI2_REPLY_POST_INDEX(instance->reply_read_index,
+			    instance);
+			threshold_reply_count = 0;
+		}
 
 	} /* End of while loop. */
 
