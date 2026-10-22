@@ -399,8 +399,8 @@ int arc_zio_arena_free_shift = 2;
 /*
  * These tunables are for performance analysis.
  */
-uint64_t zfs_arc_max;
-uint64_t zfs_arc_min;
+uint64_t zfs_arc_max = 0;
+uint64_t zfs_arc_min = 0;
 uint64_t zfs_arc_meta_limit = 0;
 uint64_t zfs_arc_meta_min = 0;
 int zfs_arc_grow_retry = 0;
@@ -805,6 +805,7 @@ static void arc_hdr_alloc_pabd(arc_buf_hdr_t *, int);
 static void arc_access(arc_buf_hdr_t *, kmutex_t *);
 static boolean_t arc_is_overflowing();
 static void arc_buf_watch(arc_buf_t *);
+static void arc_tuning_update(void);
 static l2arc_dev_t *l2arc_vdev_get(vdev_t *vd);
 
 static arc_buf_contents_t arc_buf_type(arc_buf_hdr_t *);
@@ -4698,6 +4699,11 @@ static boolean_t
 arc_adjust_cb_check(void *arg, zthr_t *zthr)
 {
 	/*
+	 * While we do not have callbacks to perform tuning updates,
+	 * use this periodic check to call arc_tuning_update().
+	 */
+	arc_tuning_update();
+	/*
 	 * This is necessary in order for the mdb ::arc dcmd to
 	 * show up to date information. Since the ::arc command
 	 * does not call the kstat's update function, without
@@ -6980,6 +6986,59 @@ arc_state_multilist_index_func(multilist_t *ml, void *obj)
 	    multilist_get_num_sublists(ml));
 }
 
+/*
+ * Called during module initialization and periodically thereafter to
+ * apply reasonable changes to the exposed performance tunings.  Non-zero
+ * zfs_* values which differ from the currently set values will be applied.
+ */
+static void
+arc_tuning_update(void)
+{
+	uint64_t allmem = arc_all_memory();
+
+	/* Valid range: 32M - <arc_c_max> */
+	if ((zfs_arc_min) && (zfs_arc_min != arc_c_min) &&
+	    (zfs_arc_min >= 2ULL << SPA_MAXBLOCKSHIFT) &&
+	    (zfs_arc_min <= arc_c_max)) {
+		arc_c_min = zfs_arc_min;
+		arc_c = MAX(arc_c, arc_c_min);
+	}
+
+	/* Valid range: 64M - <all physical memory> */
+	if ((zfs_arc_max) && (zfs_arc_max != arc_c_max) &&
+	    (zfs_arc_max > MIN_ARC_MAX) && (zfs_arc_max < allmem) &&
+	    (zfs_arc_max > arc_c_min)) {
+		arc_c_max = zfs_arc_max;
+		arc_c = MIN(arc_c, arc_c_max);
+		arc_p = (arc_c >> 1);
+		arc_meta_limit = MIN(arc_meta_limit, arc_c_max);
+	}
+
+	/* Valid range: 16M - <arc_c_max> */
+	if ((zfs_arc_meta_min) && (zfs_arc_meta_min != arc_meta_min) &&
+	    (zfs_arc_meta_min >= 1ULL << SPA_MAXBLOCKSHIFT) &&
+	    (zfs_arc_meta_min <= arc_c_max)) {
+		arc_meta_min = zfs_arc_meta_min;
+		arc_meta_limit = MAX(arc_meta_limit, arc_meta_min);
+	}
+
+	/* Valid range: <arc_meta_min> - <arc_c_max> */
+	if ((zfs_arc_meta_limit) && (zfs_arc_meta_limit != arc_meta_limit) &&
+	    (zfs_arc_meta_limit >= zfs_arc_meta_min) &&
+	    (zfs_arc_meta_limit <= arc_c_max))
+		arc_meta_limit = zfs_arc_meta_limit;
+
+	/* Valid range: 1 - N */
+	if (zfs_arc_grow_retry)
+		arc_grow_retry = zfs_arc_grow_retry;
+
+	/* Valid range: 1 - N */
+	if (zfs_arc_shrink_shift) {
+		arc_shrink_shift = zfs_arc_shrink_shift;
+		arc_no_grow_shift = MIN(arc_no_grow_shift, arc_shrink_shift -1);
+	}
+}
+
 static void
 arc_state_init(void)
 {
@@ -7108,7 +7167,6 @@ arc_state_fini(void)
 	aggsum_fini(&astat_hdr_size);
 	aggsum_fini(&astat_other_size);
 	aggsum_fini(&astat_l2_hdr_size);
-
 }
 
 uint64_t
@@ -7408,6 +7466,9 @@ arc_init(void)
 	if (zfs_arc_p_min_shift > 0)
 		arc_p_min_shift = zfs_arc_p_min_shift;
 
+	/* Apply user specified tunings */
+	arc_tuning_update();
+
 	/* if kmem_flags are set, lets try to use less memory */
 	if (kmem_debugging())
 		arc_c = arc_c / 2;
@@ -7433,8 +7494,8 @@ arc_init(void)
 		kstat_install(arc_ksp);
 	}
 
-	arc_adjust_zthr = zthr_create(arc_adjust_cb_check,
-	    arc_adjust_cb, NULL);
+	arc_adjust_zthr = zthr_create_timer(arc_adjust_cb_check,
+	    arc_adjust_cb, NULL, SEC2NSEC(1));
 	arc_reap_zthr = zthr_create_timer(arc_reap_cb_check,
 	    arc_reap_cb, NULL, SEC2NSEC(1));
 

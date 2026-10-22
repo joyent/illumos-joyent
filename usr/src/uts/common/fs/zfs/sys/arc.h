@@ -45,6 +45,13 @@ extern "C" {
  */
 #define	ARC_EVICT_ALL	-1ULL
 
+/*
+ * ZFS gets very unhappy when the maximum ARC size is smaller than the maximum
+ * block size and a larger block is written.  To leave some safety margin, we
+ * limit the minimum for zfs_arc_max to the maximium transaction size.
+ */
+#define	MIN_ARC_MAX	DMU_MAX_ACCESS
+
 #define	HDR_SET_LSIZE(hdr, x) do { \
 	ASSERT(IS_P2ALIGNED(x, 1U << SPA_MINBLOCKSHIFT)); \
 	(hdr)->b_lsize = ((x) >> SPA_MINBLOCKSHIFT); \

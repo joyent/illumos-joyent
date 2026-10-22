@@ -301,7 +301,7 @@ void zfs_znode_byteswap(void *buf, size_t size);
  * The maximum number of bytes that can be accessed as part of one
  * operation, including metadata.
  */
-#define	DMU_MAX_ACCESS (32 * 1024 * 1024) /* 32MB */
+#define	DMU_MAX_ACCESS (64 * 1024 * 1024) /* 64 */
 #define	DMU_MAX_DELETEBLKCNT (20480) /* ~5MB of indirect blocks */
 
 #define	DMU_USERUSED_OBJECT	(-1ULL)
