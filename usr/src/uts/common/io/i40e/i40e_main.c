@@ -13,7 +13,7 @@
  * Copyright 2015 OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright 2019 Joyent, Inc.
  * Copyright 2017 Tegile Systems, Inc.  All rights reserved.
- * Copyright 2020 RackTop Systems, Inc.
+ * Copyright 2023 RackTop Systems, Inc.
  * Copyright 2020 Ryan Zezeski
  * Copyright 2021 Oxide Computer Company
  */
@@ -1568,10 +1568,16 @@ i40e_update_mtu(i40e_t *i40e)
 	    sizeof (struct ether_vlan_header) + ETHERFCSL;
 
 	rx = i40e->i40e_frame_max + I40E_BUF_IPHDR_ALIGNMENT;
+	if (rx > I40E_RX_MAX_BUF)
+		rx = I40E_RX_MAX_BUF;
+
 	i40e->i40e_rx_buf_size = ((rx >> 10) +
 	    ((rx & (((uint32_t)1 << 10) -1)) > 0 ? 1 : 0)) << 10;
 
 	tx = i40e->i40e_frame_max;
+	if (tx > I40E_TX_MAX_BUF)
+		tx = I40E_TX_MAX_BUF;
+
 	i40e->i40e_tx_buf_size = ((tx >> 10) +
 	    ((tx & (((uint32_t)1 << 10) -1)) > 0 ? 1 : 0)) << 10;
 }

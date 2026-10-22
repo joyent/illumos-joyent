@@ -59,7 +59,14 @@
  * i40e_t`i40e_sdu changes.
  *
  * This size is then rounded up to the nearest 1k chunk, which represents the
- * actual amount of memory that we'll allocate for a single frame.
+ * actual amount of memory that we'll allocate for a single frame. This is
+ * then capped at 4k. Allocating thousands (or more) of >4k sized chunks of
+ * DMA mapped memory (which must be _physically_ contiguous) can take
+ * excessive amounts of time (tens of minutes) on long running systems (which
+ * can happen when creating VNICs over an i40e interface). Capping the
+ * buffers at 4k (PAGESIZE) all but guarantees that the DMA allocations can
+ * happen in a reasonable amount of time. The tradeoff is that larger packets
+ * may require additional buffers during TX or RX.
  *
  * Note, that for RX, we do something that might be unexpected. We always add
  * an extra two bytes to the frame size that we allocate. We then offset the DMA
@@ -223,9 +230,9 @@
  *
  * The end of packet indicates that we have reached the last descriptor. Now,
  * you might ask when would there be more than one descriptor. The reason for
- * that might be due to large receive offload (lro) or header splitting
- * functionality, which presently isn't supported in the driver. The error bits
- * in the frame are only valid when EOP is set.
+ * that might be due to jumbo frames, large receive offload (lro), or header
+ * splitting functionality, which presently isn't supported in the driver. The
+ * error bits in the frame are only valid when EOP is set.
  *
  * If error bits are set on the frame, then we still consume it; however, we
  * will not generate an mblk_t to send up to MAC. If there are no error bits
@@ -967,7 +974,7 @@ i40e_alloc_tx_dma(i40e_trqpair_t *itrq)
 	}
 
 	itrq->itrq_tcb_free_list = kmem_zalloc(itrq->itrq_tx_free_list_size *
-	    sizeof (i40e_tx_control_block_t *), KM_SLEEP);
+	    sizeof (i40e_tx_control_block_t *), KM_NOSLEEP);
 	if (itrq->itrq_tcb_free_list == NULL) {
 		i40e_error(i40e, "failed to allocate a %d entry TX free list "
 		    "for ring %d", itrq->itrq_tx_free_list_size,
@@ -1432,18 +1439,175 @@ i40e_rx_hcksum(i40e_trqpair_t *itrq, mblk_t *mp, uint64_t status, uint32_t err,
 	}
 }
 
+/*
+ * Retrieve one frame (possibly split over multiple descriptors).
+ * - If no packets are available return NULL.
+ * - If we fail to allocate mblk_ts, return NULL (packet is discarded).
+ * - If *poll_bytes indicates a limit on bytes to retrieve, and the next
+ *   packet on the ring would exceed the limit, return NULL (packet is left
+ *   on the ring for future processing).
+ */
+static mblk_t *
+i40e_ring_rx_frame(i40e_trqpair_t *itrq, int *poll_bytes, uint64_t *rx_bytesp)
+{
+	i40e_rx_data_t *rxd;
+	i40e_rx_desc_t *cur_desc;
+	i40e_rx_control_block_t *rcb;
+	mblk_t *mp = NULL;
+	mblk_t *mp_head = NULL;
+	mblk_t **mp_tail = &mp_head;
+	uint64_t rx_bytes;
+	uint64_t stword;
+	uint32_t cur_head;
+	uint32_t seg_count;
+	uint32_t error;
+	uint32_t plen;
+	uint32_t ptype;
+	boolean_t eop;
+
+	ASSERT(MUTEX_HELD(&itrq->itrq_rx_lock));
+
+	rxd = itrq->itrq_rxdata;
+	rx_bytes = 0;
+	seg_count = 0;
+	cur_head = rxd->rxd_desc_next;
+
+	/*
+	 * Determine the size of this frame. This also establishes that
+	 * a full frame is available to process as well as the number of
+	 * segments in this packet.
+	 */
+	do {
+		cur_desc = &rxd->rxd_desc_ring[cur_head];
+		stword = LE64_TO_CPU(cur_desc->wb.qword1.status_error_len);
+
+		/*
+		 * All of the descriptors of the frame must be done before
+		 * we proceed.
+		 */
+		if ((stword & (1 << I40E_RX_DESC_STATUS_DD_SHIFT)) == 0)
+			return (NULL);
+
+		plen = (stword & I40E_RXD_QW1_LENGTH_PBUF_MASK) >>
+		    I40E_RXD_QW1_LENGTH_PBUF_SHIFT;
+
+		eop = !!(stword & (1 << I40E_RX_DESC_STATUS_EOF_SHIFT));
+
+		seg_count++;
+		rx_bytes += plen;
+
+		cur_head = i40e_next_desc(cur_head, 1, rxd->rxd_ring_size);
+	} while ((seg_count <= I40E_RX_MAX_SEGMENT) && !eop);
+
+	/*
+	 * If we have a packet that exceeds the hardware limit on segments,
+	 * something has gone horribly wrong.
+	 */
+	if (!eop) {
+		i40e_t *i40e = itrq->itrq_i40e;
+
+		dev_err(i40e->i40e_dip, CE_PANIC, "encountered packet on "
+		    "tx ring %u with invalid segment count %u",
+		    itrq->itrq_index, seg_count);
+	}
+
+	/*
+	 * stword is from the last segment of the packet. We may also use this
+	 * below for HW checksum after we've collected all the segments into
+	 * mblk_ts.
+	 */
+	error = (stword & I40E_RXD_QW1_ERROR_MASK) >> I40E_RXD_QW1_ERROR_SHIFT;
+	if (error & I40E_RX_ERR_BITS) {
+		itrq->itrq_rxstat.irxs_rx_desc_error.value.ui64++;
+		goto discard;
+	}
+
+	if ((*poll_bytes != I40E_POLL_NULL) && rx_bytes > *poll_bytes)
+		return (NULL);
+
+	cur_head = rxd->rxd_desc_next;
+
+	/* Go through the descriptors again and process them. */
+	do {
+		cur_desc = &rxd->rxd_desc_ring[cur_head];
+		stword = LE64_TO_CPU(cur_desc->wb.qword1.status_error_len);
+
+		eop = !!(stword & (1 << I40E_RX_DESC_STATUS_EOF_SHIFT));
+
+		plen = (stword & I40E_RXD_QW1_LENGTH_PBUF_MASK) >>
+		    I40E_RXD_QW1_LENGTH_PBUF_SHIFT;
+
+		mp = NULL;
+
+		if (plen >= itrq->itrq_i40e->i40e_rx_dma_min)
+			mp = i40e_rx_bind(itrq, rxd, cur_head, plen);
+		if (mp == NULL)
+			mp = i40e_rx_copy(itrq, rxd, cur_head, plen);
+		if (mp == NULL) {
+			/*
+			 * We couldn't allocate enough mblk_ts for the
+			 * entire packet, so discard whatever mblk_ts
+			 * we have and just drop the entire packet.
+			 */
+			if (mp_head != NULL) {
+				freemsg(mp_head);
+				mp_head = NULL;
+			}
+			goto discard;
+		}
+
+		*mp_tail = mp;
+		mp_tail = &mp->b_cont;
+
+		cur_head = i40e_next_desc(cur_head, 1, rxd->rxd_ring_size);
+	} while (!eop);
+
+	*poll_bytes -= rx_bytes;
+
+	/*
+	 * stword is from the last segment. From 8.3.2.2 this is the only
+	 * segment where the ptype and checksum fields are valid, so this
+	 * is the one we want to use.
+	 */
+	ptype = (stword & I40E_RXD_QW1_PTYPE_MASK) >> I40E_RXD_QW1_PTYPE_SHIFT;
+	if (itrq->itrq_i40e->i40e_rx_hcksum_enable)
+		i40e_rx_hcksum(itrq, mp_head, stword, error, ptype);
+
+discard:
+	*rx_bytesp += rx_bytes;
+
+	/*
+	 * Now we need to prepare this frame for use again. See the
+	 * discussion in the big theory statements.
+	 *
+	 * However, right now we're doing the simple version of this.
+	 * Normally what we'd do would depend on whether or not we were
+	 * doing DMA binding or bcopying. But because we're always doing
+	 * bcopying, we can just always use the current index as a key
+	 * for what to do and reassign the buffer based on the ring.
+	 */
+	cur_head = rxd->rxd_desc_next;
+	for (uint32_t i = 0; i < seg_count; i++) {
+		cur_desc = &rxd->rxd_desc_ring[cur_head];
+		rcb = rxd->rxd_work_list[cur_head];
+		cur_desc->read.pkt_addr =
+		    CPU_TO_LE64((uintptr_t)rcb->rcb_dma.dmab_dma_address);
+		cur_desc->read.hdr_addr = 0;
+		cur_head = i40e_next_desc(cur_head, 1, rxd->rxd_ring_size);
+	}
+
+	rxd->rxd_desc_next = cur_head;
+	return (mp_head);
+}
+
 mblk_t *
 i40e_ring_rx(i40e_trqpair_t *itrq, int poll_bytes)
 {
 	i40e_t *i40e;
 	i40e_hw_t *hw;
 	i40e_rx_data_t *rxd;
-	uint32_t cur_head;
-	i40e_rx_desc_t *cur_desc;
-	i40e_rx_control_block_t *rcb;
-	uint64_t rx_bytes, rx_frames;
-	uint64_t stword;
 	mblk_t *mp, *mp_head, **mp_tail;
+	uint64_t rx_bytes, rx_frames;
 
 	ASSERT(MUTEX_HELD(&itrq->itrq_rx_lock));
 	rxd = itrq->itrq_rxdata;
@@ -1478,107 +1642,13 @@ i40e_ring_rx(i40e_trqpair_t *itrq, int poll_bytes)
 	mp_head = NULL;
 	mp_tail = &mp_head;
 
-	/*
-	 * At this point, the descriptor ring is available to check. We'll try
-	 * and process until we either run out of poll_bytes or descriptors.
-	 */
-	cur_head = rxd->rxd_desc_next;
-	cur_desc = &rxd->rxd_desc_ring[cur_head];
-	stword = LE64_TO_CPU(cur_desc->wb.qword1.status_error_len);
-
-	/*
-	 * Note, the primary invariant of this loop should be that cur_head,
-	 * cur_desc, and stword always point to the currently processed
-	 * descriptor. When we leave the loop, it should point to a descriptor
-	 * that HAS NOT been processed. Meaning, that if we haven't consumed the
-	 * frame, the descriptor should not be advanced.
-	 */
-	while ((stword & (1 << I40E_RX_DESC_STATUS_DD_SHIFT)) != 0) {
-		uint32_t error, eop, plen, ptype;
-
-		/*
-		 * The DD, PLEN, and EOP bits are the only ones that are valid
-		 * in every frame. The error information is only valid when EOP
-		 * is set in the same frame.
-		 *
-		 * At this time, because we don't do any LRO or header
-		 * splitting. We expect that every frame should have EOP set in
-		 * it. When later functionality comes in, we'll want to
-		 * re-evaluate this.
-		 */
-		eop = stword & (1 << I40E_RX_DESC_STATUS_EOF_SHIFT);
-		VERIFY(eop != 0);
-
-		error = (stword & I40E_RXD_QW1_ERROR_MASK) >>
-		    I40E_RXD_QW1_ERROR_SHIFT;
-		if (error & I40E_RX_ERR_BITS) {
-			itrq->itrq_rxstat.irxs_rx_desc_error.value.ui64++;
-			goto discard;
-		}
-
-		plen = (stword & I40E_RXD_QW1_LENGTH_PBUF_MASK) >>
-		    I40E_RXD_QW1_LENGTH_PBUF_SHIFT;
-
-		ptype = (stword & I40E_RXD_QW1_PTYPE_MASK) >>
-		    I40E_RXD_QW1_PTYPE_SHIFT;
-
-		/*
-		 * This packet contains valid data. We should check to see if
-		 * we're actually going to consume it based on its length (to
-		 * ensure that we don't overshoot our quota). We determine
-		 * whether to bcopy or bind the DMA resources based on the size
-		 * of the frame. However, if on debug, we allow it to be
-		 * overridden for testing purposes.
-		 *
-		 * We should be smarter about this and do DMA binding for
-		 * larger frames, but for now, it's really more important that
-		 * we actually just get something simple working.
-		 */
-
-		/*
-		 * Ensure we don't exceed our polling quota by reading this
-		 * frame. Note we only bump bytes now, we bump frames later.
-		 */
-		if ((poll_bytes != I40E_POLL_NULL) &&
-		    (rx_bytes + plen) > poll_bytes)
-			break;
-		rx_bytes += plen;
-
-		mp = NULL;
-		if (plen >= i40e->i40e_rx_dma_min)
-			mp = i40e_rx_bind(itrq, rxd, cur_head, plen);
+	do {
+		mp = i40e_ring_rx_frame(itrq, &poll_bytes, &rx_bytes);
 		if (mp == NULL)
-			mp = i40e_rx_copy(itrq, rxd, cur_head, plen);
+			break;
 
-		if (mp != NULL) {
-			if (i40e->i40e_rx_hcksum_enable)
-				i40e_rx_hcksum(itrq, mp, stword, error, ptype);
-			*mp_tail = mp;
-			mp_tail = &mp->b_next;
-		}
-
-		/*
-		 * Now we need to prepare this frame for use again. See the
-		 * discussion in the big theory statements.
-		 *
-		 * However, right now we're doing the simple version of this.
-		 * Normally what we'd do would depend on whether or not we were
-		 * doing DMA binding or bcopying. But because we're always doing
-		 * bcopying, we can just always use the current index as a key
-		 * for what to do and reassign the buffer based on the ring.
-		 */
-discard:
-		rcb = rxd->rxd_work_list[cur_head];
-		cur_desc->read.pkt_addr =
-		    CPU_TO_LE64((uintptr_t)rcb->rcb_dma.dmab_dma_address);
-		cur_desc->read.hdr_addr = 0;
-
-		/*
-		 * Finally, update our loop invariants.
-		 */
-		cur_head = i40e_next_desc(cur_head, 1, rxd->rxd_ring_size);
-		cur_desc = &rxd->rxd_desc_ring[cur_head];
-		stword = LE64_TO_CPU(cur_desc->wb.qword1.status_error_len);
+		*mp_tail = mp;
+		mp_tail = &mp->b_next;
 
 		/*
 		 * To help provide liveness, we limit the amount of data that
@@ -1586,11 +1656,10 @@ discard:
 		 * is not dissimilar from a polling request.
 		 */
 		rx_frames++;
-		if (rx_frames > i40e->i40e_rx_limit_per_intr) {
-			itrq->itrq_rxstat.irxs_rx_intr_limit.value.ui64++;
-			break;
-		}
-	}
+	} while (rx_frames <= i40e->i40e_rx_limit_per_intr);
+
+	if (rx_frames > i40e->i40e_rx_limit_per_intr)
+		itrq->itrq_rxstat.irxs_rx_intr_limit.value.ui64++;
 
 	/*
 	 * As we've modified the ring, we need to make sure that we sync the
@@ -1608,8 +1677,8 @@ discard:
 	if (rx_frames != 0) {
 		uint32_t tail;
 		ddi_acc_handle_t rh = i40e->i40e_osdep_space.ios_reg_handle;
-		rxd->rxd_desc_next = cur_head;
-		tail = i40e_prev_desc(cur_head, 1, rxd->rxd_ring_size);
+		tail = i40e_prev_desc(rxd->rxd_desc_next, 1,
+		    rxd->rxd_ring_size);
 
 		I40E_WRITE_REG(hw, I40E_QRX_TAIL(itrq->itrq_index), tail);
 		if (i40e_check_acc_handle(rh) != DDI_FM_OK) {
@@ -2176,6 +2245,9 @@ tcb_list_append(i40e_tx_control_block_t **head, i40e_tx_control_block_t **tail,
 	}
 }
 
+#define	I40E_TCB_LEFT(tcb)				\
+	((tcb)->tcb_dma.dmab_size - (tcb)->tcb_dma.dmab_len)
+
 /*
  * This function takes a single packet, possibly consisting of
  * multiple mblks, and creates a TCB chain to send to the controller.
@@ -2195,14 +2267,18 @@ static i40e_tx_control_block_t *
 i40e_non_lso_chain(i40e_trqpair_t *itrq, mblk_t *mp, uint_t *ndesc)
 {
 	const mblk_t *nmp = mp;
+	/*
+	 * The cpoff (copy offset) variable tracks the offset inside
+	 * the current mp. If the mp is larger than the tcb buffer (i.e.
+	 * a > 4096 bytes), then the mp will be split across multiple
+	 * tcbs.
+	 */
+	size_t cpoff = 0;
 	uint_t needed_desc = 0;
 	boolean_t force_copy = B_FALSE;
 	i40e_tx_control_block_t *tcb = NULL, *tcbhead = NULL, *tcbtail = NULL;
 	i40e_t *i40e = itrq->itrq_i40e;
 	i40e_txq_stat_t *txs = &itrq->itrq_txstat;
-
-	/* TCB buffer is always larger than MTU. */
-	ASSERT3U(msgsize(mp), <, i40e->i40e_tx_buf_size);
 
 	while (nmp != NULL) {
 		const size_t nmp_len = MBLKL(nmp);
@@ -2214,25 +2290,38 @@ i40e_non_lso_chain(i40e_trqpair_t *itrq, mblk_t *mp, uint_t *ndesc)
 		}
 
 		if (nmp_len < i40e->i40e_tx_dma_min || force_copy) {
-			/* Compress consecutive copies into one TCB. */
-			if (tcb != NULL && tcb->tcb_type == I40E_TX_COPY) {
-				i40e_tx_copy_fragment(tcb, nmp, 0, nmp_len);
-				nmp = nmp->b_cont;
-				continue;
-			}
-
-			if ((tcb = i40e_tcb_alloc(itrq)) == NULL) {
-				txs->itxs_err_notcb.value.ui64++;
-				goto fail;
-			}
+			size_t tocopy;
 
 			/*
-			 * TCB DMA buffer is guaranteed to be one
-			 * cookie by i40e_alloc_dma_buffer().
+			 * Attempt to concatenate consecutive copies into one
+			 * TCB (until it is full). If there is no current TCB,
+			 * or if it is a DMA TCB, then allocate a new one.
 			 */
-			i40e_tx_copy_fragment(tcb, nmp, 0, nmp_len);
-			needed_desc++;
-			tcb_list_append(&tcbhead, &tcbtail, tcb);
+			if (tcb == NULL ||
+			    (tcb != NULL && tcb->tcb_type != I40E_TX_COPY)) {
+				if ((tcb = i40e_tcb_alloc(itrq)) == NULL) {
+					txs->itxs_err_notcb.value.ui64++;
+					goto fail;
+				}
+
+				needed_desc++;
+				tcb_list_append(&tcbhead, &tcbtail, tcb);
+			}
+
+			tocopy = MIN(I40E_TCB_LEFT(tcb), nmp_len - cpoff);
+			i40e_tx_copy_fragment(tcb, nmp, cpoff, tocopy);
+			cpoff += tocopy;
+
+			/* We have consumed the current mp. */
+			if (cpoff == nmp_len) {
+				nmp = nmp->b_cont;
+				cpoff = 0;
+			}
+
+			/* We have consumed the current TCB buffer. */
+			if (I40E_TCB_LEFT(tcb) == 0) {
+				tcb = NULL;
+			}
 		} else {
 			uint_t total_desc;
 
@@ -2243,10 +2332,15 @@ i40e_non_lso_chain(i40e_trqpair_t *itrq, mblk_t *mp, uint_t *ndesc)
 			}
 
 			/*
-			 * If the new total exceeds the max or we've
-			 * reached the limit and there's data left,
-			 * then give up binding and copy the rest into
-			 * the pre-allocated TCB buffer.
+			 * If binding this mp exceeds the maximum allowed
+			 * descriptors, we reset everything for this mp
+			 * and try to copy. While we cannot guarantee
+			 * the remaining bytes in this packet will fit
+			 * in a single tcb, the largest MTU still can fit
+			 * about 45% of itself into a single buffer, so it's
+			 * worth trying. If this fails, we'll reset everything
+			 * and just copy the entire packet (which will always
+			 * be under the descriptor limit).
 			 */
 			total_desc = needed_desc + tcb->tcb_bind_ncookies;
 			if ((total_desc > I40E_TX_MAX_COOKIE) ||
@@ -2262,16 +2356,52 @@ i40e_non_lso_chain(i40e_trqpair_t *itrq, mblk_t *mp, uint_t *ndesc)
 					tcb = NULL;
 				}
 
+				cpoff = 0;
 				force_copy = B_TRUE;
-				txs->itxs_force_copy.value.ui64++;
 				continue;
 			}
 
 			needed_desc += tcb->tcb_bind_ncookies;
 			tcb_list_append(&tcbhead, &tcbtail, tcb);
+
+			/* Advance to the next fragment */
+			nmp = nmp->b_cont;
+			cpoff = 0;
 		}
 
-		nmp = nmp->b_cont;
+		/*
+		 * If we exceed the maximum allowed descriptors for a single
+		 * packet, we reset everything and just copy the entire
+		 * packet instead. As each tcb buffer uses a single descriptor,
+		 * even if the mp is broken up across multiple tcbs, we will
+		 * always stay below the maximum allowed (3 tcbs and thus
+		 * 3 descriptors contain enough space for 12k of packets
+		 * which is larger than the largest MTU allowed).
+		 */
+		if (needed_desc > I40E_TX_MAX_COOKIE) {
+			force_copy = B_TRUE;
+			txs->itxs_force_copy.value.ui64++;
+
+			/* Reset everything before trying again */
+			tcb = tcbhead;
+			while (tcb != NULL) {
+				i40e_tx_control_block_t *next = tcb->tcb_next;
+
+				ASSERT(tcb->tcb_type == I40E_TX_DMA ||
+				    tcb->tcb_type == I40E_TX_COPY);
+
+				tcb->tcb_mp = NULL;
+				i40e_tcb_reset(tcb);
+				i40e_tcb_free(itrq, tcb);
+				tcb = next;
+			}
+
+			cpoff = 0;
+			nmp = mp;
+			tcb = tcbhead = tcbtail = NULL;
+			needed_desc = 0;
+			continue;
+		}
 	}
 
 	ASSERT3P(nmp, ==, NULL);
@@ -2306,14 +2436,25 @@ fail:
  * descriptors. One explanation is that the controller counts the
  * context descriptor against the first segment, even though the
  * programming guide makes no mention of such a constraint. In any
- * case, we limit TSO segments to 7 descriptors to prevent Tx queue
+ * case, we limit TSO segments to 6 descriptors to prevent Tx queue
  * freezes. We still allow non-TSO segments to utilize all 8
  * descriptors as they have not demonstrated the faulty behavior.
+ *
+ * As we construct the descriptors to transfer the contents of an MSS-sized
+ * portion of the packet (or the remainder of the data if we've reached the
+ * end of the packet), if we reach i40e_lso_num_descs descriptors without
+ * crossing an MSS boundary, we switch to copying the packet contents into
+ * pre-bound DMA buffers that are MIN(mtu, 4096) bytes in size starting with
+ * the i40e_lso_num_descs'th (6). I.e. the 6th and 7th descriptor will be
+ * two pre-bound buffers that can hold up to 8192 bytes (the pre-allocated,
+ * pre-bound buffers are constructed to only use 1 DMA cookie and thus 1
+ * descriptor each).
+ *
+ * Since the minimum size to DMA bind an existing buffer is 512 bytes, that
+ * leaves enough remaining descriptors for the rest of the data in the current
+ * MSS-sized chunk of the packet.
  */
-uint_t i40e_lso_num_descs = 7;
-
-#define	I40E_TCB_LEFT(tcb)				\
-	((tcb)->tcb_dma.dmab_size - (tcb)->tcb_dma.dmab_len)
+uint_t i40e_lso_num_descs = 6;
 
 /*
  * This function is similar in spirit to i40e_non_lso_chain(), but
@@ -2322,7 +2463,7 @@ uint_t i40e_lso_num_descs = 7;
  * TCBs. The complication comes with the fact that we are no longer
  * trying to fit the entire packet into 8 descriptors, but rather we
  * must fit each MSS-size segment of the LSO packet into 8 descriptors.
- * Except it's really 7 descriptors, see i40e_lso_num_descs.
+ * Except it's really 6 descriptors, see i40e_lso_num_descs.
  *
  * Your first inclination might be to verify that a given segment
  * spans no more than 7 mblks; but it's actually much more subtle than
@@ -2495,7 +2636,7 @@ force_copy:
 				 */
 				needed_desc++;
 				segdesc++;
-				ASSERT3U(segdesc, <=, i40e_lso_num_descs);
+				ASSERT3U(segdesc, <=, I40E_TX_MAX_COOKIE);
 				tcb_list_append(&tcbhead, &tcbtail, tcb);
 			} else if (segdesc == 0) {
 				/*
@@ -2529,6 +2670,7 @@ force_copy:
 			 * counters.
 			 */
 			if (segsz >= mss) {
+				ASSERT3U(segdesc, <=, I40E_TX_MAX_COOKIE);
 				segsz = segsz % mss;
 				segdesc = segsz == 0 ? 0 : 1;
 				force_copy = B_FALSE;
@@ -2601,7 +2743,7 @@ force_copy:
 				}
 			}
 
-			ASSERT3U(tsegdesc, <=, i40e_lso_num_descs);
+			ASSERT3U(tsegdesc, <=, I40E_TX_MAX_COOKIE);
 			ASSERT3U(tsegsz, <, mss);
 
 			/*

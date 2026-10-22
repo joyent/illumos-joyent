@@ -196,6 +196,26 @@ typedef enum i40e_itr_index {
 #define	I40E_BUF_IPHDR_ALIGNMENT	2
 
 /*
+ * The XL710 controller has a total of five buffers available for the
+ * reception of any single frame. This is defined in 8.3.1 - Receive
+ * Packet in System Memory.
+ */
+#define	I40E_RX_MAX_SEGMENT	5
+
+/*
+ * The maximum size of a single RX buffer. A packet may be segmented across
+ * as many as I40E_RX_MAX_SEGMENT (5) buffers. A value of 2048 will accommodate
+ * the largest MTU supported by the hardware (9728 bytes -- Table 1-3).
+ */
+#define	I40E_RX_MAX_BUF		2048
+
+/*
+ * The maximum size of a single TX buffer. A packet may be segmented across
+ * as many as I40E_TX_MAX_COOKIE buffers.
+ */
+#define	I40E_TX_MAX_BUF		4096
+
+/*
  * The XL710 controller has a total of eight buffers available for the
  * transmission of any single frame. This is defined in 8.4.1 - Transmit
  * Packet in System Memory.
@@ -230,8 +250,15 @@ typedef enum i40e_itr_index {
 #define	I40E_DEF_RX_DMA_THRESH		256
 #define	I40E_MAX_RX_DMA_THRESH		INT32_MAX
 
-#define	I40E_MIN_TX_DMA_THRESH		0
-#define	I40E_DEF_TX_DMA_THRESH		256
+/*
+ * The minimum DMA threshold is such that we can handle a pathological case
+ * where consecutive mblk_t segments of 513 bytes require 2 DMA cookies.
+ * This allows for 2 4096 buffers to be used for a forced copy while still
+ * adhering to the LRO descriptor limit (see i40e_transciever.c for all
+ * the gory details.).
+ */
+#define	I40E_MIN_TX_DMA_THRESH		512
+#define	I40E_DEF_TX_DMA_THRESH		512
 #define	I40E_MAX_TX_DMA_THRESH		INT32_MAX
 
 /*
