@@ -11,6 +11,7 @@
 
 #
 # Copyright 2023 MNX Cloud, Inc.
+# Copyright 2026 Edgecast Cloud LLC.
 #
 
 PROG=altexec
@@ -18,6 +19,7 @@ PROG=altexec
 # Add programs to $ROOTLINKS that you want to actually have hardlink to
 # the pkgsrc wrapper, altexec.
 ROOTLINKS = $(ROOTBIN)/csh
+ROOTLINKS += $(ROOTBIN)/perl
 ROOTLINKS += $(ROOTBIN)/tcsh
 ROOTLINKS += $(ROOTBIN)/zsh
 
