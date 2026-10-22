@@ -22,8 +22,8 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2019 Joyent, Inc.
- * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
  * Copyright 2025 Edgecast Cloud LLC.
+ * Copyright 2026 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -1798,7 +1798,7 @@ lxpr_read_pid_coredump_filter(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  */
 static int
 lxpr_write_pid_coredump_filter(lxpr_node_t *lxpnp, uio_t *uiop, cred_t *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	lx_proc_data_t *pd;
 	ulong_t filter;
@@ -5180,16 +5180,23 @@ lxpr_read_sys_kernel_osrel(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
 	zone_t *zone = LXPTOZ(lxpnp);
 	lx_zone_data_t *lxzd = ztolxzd(zone);
-	char version[LX_KERN_VERSION_MAX];
+	lx_proc_data_t *lxpd = ptolxproc(curproc);
+	char release[LX_KERN_RELEASE_MAX];
 
 	ASSERT(lxpnp->lxpr_type == LXPR_SYS_KERNEL_OSREL);
 	ASSERT(zone->zone_brand == &lx_brand);
 	ASSERT(lxzd != NULL);
 
 	mutex_enter(&lxzd->lxzd_lock);
-	(void) strlcpy(version, lxzd->lxzd_kernel_version, sizeof (version));
+	(void) strlcpy(release, lxzd->lxzd_kernel_release, sizeof (release));
 	mutex_exit(&lxzd->lxzd_lock);
-	lxpr_uiobuf_printf(uiobuf, "%s\n", version);
+	/* Use the per-process override, if specified */
+	if (lxpd != NULL && lxpd->l_uname_release[0] != '\0') {
+		(void) strlcpy(release, lxpd->l_uname_release,
+		    sizeof (release));
+	}
+
+	lxpr_uiobuf_printf(uiobuf, "%s\n", release);
 }
 
 static void
