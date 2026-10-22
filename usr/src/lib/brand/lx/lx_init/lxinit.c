@@ -1128,7 +1128,7 @@ static void
 lxi_init_exec(char **argv)
 {
 	const char *cmd = "/sbin/init";
-	char *const envp[] = { "container=zone", NULL };
+	char *const envp[] = { "container=lxc-smartos", NULL };
 	int e;
 
 	argv[0] = "init";
