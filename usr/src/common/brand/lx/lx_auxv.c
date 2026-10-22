@@ -84,6 +84,7 @@ lx_auxv_stol(const auxv_t *ap, auxv_t *oap, const lx_elf_data_t *edp)
 	case AT_PAGESZ:
 	case AT_FLAGS:
 	case AT_RANDOM:
+	case AT_SYSINFO:
 	case AT_NULL:
 		/* No translate needed */
 		loap->la_val = ap->a_un.a_val;

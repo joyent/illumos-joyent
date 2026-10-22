@@ -188,6 +188,8 @@ typedef enum lx_ptrace_options {
 #define	AT_CLKTCK	17
 /* Aux vector containing secure boolean */
 #define	AT_SECURE	23
+/* Aux vector containing the i386 vDSO syscall entry point */
+#define	AT_SYSINFO	32
 /* Aux vector containing vDSO addr */
 #define	AT_SYSINFO_EHDR	33
 
@@ -354,8 +356,9 @@ typedef struct lx_proc_data {
 	/* Linux process personality */
 	unsigned int l_personality;
 
-	/* VDSO location */
+	/* VDSO location and i386 syscall entry point */
 	uintptr_t l_vdso;
+	uintptr_t l_vdso_sysinfo;
 
 	/* mremap anon cache */
 	kmutex_t l_remap_anoncache_lock;

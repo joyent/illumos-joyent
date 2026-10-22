@@ -2036,13 +2036,18 @@ restoreexecenv(struct execenv *ep, stack_t *sp)
 }
 
 static uintptr_t
-lx_map_vdso(struct uarg *args, struct cred *cred)
+lx_map_vdso(struct uarg *args, struct cred *cred, uintptr_t *sysinfo)
 {
 	int err;
 	char *fpath = LX_VDSO_PATH;
 	vnode_t *vp;
 	vattr_t attr;
 	caddr_t addr;
+#if defined(_LP64)
+	uintptr_t entry = (uintptr_t)NULL;
+#endif
+
+	*sysinfo = (uintptr_t)NULL;
 
 #if defined(_LP64)
 	if (args->to_model != DATAMODEL_NATIVE) {
@@ -2083,12 +2088,54 @@ lx_map_vdso(struct uarg *args, struct cred *cred)
 		return ((uintptr_t)NULL);
 	}
 
+#if defined(_LP64)
+	if (args->to_model != DATAMODEL_NATIVE) {
+		Elf32_Ehdr ehdr;
+		ssize_t resid;
+		uint8_t vsyscall[3];
+
+		/*
+		 * The i386 vDSO ELF entry is __vsyscall.  Read it from the
+		 * vDSO file rather than assuming a fixed offset.  execmap maps
+		 * this file from offset zero, so e_entry is also the file offset
+		 * of the trampoline.  Only advertise the entry if it contains
+		 * the int 0x80; ret sequence implemented by this vDSO.
+		 */
+		if (attr.va_size < (off_t)sizeof (ehdr) ||
+		    vn_rdwr(UIO_READ, vp, (caddr_t)&ehdr, sizeof (ehdr), 0,
+		    UIO_SYSSPACE, 0, 0, cred, &resid) != 0 ||
+		    resid != 0 ||
+		    ehdr.e_ident[EI_MAG0] != ELFMAG0 ||
+		    ehdr.e_ident[EI_MAG1] != ELFMAG1 ||
+		    ehdr.e_ident[EI_MAG2] != ELFMAG2 ||
+		    ehdr.e_ident[EI_MAG3] != ELFMAG3 ||
+		    ehdr.e_ident[EI_CLASS] != ELFCLASS32 ||
+		    ehdr.e_type != ET_DYN ||
+		    ehdr.e_machine != EM_386 ||
+		    ehdr.e_entry == 0 ||
+		    ehdr.e_entry > attr.va_size - sizeof (vsyscall) ||
+		    vn_rdwr(UIO_READ, vp, (caddr_t)vsyscall,
+		    sizeof (vsyscall), ehdr.e_entry, UIO_SYSSPACE, 0, 0,
+		    cred, &resid) != 0 ||
+		    resid != 0 ||
+		    vsyscall[0] != 0xcd || vsyscall[1] != 0x80 ||
+		    vsyscall[2] != 0xc3) {
+			VN_RELE(vp);
+			return ((uintptr_t)NULL);
+		}
+		entry = (uintptr_t)addr + ehdr.e_entry;
+	}
+#endif
+
 	err = execmap(vp, addr, attr.va_size, 0, 0,
 	    PROT_USER|PROT_READ|PROT_EXEC, 1, 0);
 	VN_RELE(vp);
 	if (err != 0) {
 		return ((uintptr_t)NULL);
 	}
+#if defined(_LP64)
+	*sysinfo = entry;
+#endif
 	return ((uintptr_t)addr);
 }
 
@@ -2291,9 +2338,13 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 
 	/*
 	 * After execing the brand library (which should have implicitly mapped
-	 * in the comm page), map the VDSO into the approprate place in the AS.
+	 * in the comm page), map the VDSO into the appropriate place in the AS.
+	 * Keep the i386 vDSO optional: if mapping or validation fails,
+	 * AT_SYSINFO_EHDR is zero and AT_SYSINFO is omitted, allowing libc
+	 * to use its int 0x80 fallback.
 	 */
-	lxpd->l_vdso = lx_map_vdso(args, cred);
+	lxpd->l_vdso = lx_map_vdso(args, cred,
+	    &lxpd->l_vdso_sysinfo);
 
 	bzero(&env, sizeof (env));
 
@@ -2529,7 +2580,17 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 		    { AT_SUN_BRAND_LX_CLKTCK, 0 },
 		    { AT_SUN_BRAND_LX_SYSINFO_EHDR, 0 }
 		};
-		phdr_auxv32[0].a_un.a_val = edp.ed_phdr;
+		/*
+		 * The Linux stack does not use the private LX_PHDR slot.  Use
+		 * it for the i386 syscall entry while retaining LX_PHDR in
+		 * u_auxv for native debugger consumers.
+		 */
+		if (lxpd->l_vdso_sysinfo != (uintptr_t)NULL) {
+			phdr_auxv32[0].a_type = AT_SYSINFO;
+			phdr_auxv32[0].a_un.a_val = lxpd->l_vdso_sysinfo;
+		} else {
+			phdr_auxv32[0].a_un.a_val = edp.ed_phdr;
+		}
 		phdr_auxv32[1].a_un.a_val = ldaddr;
 		phdr_auxv32[2].a_un.a_val = hz;
 		phdr_auxv32[3].a_un.a_val = lxpd->l_vdso;
@@ -2571,6 +2632,10 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 
 		case AT_SUN_BRAND_LX_CLKTCK:
 			up->u_auxv[i].a_un.a_val = hz;
+			break;
+
+		case AT_SUN_BRAND_LX_SYSINFO_EHDR:
+			up->u_auxv[i].a_un.a_val = lxpd->l_vdso;
 			break;
 
 		default:

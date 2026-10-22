@@ -647,7 +647,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"wait4",	lx_wait4,		0,		4}, /* 114 */
 	{"swapoff",	lx_swapoff,		0,		1}, /* 115 */
 	{"sysinfo",	lx_sysinfo32,		0,		1}, /* 116 */
-	{"ipc",		NULL,			0,		5}, /* 117 */
+	{"ipc",		NULL,			LX_SYS_EBPARG6,	6}, /* 117 */
 	{"fsync",	NULL,			0,		1}, /* 118 */
 	{"sigreturn",	NULL,			0,		1}, /* 119 */
 	{"clone",	NULL,			0,		5}, /* 120 */
