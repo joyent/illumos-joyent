@@ -232,6 +232,14 @@ setup_net()
 				| egrep "(^| )${orig_global}( |$)" > /dev/null
 				(( $? == 0 )) && global_nic=${orig_global}
 			fi
+
+			# proteus ports are misc-class datalinks named proteusN;
+			# misc is shared (e.g. xde), so gate on the name too.
+			if [[ -z $global_nic && $orig_global =~ ^proteus[1-9][0-9]*$ ]]; then
+				dladm show-link -p -o LINK,CLASS "$orig_global" 2>/dev/null \
+				| egrep "^${orig_global}:misc\$" > /dev/null
+				(( $? == 0 )) && global_nic=${orig_global}
+			fi
 		else
 			isoverlay="true"
 			tag=${orig_global%/*}
