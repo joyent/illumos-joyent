@@ -24,6 +24,7 @@
  * Copyright 2016 Joyent, Inc.
  * Copyright (c) 2013 by Delphix. All rights reserved.
  * Copyright 2023 Oxide Computer Company
+ * Portions Copyright 2026 Kosada, Inc.
  */
 
 #include <assert.h>
@@ -1897,6 +1898,8 @@ Pbuild_file_symtab(struct ps_prochandle *P, file_info_t *fptr)
 	Elf *elf;
 	size_t nshdrs, shstrndx;
 
+	char zroot[PATH_MAX];
+
 	struct {
 		GElf_Shdr c_shdr;
 		Elf_Data *c_data;
@@ -2212,7 +2215,7 @@ Pbuild_file_symtab(struct ps_prochandle *P, file_info_t *fptr)
 				buf[bo] = '/';
 				bo++;
 			}
-			(void) snprintf(buf + bo, sizeof (buf) - bo, "%2x",
+			(void) snprintf(buf + bo, sizeof (buf) - bo, "%02x",
 			    *dp);
 		}
 
@@ -2220,11 +2223,39 @@ Pbuild_file_symtab(struct ps_prochandle *P, file_info_t *fptr)
 		    buf) != -1) {
 			boolean_t r;
 			Pdprintf("attempting to find build id alternate debug "
-			    "file at %s\n", path);
+			    "file in global zone at %s\n", path);
 			r = build_alt_debug(fptr, path, 0, buildid->c_data);
 			Pdprintf("attempt %s\n", r == B_TRUE ?
 			    "succeeded" : "failed");
 			free(path);
+
+			if (r == B_FALSE) {
+				if (Pzoneroot(P, zroot, sizeof (zroot))) {
+					/*
+					 * If we didn't find it in the global
+					 * zone, check inside the guest zone.
+					 */
+					if (asprintf(&path,
+					    "%s/usr/lib/debug/.build-id/%s"
+					    ".debug", zroot, buf) != -1) {
+						boolean_t r;
+						Pdprintf("attempting to find "
+						    "build id alternate debug "
+						    "file in guest zone at "
+						    "%s\n", path);
+						r = build_alt_debug(fptr, path,
+						    0, buildid->c_data);
+						Pdprintf("attempt %s\n",
+						    r == B_TRUE ?
+						    "succeeded" : "failed");
+						free(path);
+					} else {
+						Pdprintf("failed to construct "
+						    "build id path: %s\n",
+						    strerror(errno));
+					}
+				}
+			}
 		} else {
 			Pdprintf("failed to construct build id path: %s\n",
 			    strerror(errno));
