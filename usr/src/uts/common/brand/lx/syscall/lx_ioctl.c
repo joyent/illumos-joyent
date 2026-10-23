@@ -1832,6 +1832,9 @@ lx_ioctl(int fdes, int cmd, intptr_t arg)
 {
 	file_t *fp;
 	int res = 0, error = ENOTTY;
+	int rval = 0;
+	char *driver;
+	boolean_t nvidia_cmd;
 	lx_ioc_cmd_translator_t *ict = NULL;
 
 	if (cmd == LX_FIOCLEX || cmd == LX_FIONCLEX) {
@@ -1841,6 +1844,27 @@ lx_ioctl(int fdes, int cmd, intptr_t arg)
 
 	if ((fp = getf(fdes)) == NULL)
 		return (set_errno(EBADF));
+
+	/*
+	 * NVIDIA's Linux and illumos ioctl encodings agree for RM ('F') and
+	 * modeset ('m'), while UVM uses small unencoded command numbers and
+	 * 0x30000001/2 for initialization.  Preserve LX translation of generic
+	 * ioctls (such as FIONBIO) on NVIDIA descriptors.
+	 */
+	nvidia_cmd = (((uint32_t)cmd & 0xc000ff00U) == 0xc0004600U ||
+	    ((uint32_t)cmd & 0xc000ff00U) == 0xc0006d00U ||
+	    (cmd > 0 && cmd <= 4095) ||
+	    cmd == 0x30000001 || cmd == 0x30000002);
+	if (nvidia_cmd && fp->f_vnode->v_type == VCHR &&
+	    (driver = ddi_major_to_name(getmajor(fp->f_vnode->v_rdev))) != NULL &&
+	    (strcmp(driver, "nvidia") == 0 ||
+	    strcmp(driver, "nvidia_modeset") == 0 ||
+	    strcmp(driver, "nvidia_uvm") == 0)) {
+		error = VOP_IOCTL(fp->f_vnode, cmd, arg, FLUSER(fp), CRED(),
+		    &rval, NULL);
+		releasef(fdes);
+		return (error != 0 ? set_errno(error) : rval);
+	}
 
 	switch ((cmd & 0xff00) >> 8) {
 	case LX_IOC_TYPE_FD:
