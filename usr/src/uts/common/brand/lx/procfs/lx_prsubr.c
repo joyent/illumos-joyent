@@ -667,6 +667,8 @@ lxpr_getnode(vnode_t *dp, lxpr_nodetype_t type, proc_t *p, int desc)
 		break;
 
 	case LXPR_NETDIR:
+	case LXPR_DRIVERDIR:
+	case LXPR_DRIVER_NVIDIADIR:
 	case LXPR_SYSDIR:
 	case LXPR_SYS_FSDIR:
 	case LXPR_SYS_FS_INOTIFYDIR:

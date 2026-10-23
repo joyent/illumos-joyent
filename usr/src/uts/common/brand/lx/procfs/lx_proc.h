@@ -294,6 +294,9 @@ typedef enum lxpr_nodetype {
 	LXPR_UPTIME,		/* /proc/uptime		*/
 	LXPR_VERSION,		/* /proc/version	*/
 	LXPR_VMSTAT,		/* /proc/vmstat		*/
+	LXPR_DRIVERDIR,		/* /proc/driver		*/
+	LXPR_DRIVER_NVIDIADIR,	/* /proc/driver/nvidia */
+	LXPR_DRIVER_NVIDIA_PARAMS, /* /proc/driver/nvidia/params */
 	LXPR_NFILES		/* number of lx /proc file types */
 } lxpr_nodetype_t;
 
