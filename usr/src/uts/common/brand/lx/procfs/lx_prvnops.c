@@ -134,6 +134,8 @@ static vnode_t *lxpr_lookup_not_a_dir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_fddir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_fdinfodir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_netdir(vnode_t *, char *);
+static vnode_t *lxpr_lookup_driverdir(vnode_t *, char *);
+static vnode_t *lxpr_lookup_nvidiadir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_sysdir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_sys_fsdir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_sys_fs_inotifydir(vnode_t *, char *);
@@ -152,6 +154,8 @@ static int lxpr_readdir_not_a_dir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_fddir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_fdinfodir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_netdir(lxpr_node_t *, uio_t *, int *);
+static int lxpr_readdir_driverdir(lxpr_node_t *, uio_t *, int *);
+static int lxpr_readdir_nvidiadir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_sysdir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_sys_fsdir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_sys_fs_inotifydir(lxpr_node_t *, uio_t *, int *);
@@ -166,6 +170,7 @@ static int lxpr_readdir_task_tid_dir(lxpr_node_t *, uio_t *, int *);
 
 static void lxpr_read_invalid(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_empty(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_nvidia_params(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_cgroups(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_cmdline(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_cpuinfo(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -409,7 +414,8 @@ static lxpr_dirent_t lx_procdir[] = {
 	{ LXPR_SYSDIR,		"sys" },
 	{ LXPR_UPTIME,		"uptime" },
 	{ LXPR_VERSION,		"version" },
-	{ LXPR_VMSTAT,		"vmstat" }
+	{ LXPR_VMSTAT,		"vmstat" },
+	{ LXPR_DRIVERDIR,	"driver" }
 };
 
 #define	PROCDIRFILES	(sizeof (lx_procdir) / sizeof (lx_procdir[0]))
@@ -542,6 +548,18 @@ static lxpr_dirent_t netdir[] = {
 };
 
 #define	NETDIRFILES	(sizeof (netdir) / sizeof (netdir[0]))
+
+static lxpr_dirent_t driverdir[] = {
+	{ LXPR_DRIVER_NVIDIADIR, "nvidia" }
+};
+
+#define	DRIVERDIRFILES	(sizeof (driverdir) / sizeof (driverdir[0]))
+
+static lxpr_dirent_t nvidiadir[] = {
+	{ LXPR_DRIVER_NVIDIA_PARAMS, "params" }
+};
+
+#define	NVIDIADIRFILES	(sizeof (nvidiadir) / sizeof (nvidiadir[0]))
 
 /*
  * contents of /proc/sys directory
@@ -1021,6 +1039,9 @@ static void (*lxpr_read_function[])() = {
 	lxpr_read_uptime,		/* /proc/uptime		*/
 	lxpr_read_version,		/* /proc/version	*/
 	lxpr_read_vmstat,		/* /proc/vmstat		*/
+	lxpr_read_isdir,		/* /proc/driver		*/
+	lxpr_read_isdir,		/* /proc/driver/nvidia */
+	lxpr_read_nvidia_params,		/* /proc/driver/nvidia/params */
 };
 
 CTASSERT(ARRAY_SIZE(lxpr_read_function) == LXPR_NFILES);
@@ -1203,6 +1224,9 @@ static vnode_t *(*lxpr_lookup_function[])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/uptime		*/
 	lxpr_lookup_not_a_dir,		/* /proc/version	*/
 	lxpr_lookup_not_a_dir,		/* /proc/vmstat		*/
+	lxpr_lookup_driverdir,		/* /proc/driver		*/
+	lxpr_lookup_nvidiadir,		/* /proc/driver/nvidia */
+	lxpr_lookup_not_a_dir,		/* /proc/driver/nvidia/params */
 };
 
 CTASSERT(ARRAY_SIZE(lxpr_lookup_function) == LXPR_NFILES);
@@ -1385,6 +1409,9 @@ static int (*lxpr_readdir_function[])() = {
 	lxpr_readdir_not_a_dir,		/* /proc/uptime		*/
 	lxpr_readdir_not_a_dir,		/* /proc/version	*/
 	lxpr_readdir_not_a_dir,		/* /proc/vmstat		*/
+	lxpr_readdir_driverdir,		/* /proc/driver		*/
+	lxpr_readdir_nvidiadir,		/* /proc/driver/nvidia */
+	lxpr_readdir_not_a_dir,		/* /proc/driver/nvidia/params */
 };
 
 CTASSERT(ARRAY_SIZE(lxpr_readdir_function) == LXPR_NFILES);
@@ -1474,6 +1501,17 @@ lxpr_read_invalid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 static void
 lxpr_read_empty(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
+}
+
+/*
+ * Linux NVIDIA userspace reads this before deciding whether to chmod
+ * /dev/nvidia*.  Leave the access policy of mapped devices to SmartOS.
+ */
+static void
+lxpr_read_nvidia_params(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_DRIVER_NVIDIA_PARAMS);
+	lxpr_uiobuf_printf(uiobuf, "ModifyDeviceFiles: 0\n");
 }
 
 /*
@@ -6579,6 +6617,14 @@ lxpr_getattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 		vap->va_nlink = PIDDIRFILES;
 		vap->va_size = PIDDIRFILES * LXPR_SDSIZE;
 		break;
+	case LXPR_DRIVERDIR:
+		vap->va_nlink = DRIVERDIRFILES + 2;
+		vap->va_size = (DRIVERDIRFILES + 2) * LXPR_SDSIZE;
+		break;
+	case LXPR_DRIVER_NVIDIADIR:
+		vap->va_nlink = NVIDIADIRFILES + 2;
+		vap->va_size = (NVIDIADIRFILES + 2) * LXPR_SDSIZE;
+		break;
 	case LXPR_PID_TASKDIR:
 		vap->va_nlink = lxpr_count_taskdir(lxpnp);
 		vap->va_size = vap->va_nlink * LXPR_SDSIZE;
@@ -6997,6 +7043,21 @@ lxpr_lookup_netdir(vnode_t *dp, char *comp)
 	dp = lxpr_lookup_common(dp, comp, NULL, netdir, NETDIRFILES);
 
 	return (dp);
+}
+
+static vnode_t *
+lxpr_lookup_driverdir(vnode_t *dp, char *comp)
+{
+	ASSERT(VTOLXP(dp)->lxpr_type == LXPR_DRIVERDIR);
+	return (lxpr_lookup_common(dp, comp, NULL, driverdir, DRIVERDIRFILES));
+}
+
+static vnode_t *
+lxpr_lookup_nvidiadir(vnode_t *dp, char *comp)
+{
+	ASSERT(VTOLXP(dp)->lxpr_type == LXPR_DRIVER_NVIDIADIR);
+	return (lxpr_lookup_common(dp, comp, NULL, nvidiadir,
+	    NVIDIADIRFILES));
 }
 
 static vnode_t *
@@ -7430,6 +7491,22 @@ lxpr_readdir_netdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 {
 	ASSERT(lxpnp->lxpr_type == LXPR_NETDIR);
 	return (lxpr_readdir_common(lxpnp, uiop, eofp, netdir, NETDIRFILES));
+}
+
+static int
+lxpr_readdir_driverdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_DRIVERDIR);
+	return (lxpr_readdir_common(lxpnp, uiop, eofp, driverdir,
+	    DRIVERDIRFILES));
+}
+
+static int
+lxpr_readdir_nvidiadir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_DRIVER_NVIDIADIR);
+	return (lxpr_readdir_common(lxpnp, uiop, eofp, nvidiadir,
+	    NVIDIADIRFILES));
 }
 
 static int
